@@ -701,33 +701,30 @@ impl App {
     fn cursor_icon_from_wayland_name(name: &str) -> winit::window::CursorIcon {
         use winit::window::CursorIcon;
 
-        match name {
-            "default" | "left_ptr" | "arrow" => CursorIcon::Default,
-            "pointer" | "hand" | "hand1" | "hand2" => CursorIcon::Pointer,
-            "text" | "xterm" | "ibeam" => CursorIcon::Text,
-            "crosshair" => CursorIcon::Crosshair,
-            "move" | "all-scroll" => CursorIcon::Move,
-            "not-allowed" | "forbidden" => CursorIcon::NotAllowed,
-            "wait" | "watch" => CursorIcon::Wait,
-            "progress" | "left_ptr_watch" => CursorIcon::Progress,
-            "help" | "question_arrow" => CursorIcon::Help,
-            "context-menu" => CursorIcon::ContextMenu,
+        // Prefer parsing the standard cursor-icon names (lower kebab case).
+        let lowered = name.to_ascii_lowercase();
+        if let Ok(icon) = lowered.parse::<CursorIcon>() {
+            return icon;
+        }
+        let normalized = lowered.replace('_', "-");
+        if let Ok(icon) = normalized.parse::<CursorIcon>() {
+            return icon;
+        }
 
-            "e-resize" => CursorIcon::EResize,
-            "w-resize" => CursorIcon::WResize,
-            "n-resize" => CursorIcon::NResize,
-            "s-resize" => CursorIcon::SResize,
-            "ne-resize" => CursorIcon::NeResize,
-            "nw-resize" => CursorIcon::NwResize,
-            "se-resize" => CursorIcon::SeResize,
-            "sw-resize" => CursorIcon::SwResize,
-            "col-resize" | "ew-resize" | "sb_h_double_arrow" => CursorIcon::EwResize,
-            "row-resize" | "ns-resize" | "sb_v_double_arrow" => CursorIcon::NsResize,
+        // Fall back to common Xcursor theme aliases.
+        match lowered.as_str() {
+            "left_ptr" | "arrow" => CursorIcon::Default,
+            "hand" | "hand1" | "hand2" => CursorIcon::Pointer,
+            "xterm" | "ibeam" => CursorIcon::Text,
+            "cross" => CursorIcon::Crosshair,
+            "fleur" => CursorIcon::Move,
+            "left_ptr_watch" => CursorIcon::Progress,
+            "watch" => CursorIcon::Wait,
+            "question_arrow" => CursorIcon::Help,
+            "forbidden" => CursorIcon::NotAllowed,
 
-            "grab" => CursorIcon::Grab,
-            "grabbing" => CursorIcon::Grabbing,
-            "zoom-in" => CursorIcon::ZoomIn,
-            "zoom-out" => CursorIcon::ZoomOut,
+            "sb_h_double_arrow" => CursorIcon::ColResize,
+            "sb_v_double_arrow" => CursorIcon::RowResize,
 
             _ => CursorIcon::Default,
         }
@@ -1593,8 +1590,10 @@ impl ApplicationHandler<UserEvent> for App {
                             return;
                         };
                         let logical = pos.to_logical::<f64>(renderer.window.scale_factor());
-                        let dx = logical.x / self.ui_scale();
-                        let dy = logical.y / self.ui_scale();
+                        // Trackpad (pixel) deltas in winit use the opposite sign convention from
+                        // what most Wayland clients expect under natural scrolling.
+                        let dx = -logical.x / self.ui_scale();
+                        let dy = -logical.y / self.ui_scale();
                         (dx, dy, 0, 0)
                     },
                 };
