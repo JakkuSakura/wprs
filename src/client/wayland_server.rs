@@ -8,20 +8,22 @@ pub fn run(config: WprscConfig) -> Result<()> {
         "--forward-only is only meaningful for role=viewer"
     );
 
-    #[cfg(all(target_os = "linux", feature = "wayland"))]
+    #[cfg(all(unix, feature = "wayland"))]
     {
-        return linux_wayland_server::run(config).location(loc!());
+        return unix_wayland_server::run(config).location(loc!());
     }
 
-    #[cfg(not(all(target_os = "linux", feature = "wayland")))]
+    #[cfg(not(all(unix, feature = "wayland")))]
     {
         let _ = config;
-        bail!("role=wayland-server is only supported on Linux builds with the `wayland` feature enabled")
+        bail!(
+            "role=wayland-server is only supported on Unix builds with the `wayland` feature enabled"
+        )
     }
 }
 
-#[cfg(all(target_os = "linux", feature = "wayland"))]
-mod linux_wayland_server {
+#[cfg(all(unix, feature = "wayland"))]
+mod unix_wayland_server {
     use std::env;
     use std::fs;
     use std::path::PathBuf;
@@ -41,8 +43,7 @@ mod linux_wayland_server {
     pub fn run(config: WprscConfig) -> Result<()> {
         let runtime_dir = env::var_os("XDG_RUNTIME_DIR")
             .map(PathBuf::from)
-            .ok_or_else(|| anyhow!("XDG_RUNTIME_DIR is not set; required for role=wayland-server"))
-            .location(loc!())?;
+            .unwrap_or_else(|| env::temp_dir());
 
         let wayland_display = format!("wprsc-{}", std::process::id());
         let wayland_socket_path = runtime_dir.join(&wayland_display);
