@@ -186,6 +186,12 @@ fn build_backend(backend: &WprsdBackend, config: &WprsdConfig) -> Result<Box<dyn
                 dpi: config.display_dpi,
             },
         ))),
+        WprsdBackend::WindowsSeamless => Ok(Box::new(backends::windows::WindowsWindowBackend::new())),
+        WprsdBackend::MacosSeamless => Ok(Box::new(backends::macos::MacosWindowBackend::new(
+            backends::macos::MacosWindowBackendConfig {
+                dpi: config.display_dpi,
+            },
+        ))),
         WprsdBackend::Wayland => {
             #[cfg(feature = "wayland")]
             {

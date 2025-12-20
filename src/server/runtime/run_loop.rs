@@ -21,6 +21,7 @@ use crate::protocols::wprs::Serializer;
 use crate::protocols::wprs::wayland::BufferAssignment;
 use crate::protocols::wprs::wayland::BufferData;
 use crate::protocols::wprs::wayland::CompressedBufferData;
+use crate::protocols::wprs::wayland::SurfaceRequestPayload;
 use crate::sharding_compression::ShardingCompressor;
 use crate::protocols::wprs::core::handshake;
 
@@ -81,6 +82,19 @@ fn apply_observation<B: PollingBackend>(
             for msg in handshake::surface_messages(s).location(loc!())? {
                 state.serializer.writer().send(msg);
             }
+        },
+
+        BackendObservation::SurfaceDestroyed { client, surface } => {
+            state
+                .serializer
+                .writer()
+                .send(SendType::Object(Request::Surface(
+                    crate::protocols::wprs::wayland::SurfaceRequest {
+                        client,
+                        surface,
+                        payload: SurfaceRequestPayload::Destroyed,
+                    },
+                )));
         },
     }
     Ok(())

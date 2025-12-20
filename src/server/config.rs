@@ -47,6 +47,8 @@ pub enum WprsdBackend {
     X11Fullscreen,
     WindowsFullscreen,
     MacosFullscreen,
+    WindowsSeamless,
+    MacosSeamless,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -102,8 +104,10 @@ impl std::str::FromStr for WprsdBackend {
             "x11-fullscreen" => Ok(Self::X11Fullscreen),
             "windows-fullscreen" => Ok(Self::WindowsFullscreen),
             "macos-fullscreen" => Ok(Self::MacosFullscreen),
+            "windows-seamless" => Ok(Self::WindowsSeamless),
+            "macos-seamless" => Ok(Self::MacosSeamless),
             other => bail!(
-                "invalid backend {other:?} (expected: wayland|x11-fullscreen|windows-fullscreen|macos-fullscreen)"
+                "invalid backend {other:?} (expected: wayland|x11-fullscreen|windows-fullscreen|macos-fullscreen|windows-seamless|macos-seamless)"
             ),
         }
     }

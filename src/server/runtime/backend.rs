@@ -6,7 +6,9 @@ use crate::protocols::wprs::Event;
 use crate::protocols::wprs::Request;
 use crate::protocols::wprs::Serializer;
 use crate::protocols::wprs::DisplayConfig;
+use crate::protocols::wprs::ClientId;
 use crate::protocols::wprs::wayland::SurfaceState;
+use crate::protocols::wprs::wayland::WlSurfaceId;
 
 #[derive(Debug, Clone)]
 pub struct SurfaceSnapshot {
@@ -22,6 +24,12 @@ pub enum BackendObservation {
     SurfaceCommit {
         state: SurfaceState,
         bgra: Option<Arc<[u8]>>,
+    },
+
+    /// Destroy a previously-advertised surface.
+    SurfaceDestroyed {
+        client: ClientId,
+        surface: WlSurfaceId,
     },
 }
 
