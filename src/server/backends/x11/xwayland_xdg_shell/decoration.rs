@@ -128,20 +128,27 @@ pub trait FramedSurface {
             .handle_pointer_event_inner(client_state, x11_surface, qh, pointer, event)
             .location(loc!())?;
 
-        if let (Some(new_cursor), cur_cursor) =
-            (new_cursor, client_state.cursor_icon.unwrap_or_default())
-        {
-            // when entering a surface, the current cursor is always undefined
-            if new_cursor != cur_cursor || matches!(event.kind, PointerEventKind::Enter { .. }) {
-                client_state.cursor_icon = Some(new_cursor);
-                let _ = client_state
+        // Cursor updates:
+        // - Cursor state is effectively undefined on Enter; always apply (default if unknown).
+        // - For Motion and other events, `handle_pointer_event_inner` returns `None` to mean "no
+        //   change" (not "default"), so only apply when we actually have a new cursor.
+        let maybe_desired = match event.kind {
+            PointerEventKind::Enter { .. } => Some(new_cursor.unwrap_or(CursorIcon::Default)),
+            _ => new_cursor,
+        };
+
+        if let Some(desired) = maybe_desired {
+            if matches!(event.kind, PointerEventKind::Enter { .. })
+                || client_state.cursor_icon != Some(desired)
+            {
+                client_state.cursor_icon = Some(desired);
+                if let Some(pointer) = client_state
                     .seat_objects
                     .last()
-                    .unwrap()
-                    .pointer
-                    .as_ref()
-                    .unwrap()
-                    .set_cursor(conn, new_cursor);
+                    .and_then(|seat| seat.pointer.as_ref())
+                {
+                    let _ = pointer.set_cursor(conn, desired);
+                }
             }
         }
 
