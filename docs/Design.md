@@ -183,38 +183,60 @@ This section enumerates the common ways a protocol adapter may be used.
 
 - More complex dataflow; be explicit about ownership of credentials and encryption termination.
 
-### 5) External forward proxy (publish)
+### 5) External forward proxy/tunnel (publish or consume)
 
 **What it means**
 
-- The protocol listener exists locally (embedded or helper), but exposure to clients is done via a forward proxy or tunnel.
-- Example: `ssh -L` forwarding for local-only listeners.
+- A separate process provides connectivity by forwarding traffic.
+- It can be used for either direction:
+  - **Publish**: expose a local-only listener to a remote client.
+  - **Consume**: let a local client reach a remote-only listener via a local endpoint.
+
+**Examples**
+
+- **Publish**: `ssh -R` (reverse tunnel) to expose a server-side local-only listener to a client machine.
+- **Consume**: `ssh -L` (local forward) so a client can connect to `127.0.0.1:<port>` while traffic is carried to the remote server.
+
+**wprs-specific examples**
+
+- When running `wprs-rdp-bridge` on the server bound to `127.0.0.1:3389`, a local-forward tunnel (`ssh -L`) lets the client consume RDP as `127.0.0.1:3389`.
+- For Xwayland integration, `xwayland-xdg-shell` is *not* a network tunnel; it is a protocol bridge/helper (see “Supervised by the server”).
 
 **When to use**
 
-- You want to keep plaintext or local-only listeners (e.g. disable TLS) and rely on SSH/VPN.
-- You want tight binding control (`127.0.0.1` only) but still support remote clients.
+- You want to bind listeners to localhost and rely on SSH/VPN for security.
+- You want to avoid TLS in the protocol itself because the tunnel already provides encryption.
 
 **Trade-offs**
 
-- Operational dependency on the proxy/tunnel.
+- Operational dependency on the tunnel/proxy.
 - Requires clear documentation of the trust boundary (where encryption/auth terminates).
 
-### 6) External reverse proxy (publish)
+### 6) External reverse proxy/gateway (publish)
 
 **What it means**
 
-- Clients connect to a reverse proxy (gateway) which forwards traffic to a server-side listener.
-- Useful for multi-tenant access control, auditing, and centralized policy.
+- Clients connect to a gateway process.
+- The gateway forwards or terminates connections and routes them to internal services.
+
+**Examples**
+
+- An RDP gateway product that terminates TLS/NLA and routes sessions to internal RDP servers.
+- A TCP reverse proxy/load balancer routing `tcp://` endpoints.
+
+**wprs-specific examples**
+
+- `wprs-rdp-bridge` is *not* a reverse proxy. It is a protocol bridge that both **consumes** WPRS and **publishes** RDP.
+- A true reverse proxy in front of `wprsd` would be something like a generic TCP reverse proxy for `Endpoint::Tcp`, or an RDP gateway in front of `wprs-rdp-bridge`.
 
 **When to use**
 
-- Multi-user deployments.
-- Network segmentation or internet exposure.
+- Multi-user deployments with centralized policy, auditing, or access control.
+- Internet exposure where you want a single hardened ingress.
 
 **Trade-offs**
 
-- Requires protocol-aware proxying for best results (or TCP-level proxying if sufficient).
+- May require protocol-aware proxying for full features; TCP-level proxying may be sufficient for basic transport.
 
 ### 7) Implemented as a client adapter (consume)
 
