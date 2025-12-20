@@ -13,9 +13,9 @@
 // limitations under the License.
 
 pub mod arc_slice;
-pub mod config;
-pub mod client;
 pub mod buffer_pointer;
+pub mod client;
+pub mod config;
 pub mod constants;
 pub mod control_server;
 pub mod fallible_entry;
@@ -32,9 +32,6 @@ pub mod rdp;
 
 #[cfg(all(feature = "wayland", feature = "wayland-client", target_os = "linux"))]
 pub use crate::server::backends::x11::xwayland_xdg_shell;
-
-#[cfg(all(feature = "wayland", feature = "wayland-client"))]
-pub mod xwayland_xdg_shell;
 
 #[cfg(all(feature = "wayland", any(target_os = "macos", target_os = "ios")))]
 compile_error!(
