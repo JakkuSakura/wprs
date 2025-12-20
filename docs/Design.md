@@ -73,6 +73,10 @@ Protocols:
 - **WPRS** (native)
   - Own transport framing + serialization.
   - Can be tunneled (e.g. SSH).
+- **Wayland** (as a protocol adapter)
+  - In some deployments, the Wayland protocol itself can be treated as the “wire protocol”.
+  - This is useful when a Wayland-capable client wants to interact with a server-side Wayland compositor/session through a proxy or remoting layer.
+  - The same architectural rules apply: translate between the shared model and Wayland protocol objects/events without duplicating session logic.
 - **RDP**
   - Supported via a bridge implementation using `ironrdp-server`.
   - The RDP side sees a “desktop framebuffer”; the bridge translates that to/from the shared model.
@@ -108,9 +112,10 @@ The client side is intentionally flexible:
 
 - A client backend may speak WPRS natively.
 - A client backend may connect via another protocol (RDP/VNC) if the server exposes that protocol.
+- A client backend may connect via Wayland protocol proxying/remoting if the server exposes Wayland as an adapter.
 - A launcher may start an external client (e.g. `xfreerdp`, `mstsc`) pointed at a local forwarded port.
 
-The same concept applies to “Wayland”: depending on deployment, Wayland support may be embedded, delegated to helper processes, or externally orchestrated.
+The same concept applies to “Wayland”: depending on deployment, Wayland protocol proxying/remoting may be embedded, delegated to helper processes, or externally orchestrated.
 
 ## “Protocol-centric” means no duplicated session logic
 
@@ -167,4 +172,3 @@ When adding a protocol adapter (e.g. VNC):
    - client placement (local bridge + local UI)
    - server placement (remote bridge + forwarded port)
    - external clients.
-
