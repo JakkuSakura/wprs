@@ -96,6 +96,14 @@ Responsibilities:
 
 Protocol adapters can be hosted in multiple ways.
 
+In practice, the same protocol may appear in several roles at once:
+
+- It can be **published** (server-side listener / server-side offering).
+- It can be **consumed** (client-side connector / client-side usage).
+- It can be hosted **inside** `wprsd`, by a helper process **supervised** by `wprsd`, by an external **proxy** (forward/reverse), or by an OS-native **external client**.
+
+The goal is to keep these deployment choices *orthogonal* to the shared model and backend logic.
+
 ### Embedded / Spawned / External
 
 For integrations that require helper processes or alternate protocol listeners, `wprs` uses a common pattern:
@@ -105,6 +113,153 @@ For integrations that require helper processes or alternate protocol listeners, 
 - **External**: the integration is managed outside of `wprs` (systemd, user scripts, another supervisor).
 
 This is used today for Xwayland proxying and RDP bridging.
+
+## Protocol hosting/consumption patterns (explained)
+
+This section enumerates the common ways a protocol adapter may be used.
+
+### 1) Embedded service in the server (publish)
+
+**What it means**
+
+- The protocol adapter runs *in-process* inside `wprsd`.
+- `wprsd` opens the protocol listener and serves clients directly.
+
+**When to use**
+
+- Lowest operational complexity (one daemon to deploy).
+- Tight integration needs (low-latency control, shared memory, direct access to compositor state).
+
+**Trade-offs**
+
+- Increases the blast radius: protocol bugs can crash the compositor.
+- More dependencies in the server process.
+
+### 2) Embedded service in the server (consume)
+
+**What it means**
+
+- The server process itself acts as a client of some protocol to reach another service.
+- Example pattern: `wprsd` consumes a “capture” or “session” protocol to obtain surfaces, then republishes via a different protocol.
+
+**When to use**
+
+- Server-side aggregation or gateway use-cases.
+- Bridging across environments where the compositor is not local.
+
+**Trade-offs**
+
+- More moving parts inside the server; debugging requires separating “upstream protocol” vs “downstream protocol”.
+
+### 3) Supervised by the server (publish)
+
+**What it means**
+
+- `wprsd` spawns a helper process that *publishes* a protocol (listens for incoming connections).
+- `wprsd` manages lifecycle (start/stop, pass configuration), but the protocol code is isolated.
+
+**When to use**
+
+- Protocol stack is large or experimental.
+- You want crash isolation but still want a single “system unit” (wprsd) to manage it.
+
+**Trade-offs**
+
+- Requires IPC between `wprsd` and the helper.
+- Requires clean configuration/health management.
+
+### 4) Supervised by the server (consume)
+
+**What it means**
+
+- `wprsd` spawns a helper that *consumes* an upstream protocol and feeds the shared model.
+- Example pattern: a helper connects to an upstream RDP/VNC session and presents it as local surfaces.
+
+**When to use**
+
+- You want `wprsd` to act as a gateway/relay.
+
+**Trade-offs**
+
+- More complex dataflow; be explicit about ownership of credentials and encryption termination.
+
+### 5) External forward proxy (publish)
+
+**What it means**
+
+- The protocol listener exists locally (embedded or helper), but exposure to clients is done via a forward proxy or tunnel.
+- Example: `ssh -L` forwarding for local-only listeners.
+
+**When to use**
+
+- You want to keep plaintext or local-only listeners (e.g. disable TLS) and rely on SSH/VPN.
+- You want tight binding control (`127.0.0.1` only) but still support remote clients.
+
+**Trade-offs**
+
+- Operational dependency on the proxy/tunnel.
+- Requires clear documentation of the trust boundary (where encryption/auth terminates).
+
+### 6) External reverse proxy (publish)
+
+**What it means**
+
+- Clients connect to a reverse proxy (gateway) which forwards traffic to a server-side listener.
+- Useful for multi-tenant access control, auditing, and centralized policy.
+
+**When to use**
+
+- Multi-user deployments.
+- Network segmentation or internet exposure.
+
+**Trade-offs**
+
+- Requires protocol-aware proxying for best results (or TCP-level proxying if sufficient).
+
+### 7) Implemented as a client adapter (consume)
+
+**What it means**
+
+- The client side (`wprsc` or another client backend) implements a protocol client stack directly.
+- It consumes the protocol and renders via a local OS backend.
+
+**When to use**
+
+- You want a single integrated client UX (windowing, clipboard, audio) without external dependencies.
+
+**Trade-offs**
+
+- More code and dependencies in the client.
+- Requires careful cross-platform support.
+
+### 8) Consumed by an external client (consume)
+
+**What it means**
+
+- `wprs` does not implement the protocol client; instead it orchestrates an existing external client.
+- Example: start a local bridge and launch `xfreerdp`/`mstsc`/Microsoft Remote Desktop.
+
+**When to use**
+
+- Fastest path to broad compatibility.
+- Leverage mature clients and their device redirection features.
+
+**Trade-offs**
+
+- UX and feature set depend on the external client.
+- Harder to tightly integrate with wprs-native features.
+
+### 9) Multiple ways at once (publish + consume)
+
+**What it means**
+
+- A deployment can combine the above patterns.
+- Example: `wprsd` publishes WPRS and RDP, while also consuming Wayland or another upstream protocol for a subset of surfaces.
+
+**Guideline**
+
+- Keep the shared model as the central hub.
+- Make each protocol adapter a focused translation layer (minimize cross-adapter coupling).
 
 ### Client can connect “through” another protocol
 
