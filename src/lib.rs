@@ -33,11 +33,6 @@ pub mod rdp;
 #[cfg(all(feature = "wayland", feature = "wayland-client", target_os = "linux"))]
 pub use crate::server::backends::x11::xwayland_xdg_shell;
 
-#[cfg(all(feature = "wayland", any(target_os = "macos", target_os = "ios")))]
-compile_error!(
-    "The `wayland` feature (Wayland compositor backend via Smithay) is not supported on Apple platforms."
-);
-
 #[cfg(all(
     feature = "wayland-client",
     any(target_os = "macos", target_os = "ios")

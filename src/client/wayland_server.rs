@@ -8,22 +8,18 @@ pub fn run(config: WprscConfig) -> Result<()> {
         "--forward-only is only meaningful for role=viewer"
     );
 
-    #[cfg(all(unix, feature = "wayland"))]
-    {
-        return unix_wayland_server::run(config).location(loc!());
-    }
+    #[cfg(feature = "wayland")]
+    return wayland_server_impl::run(config).location(loc!());
 
-    #[cfg(not(all(unix, feature = "wayland")))]
+    #[cfg(not(feature = "wayland"))]
     {
         let _ = config;
-        bail!(
-            "role=wayland-server is only supported on Unix builds with the `wayland` feature enabled"
-        )
+        bail!("role=wayland-server requires building wprsc with `--features wayland`")
     }
 }
 
-#[cfg(all(unix, feature = "wayland"))]
-mod unix_wayland_server {
+#[cfg(feature = "wayland")]
+mod wayland_server_impl {
     use std::env;
     use std::fs;
     use std::path::PathBuf;
