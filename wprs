@@ -8,6 +8,7 @@ import os
 import os.path
 import pathlib
 import shlex
+import shutil
 import socket
 import stat
 import subprocess
@@ -78,6 +79,20 @@ parser.add_argument('--xwayland',
 parser.add_argument('--wprsd-xwayland-display',
                     default=':100',
                     help='The DISPLAY wprsd is listening on.')
+parser.add_argument('--rdp-bridge-path',
+                    default='wprs-rdp-bridge',
+                    help='Path to the wprs-rdp-bridge executable.')
+parser.add_argument('--rdp-port',
+                    type=int,
+                    default=3389,
+                    help='Local port to bind or forward the RDP listener on.')
+parser.add_argument('--rdp-client',
+                    default='',
+                    help='Override the RDP client executable (otherwise auto-detected).')
+parser.add_argument('--rdp-placement',
+                    choices=['client', 'server'],
+                    default='client',
+                    help='Where the RDP bridge runs: on this machine (client) or on the remote host (server).')
 parser.add_argument('--print-stacktrace',
                     type=boolean,
                     choices=[True, False],
@@ -103,6 +118,7 @@ SUBCOMMANDS = {
   'attach',
   'detach',
   'run',
+  'rdp',
   'restart-wprsd',
 }
 
@@ -223,6 +239,15 @@ def forward_wprs_sock() -> None:
           '-L', f'{get_wprs_control_socket_path()}:{remote_socket_dir()}/wprsc-ctrl.sock']
          + [args.destination])
   print(f'Forwarding wprs sockets: {cmd!r}')
+  subprocess.run(cmd, env=os.environ, check=True)
+
+
+def forward_rdp_port(local_port: int, remote_port: int) -> None:
+  cmd = (SSH_COMMON_ARGS +
+         ['-O', 'forward',
+          '-L', f'127.0.0.1:{local_port}:127.0.0.1:{remote_port}']
+         + [args.destination])
+  print(f'Forwarding RDP port: {cmd!r}')
   subprocess.run(cmd, env=os.environ, check=True)
 
 
@@ -494,6 +519,22 @@ def attach() -> Capabilities | None:
   return maybe_start_wprsc()
 
 
+def attach_sockets_only() -> None:
+  if not check_ssh_tunnel():
+    start_ssh_tunnel()
+
+  # Sometimes forwarding the sockets doesn't work and restarting the ssh
+  # connection helps. TODO: try to make this less flaky.
+  try:
+    forward_sockets()
+  except subprocess.CalledProcessError:
+    detach()
+    start_ssh_tunnel()
+    forward_sockets()
+
+  create_ssh_auth_sock_symlink()
+
+
 def detach() -> None:
   stop_wprsc()
   stop_ssh_tunnel()
@@ -501,6 +542,119 @@ def detach() -> None:
 
 def run() -> None:
   start_remote_command(attach())
+
+
+def find_rdp_client() -> list[str]:
+  if args.rdp_client:
+    return [args.rdp_client]
+
+  if sys.platform.startswith('linux'):
+    candidates = [
+      'wlfreerdp',
+      'xfreerdp',
+      'freerdp',
+      'rdesktop',
+    ]
+  elif sys.platform == 'darwin':
+    candidates = ['open']
+  elif os.name == 'nt':
+    candidates = ['mstsc']
+  else:
+    candidates = []
+
+  for exe in candidates:
+    if shutil.which(exe):
+      return [exe]
+
+  raise RuntimeError(
+    'No RDP client found. Install one (e.g. FreeRDP on Linux, mstsc on Windows, Microsoft Remote Desktop on macOS) '
+    'or pass --rdp-client.'
+  )
+
+
+def build_rdp_client_command(host: str, port: int, extra_args: list[str]) -> list[str]:
+  base = find_rdp_client()
+  exe = base[0]
+  target = f'{host}:{port}'
+
+  if sys.platform.startswith('linux'):
+    # FreeRDP-style.
+    if exe in ('xfreerdp', 'wlfreerdp', 'freerdp'):
+      return [exe, f'/v:{target}', '/cert:ignore'] + extra_args
+    # rdesktop-style.
+    if exe == 'rdesktop':
+      return [exe, target] + extra_args
+    return [exe] + extra_args
+
+  if sys.platform == 'darwin':
+    # Create a minimal .rdp file and open it. This works with the Microsoft Remote Desktop app.
+    rdp_path = os.path.join(socket_dir(), f'wprs_{get_hashed_destination_params()}.rdp')
+    with open(rdp_path, 'w') as f:
+      f.write(f'full address:s:{target}\n')
+      f.write('prompt for credentials:i:1\n')
+      f.write('administrative session:i:0\n')
+    if extra_args:
+      print(f'WARNING: extra RDP client args are not supported on macOS via open/rdp file: {extra_args!r}', file=sys.stderr)
+    return ['open', rdp_path]
+
+  if os.name == 'nt':
+    # mstsc supports /v:host:port
+    return [exe, f'/v:{target}'] + extra_args
+
+  return base + extra_args
+
+
+def rdp() -> None:
+  if args.rdp_placement == 'client':
+    attach_sockets_only()
+    wprs_endpoint = f'unix://{get_wprs_socket_path()}'
+    bridge_cmd = [
+      args.rdp_bridge_path,
+      '--wprs-endpoint', wprs_endpoint,
+      '--rdp-listen', f'127.0.0.1:{args.rdp_port}',
+      '--security', 'none',
+    ]
+    print(f'Starting wprs-rdp-bridge (client placement): {bridge_cmd!r}')
+    bridge_proc = subprocess.Popen(bridge_cmd, env=os.environ, start_new_session=True)
+    try:
+      client_cmd = build_rdp_client_command('127.0.0.1', args.rdp_port, args.rdp_client_args)
+      print(f'Starting RDP client: {client_cmd!r}')
+      subprocess.run(client_cmd, env=os.environ)
+    finally:
+      bridge_proc.terminate()
+      try:
+        bridge_proc.wait(timeout=5)
+      except subprocess.TimeoutExpired:
+        bridge_proc.kill()
+      detach()
+  else:
+    # Server placement: run the bridge on the remote host and forward the RDP port locally.
+    if not check_ssh_tunnel():
+      start_ssh_tunnel()
+    forward_rdp_port(args.rdp_port, args.rdp_port)
+
+    remote_wprs_endpoint = f'unix://{remote_socket_dir()}/wprs.sock'
+    remote_cmd = [
+      args.rdp_bridge_path,
+      '--wprs-endpoint', remote_wprs_endpoint,
+      '--rdp-listen', f'127.0.0.1:{args.rdp_port}',
+      '--security', 'none',
+    ]
+    cmd = SSH_COMMON_ARGS + args.additional_ssh_command_args + [args.destination] + remote_cmd
+    print(f'Starting wprs-rdp-bridge (server placement): {cmd!r}')
+    bridge_ssh_proc = subprocess.Popen(cmd, env=os.environ, start_new_session=True)
+
+    try:
+      client_cmd = build_rdp_client_command('127.0.0.1', args.rdp_port, args.rdp_client_args)
+      print(f'Starting RDP client: {client_cmd!r}')
+      subprocess.run(client_cmd, env=os.environ)
+    finally:
+      bridge_ssh_proc.terminate()
+      try:
+        bridge_ssh_proc.wait(timeout=5)
+      except subprocess.TimeoutExpired:
+        bridge_ssh_proc.kill()
+      detach()
 
 
 def restart_wprsd() -> None:
@@ -526,7 +680,7 @@ def parse_args_and_subcommand(argv: list[str]):
   sub_idx = next((i for (i, tok) in enumerate(rest) if tok in SUBCOMMANDS), None)
   if sub_idx is None:
     raise parser.error(
-      'A subcommand must be provided (attach|detach|run|restart-wprsd). '
+      'A subcommand must be provided (attach|detach|run|rdp|restart-wprsd). '
       'To pass arguments to wprsc, place them between destination and subcommand.'
     )
 
@@ -540,6 +694,8 @@ def parse_args_and_subcommand(argv: list[str]):
       raise parser.error('run requires <remote_command> [args...]')
     args.remote_command = subargv[0]
     args.argument = subargv[1:]
+  elif args.subcommand == 'rdp':
+    args.rdp_client_args = subargv
   else:
     if subargv:
       raise parser.error(f'{args.subcommand} takes no arguments (got: {subargv!r})')
@@ -556,6 +712,8 @@ elif args.subcommand == 'detach':
   detach()
 elif args.subcommand == 'run':
   run()
+elif args.subcommand == 'rdp':
+  rdp()
 elif args.subcommand == 'restart-wprsd':
   restart_wprsd()
 else:

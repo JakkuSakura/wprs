@@ -14,21 +14,35 @@
 
 use std::fs;
 use std::env;
+use std::process::Child;
+use std::process::Command;
 use std::time::Duration;
 
 use clap::Parser;
 use wprs::config;
 use wprs::prelude::*;
 use wprs::protocols::wprs::Event as ProtoEvent;
+#[cfg(feature = "rdp")]
+use wprs::protocols::wprs::Endpoint;
 use wprs::protocols::wprs::Request as ProtoRequest;
 use wprs::protocols::wprs::Serializer;
 use wprs::server::backends;
 use wprs::server::config::WprsdArgs;
 use wprs::server::config::WprsdBackend;
 use wprs::server::config::WprsdConfig;
+use wprs::server::config::IntegrationMode;
 use wprs::server::runtime::backend::ServerBackend;
 use wprs::server::runtime::backend::TickMode;
 use wprs::utils;
+
+struct ChildGuard(Child);
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
 
 fn infer_backend(config: &WprsdConfig) -> Result<WprsdBackend> {
     if let Some(backend) = config.backend {
@@ -86,6 +100,7 @@ fn make_server_serializer(config: &WprsdConfig) -> Result<Serializer<ProtoReques
 
 fn run_selected_backend(config: &WprsdConfig) -> Result<()> {
     let serializer = make_server_serializer(config).location(loc!())?;
+    let _rdp_bridge = maybe_start_rdp_bridge(config).location(loc!())?;
 
     let backend_kind = infer_backend(config).location(loc!())?;
     let backend = build_backend(&backend_kind, config).location(loc!())?;
@@ -98,6 +113,66 @@ fn run_selected_backend(config: &WprsdConfig) -> Result<()> {
     };
 
     backend.run(serializer, tick_interval).location(loc!())
+}
+
+fn maybe_start_rdp_bridge(config: &WprsdConfig) -> Result<Option<ChildGuard>> {
+    if !config.enable_rdp {
+        return Ok(None);
+    }
+
+    match config.rdp_mode {
+        IntegrationMode::External => {
+            info!("enable_rdp=true but rdp_mode=external; expecting external RDP bridge management");
+            Ok(None)
+        }
+        IntegrationMode::Embedded => {
+            #[cfg(feature = "rdp")]
+            {
+                let wprs_endpoint: Endpoint = match &config.endpoint {
+                    Some(endpoint) => endpoint.clone(),
+                    None => format!("unix://{}", config.socket.display())
+                        .parse()
+                        .location(loc!())?,
+                };
+                let listen = config.rdp_listen;
+                info!(
+                    "starting embedded RDP bridge: wprs_endpoint={wprs_endpoint} rdp_listen={listen}"
+                );
+
+                std::thread::spawn(move || {
+                    wprs::rdp::run_bridge(wprs_endpoint, listen, wprs::rdp::Security::None)
+                        .log_and_ignore(loc!());
+                });
+
+                Ok(None)
+            }
+
+            #[cfg(not(feature = "rdp"))]
+            {
+                bail!("rdp_mode=embedded requires building wprsd with `--features rdp`")
+            }
+        }
+        IntegrationMode::Spawned => {
+            let wprs_endpoint = match &config.endpoint {
+                Some(endpoint) => endpoint.to_string(),
+                None => format!("unix://{}", config.socket.display()),
+            };
+
+            let mut cmd = Command::new(&config.rdp_bridge_path);
+            cmd.arg("--wprs-endpoint")
+                .arg(wprs_endpoint)
+                .arg("--rdp-listen")
+                .arg(config.rdp_listen.to_string())
+                .arg("--security")
+                .arg("none")
+                .args(&config.rdp_bridge_args);
+
+            info!("starting RDP bridge: {cmd:?}");
+            let child = cmd.spawn().location(loc!())?;
+            info!("RDP bridge spawned pid={pid}", pid = child.id());
+            Ok(Some(ChildGuard(child)))
+        }
+    }
 }
 
 fn build_backend(backend: &WprsdBackend, config: &WprsdConfig) -> Result<Box<dyn ServerBackend>> {

@@ -40,8 +40,8 @@ impl WprsServerState {
         wayland_debug: bool,
         preferred_display: Option<u32>,
     ) -> Result<()> {
-        if self.xwayland_mode != XwaylandMode::InlineProxy {
-            bail!("start_xwayland_inline_proxy called when xwayland_mode != inline-proxy");
+        if self.xwayland_mode != XwaylandMode::Embedded {
+            bail!("start_xwayland_inline_proxy called when xwayland_mode != embedded");
         }
         if self.xwm.is_some() {
             return Ok(());

@@ -150,7 +150,7 @@ impl crate::server::runtime::backend::ServerBackend for WaylandSmithayBackend {
 
         if config.enable_xwayland {
             match config.xwayland_mode {
-                XwaylandMode::SpawnProxy => {
+                XwaylandMode::Spawned => {
                     start_xwayland_xdg_shell(
                         &config.wayland_display,
                         &config.xwayland_xdg_shell_path,
@@ -158,7 +158,7 @@ impl crate::server::runtime::backend::ServerBackend for WaylandSmithayBackend {
                         &config.xwayland_xdg_shell_args,
                     );
                 },
-                XwaylandMode::InlineProxy => {
+                XwaylandMode::Embedded => {
                     state
                         .start_xwayland_inline_proxy(
                             config.xwayland_xdg_shell_wayland_debug,

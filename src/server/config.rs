@@ -12,6 +12,36 @@ use crate::protocols::wprs::Endpoint;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
+pub enum IntegrationMode {
+    /// Run the integration in-process.
+    Embedded,
+    /// Spawn a helper process and manage its lifetime.
+    Spawned,
+    /// Do not start or manage any helper; expect external orchestration.
+    External,
+}
+
+impl Default for IntegrationMode {
+    fn default() -> Self {
+        Self::External
+    }
+}
+
+impl std::str::FromStr for IntegrationMode {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "embedded" => Ok(Self::Embedded),
+            "spawned" => Ok(Self::Spawned),
+            "external" => Ok(Self::External),
+            other => bail!("invalid integration mode {other:?} (expected: embedded|spawned|external)"),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum WprsdBackend {
     Wayland,
     X11Fullscreen,
@@ -23,11 +53,11 @@ pub enum WprsdBackend {
 #[serde(rename_all = "kebab-case")]
 pub enum XwaylandMode {
     /// Spawns the external `xwayland-xdg-shell` helper process.
-    #[serde(alias = "proxy")]
-    SpawnProxy,
+    #[serde(alias = "spawn-proxy", alias = "proxy")]
+    Spawned,
     /// Runs the Xwayland proxy inline inside `wprsd`.
-    #[serde(alias = "native")]
-    InlineProxy,
+    #[serde(alias = "inline-proxy", alias = "native")]
+    Embedded,
     /// Does not spawn any helper; expects external management.
     External,
 }
@@ -35,9 +65,9 @@ pub enum XwaylandMode {
 impl Default for XwaylandMode {
     fn default() -> Self {
         if cfg!(all(feature = "wayland", target_os = "linux")) {
-            Self::InlineProxy
+            Self::Embedded
         } else {
-            Self::SpawnProxy
+            Self::Spawned
         }
     }
 }
@@ -47,14 +77,11 @@ impl std::str::FromStr for XwaylandMode {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "spawn-proxy" => Ok(Self::SpawnProxy),
-            "inline-proxy" => Ok(Self::InlineProxy),
+            "spawned" | "spawn-proxy" | "proxy" => Ok(Self::Spawned),
+            "embedded" | "inline-proxy" | "native" => Ok(Self::Embedded),
             "external" => Ok(Self::External),
-            // Backwards-compatible values.
-            "proxy" => Ok(Self::SpawnProxy),
-            "native" => Ok(Self::InlineProxy),
             other => bail!(
-                "invalid xwayland mode {other:?} (expected: inline-proxy|spawn-proxy|external)"
+                "invalid xwayland mode {other:?} (expected: embedded|spawned|external)"
             ),
         }
     }
@@ -107,9 +134,36 @@ pub struct WprsdConfig {
     pub xwayland_xdg_shell_args: Vec<String>,
     pub kde_server_side_decorations: bool,
 
+    /// Enable the RDP translation bridge.
+    ///
+    /// When enabled, `wprsd` can optionally manage an RDP bridge process (see
+    /// `rdp_mode`).
+    #[serde(default)]
+    pub enable_rdp: bool,
+    #[serde(default = "default_rdp_mode")]
+    pub rdp_mode: IntegrationMode,
+    #[serde(default = "default_rdp_listen")]
+    pub rdp_listen: std::net::SocketAddr,
+    #[serde(default = "default_rdp_bridge_path")]
+    pub rdp_bridge_path: String,
+    #[serde(default)]
+    pub rdp_bridge_args: Vec<String>,
+
     /// Optional display DPI override (primarily used by capture backends).
     #[serde(default)]
     pub display_dpi: Option<u32>,
+}
+
+fn default_rdp_mode() -> IntegrationMode {
+    IntegrationMode::Spawned
+}
+
+fn default_rdp_listen() -> std::net::SocketAddr {
+    std::net::SocketAddr::from(([127, 0, 0, 1], 3389))
+}
+
+fn default_rdp_bridge_path() -> String {
+    "wprs-rdp-bridge".to_string()
 }
 
 impl Default for WprsdConfig {
@@ -132,6 +186,11 @@ impl Default for WprsdConfig {
             xwayland_xdg_shell_wayland_debug: false,
             xwayland_xdg_shell_args: Vec::new(),
             kde_server_side_decorations: false,
+            enable_rdp: false,
+            rdp_mode: default_rdp_mode(),
+            rdp_listen: default_rdp_listen(),
+            rdp_bridge_path: default_rdp_bridge_path(),
+            rdp_bridge_args: Vec::new(),
             display_dpi: None,
         }
     }
@@ -196,6 +255,21 @@ pub struct WprsdArgs {
 
     #[arg(long, value_name = "BOOL")]
     pub kde_server_side_decorations: Option<bool>,
+
+    #[arg(long, value_name = "BOOL")]
+    pub enable_rdp: Option<bool>,
+
+    #[arg(long, value_name = "MODE")]
+    pub rdp_mode: Option<IntegrationMode>,
+
+    #[arg(long, value_name = "ADDR")]
+    pub rdp_listen: Option<std::net::SocketAddr>,
+
+    #[arg(long, value_name = "PATH")]
+    pub rdp_bridge_path: Option<String>,
+
+    #[arg(long, value_name = "ARG", value_delimiter = ',')]
+    pub rdp_bridge_args: Vec<String>,
 
     #[arg(long, value_name = "DPI")]
     pub display_dpi: Option<u32>,
@@ -268,6 +342,22 @@ impl WprsdArgs {
         }
         if let Some(v) = self.kde_server_side_decorations {
             cfg.kde_server_side_decorations = v;
+        }
+
+        if let Some(v) = self.enable_rdp {
+            cfg.enable_rdp = v;
+        }
+        if let Some(v) = self.rdp_mode {
+            cfg.rdp_mode = v;
+        }
+        if let Some(v) = self.rdp_listen {
+            cfg.rdp_listen = v;
+        }
+        if let Some(v) = self.rdp_bridge_path {
+            cfg.rdp_bridge_path = v;
+        }
+        if !self.rdp_bridge_args.is_empty() {
+            cfg.rdp_bridge_args = self.rdp_bridge_args;
         }
 
         if let Some(v) = self.display_dpi {
