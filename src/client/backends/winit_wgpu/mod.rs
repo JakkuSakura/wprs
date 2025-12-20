@@ -24,6 +24,7 @@ use winit::dpi::PhysicalPosition;
 use winit::dpi::PhysicalSize;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::window::Cursor;
 use winit::window::Window;
 use winit::window::WindowLevel;
 
@@ -568,6 +569,9 @@ struct App {
 
     cursor_frames: HashMap<ClientSurfaceKey, CursorFrame>,
     cursor_surface_clients: HashMap<WlSurfaceId, ClientId>,
+
+    current_cursor: HashMap<WlSurfaceId, Option<Cursor>>,
+    warned_cursor_names: HashSet<String>,
 }
 
 impl App {
@@ -698,21 +702,21 @@ impl App {
         target
     }
 
-    fn cursor_icon_from_wayland_name(name: &str) -> winit::window::CursorIcon {
+    fn cursor_icon_from_wayland_name(name: &str) -> Option<winit::window::CursorIcon> {
         use winit::window::CursorIcon;
 
         // Prefer parsing the standard cursor-icon names (lower kebab case).
         let lowered = name.to_ascii_lowercase();
         if let Ok(icon) = lowered.parse::<CursorIcon>() {
-            return icon;
+            return Some(icon);
         }
         let normalized = lowered.replace('_', "-");
         if let Ok(icon) = normalized.parse::<CursorIcon>() {
-            return icon;
+            return Some(icon);
         }
 
         // Fall back to common Xcursor theme aliases.
-        match lowered.as_str() {
+        Some(match lowered.as_str() {
             "left_ptr" | "arrow" => CursorIcon::Default,
             "hand" | "hand1" | "hand2" => CursorIcon::Pointer,
             "xterm" | "ibeam" => CursorIcon::Text,
@@ -726,7 +730,24 @@ impl App {
             "sb_h_double_arrow" => CursorIcon::ColResize,
             "sb_v_double_arrow" => CursorIcon::RowResize,
 
-            _ => CursorIcon::Default,
+            _ => return None,
+        })
+    }
+
+    fn apply_cursor_for_surface(&self, surface_id: WlSurfaceId) {
+        let Some(renderer) = self.windows.get(&surface_id) else {
+            return;
+        };
+        let Some(cursor) = self.current_cursor.get(&surface_id) else {
+            return;
+        };
+
+        match cursor {
+            None => renderer.window.set_cursor_visible(false),
+            Some(cursor) => {
+                renderer.window.set_cursor_visible(true);
+                renderer.window.set_cursor(cursor.clone());
+            },
         }
     }
 
@@ -745,23 +766,25 @@ impl App {
             );
             return;
         };
-        let Some(renderer) = self.windows.get(&surface_id) else {
-            return;
-        };
-
         match status {
             crate::protocols::wprs::wayland::CursorImageStatus::Hidden => {
                 debug!("cursor hidden: surface={surface_id:?} serial={serial}");
-                renderer.window.set_cursor_visible(false);
+                self.current_cursor.insert(surface_id, None);
+                self.apply_cursor_for_surface(surface_id);
             },
             crate::protocols::wprs::wayland::CursorImageStatus::Named(name) => {
                 let icon = Self::cursor_icon_from_wayland_name(&name);
+                if icon.is_none() && self.warned_cursor_names.insert(name.clone()) {
+                    warn!("unhandled cursor icon name {name:?}; falling back to default");
+                }
+                let icon = icon.unwrap_or(winit::window::CursorIcon::Default);
                 debug!(
                     "cursor named: surface={surface_id:?} serial={} name={name:?} icon={icon:?}",
                     serial
                 );
-                renderer.window.set_cursor_visible(true);
-                renderer.window.set_cursor(icon);
+                self.current_cursor
+                    .insert(surface_id, Some(Cursor::from(icon)));
+                self.apply_cursor_for_surface(surface_id);
             },
             crate::protocols::wprs::wayland::CursorImageStatus::Surface {
                 client_surface,
@@ -811,8 +834,9 @@ impl App {
                     "cursor surface: surface={surface_id:?} serial={serial} cursor_surface={key:?} size=({}x{}) hotspot=({hotspot_x},{hotspot_y})",
                     frame.width, frame.height
                 );
-                renderer.window.set_cursor_visible(true);
-                renderer.window.set_cursor(custom);
+                self.current_cursor
+                    .insert(surface_id, Some(Cursor::from(custom)));
+                self.apply_cursor_for_surface(surface_id);
             },
         }
     }
@@ -1545,6 +1569,7 @@ impl ApplicationHandler<UserEvent> for App {
                     self.send_pointer_event(surface_id, pos, PointerEventKind::Enter { serial });
                 }
                 self.send_pointer_event(surface_id, pos, PointerEventKind::Motion);
+                self.apply_cursor_for_surface(surface_id);
             },
             WindowEvent::CursorEntered { .. } => {
                 self.pointer_surface = Some(surface_id);
@@ -1554,6 +1579,7 @@ impl ApplicationHandler<UserEvent> for App {
                     let pos = self.cursor_pos_for(window_id);
                     self.send_pointer_event(surface_id, pos, PointerEventKind::Enter { serial });
                 }
+                self.apply_cursor_for_surface(surface_id);
             },
             WindowEvent::CursorLeft { .. } => {
                 let pos = self.cursor_pos_for(window_id);
@@ -1584,6 +1610,7 @@ impl ApplicationHandler<UserEvent> for App {
                     },
                 };
                 self.send_pointer_event(surface_id, pos, kind);
+                self.apply_cursor_for_surface(surface_id);
             },
             WindowEvent::MouseWheel { delta, .. } => {
                 let (h_abs, v_abs, h_discrete, v_discrete) = match delta {
@@ -1630,6 +1657,7 @@ impl ApplicationHandler<UserEvent> for App {
                         source,
                     },
                 );
+                self.apply_cursor_for_surface(surface_id);
             },
             WindowEvent::PinchGesture { delta, phase, .. } => {
                 debug!("pinch: surface={surface_id:?} phase={phase:?} delta={delta:?}");
@@ -1688,6 +1716,7 @@ impl ApplicationHandler<UserEvent> for App {
                         }
                     },
                 }
+                self.apply_cursor_for_surface(surface_id);
             },
 
             WindowEvent::RotationGesture { delta, phase, .. } => {
@@ -1744,6 +1773,7 @@ impl ApplicationHandler<UserEvent> for App {
                         }
                     },
                 }
+                self.apply_cursor_for_surface(surface_id);
             },
             _ => {},
         }
@@ -1860,6 +1890,9 @@ pub fn run(
 
         cursor_frames: HashMap::new(),
         cursor_surface_clients: HashMap::new(),
+
+        current_cursor: HashMap::new(),
+        warned_cursor_names: HashSet::new(),
     };
 
     event_loop.run_app(&mut app)?;
