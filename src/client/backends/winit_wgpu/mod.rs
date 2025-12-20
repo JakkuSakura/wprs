@@ -105,6 +105,8 @@ struct WindowRenderer {
     pipeline: wgpu::RenderPipeline,
     vertex_buffer: wgpu::Buffer,
 
+    titlebar_height_logical: f64,
+
     bind_group_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     bind_group: Option<wgpu::BindGroup>,
@@ -113,7 +115,10 @@ struct WindowRenderer {
 }
 
 impl WindowRenderer {
-    fn new(shared: &WgpuShared, window: Arc<Window>) -> Result<Self> {
+    #[cfg(target_os = "macos")]
+    const DEFAULT_TITLEBAR_HEIGHT_LOGICAL: f64 = 28.0;
+
+    fn new(shared: &WgpuShared, window: Arc<Window>, titlebar_height_logical: f64) -> Result<Self> {
         let surface = shared
             .instance
             .create_surface(window.clone())
@@ -233,15 +238,10 @@ impl WindowRenderer {
                 cache: None,
             });
 
-        let vertex_data: &[f32] = &[
-            // pos(x,y) uv(u,v)
-            -1.0, -1.0, 0.0, 1.0, //
-            1.0, -1.0, 1.0, 1.0, //
-            1.0, 1.0, 1.0, 0.0, //
-            -1.0, -1.0, 0.0, 1.0, //
-            1.0, 1.0, 1.0, 0.0, //
-            -1.0, 1.0, 0.0, 0.0, //
-        ];
+        let vertex_data = Self::vertex_data_for_top_inset(
+            config.height,
+            Self::titlebar_height_physical_for(&window, titlebar_height_logical),
+        );
         let vertex_buffer = shared.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("wprs_winit_wgpu_vertex_buffer"),
             size: (vertex_data.len() * std::mem::size_of::<f32>()) as u64,
@@ -250,7 +250,7 @@ impl WindowRenderer {
         });
         shared
             .queue
-            .write_buffer(&vertex_buffer, 0, bytemuck::cast_slice(vertex_data));
+            .write_buffer(&vertex_buffer, 0, bytemuck::cast_slice(&vertex_data));
 
         Ok(Self {
             window,
@@ -258,6 +258,8 @@ impl WindowRenderer {
             config,
             pipeline,
             vertex_buffer,
+
+            titlebar_height_logical,
             bind_group_layout,
             sampler,
             bind_group: None,
@@ -266,10 +268,66 @@ impl WindowRenderer {
         })
     }
 
+    fn titlebar_height_physical(&self) -> u32 {
+        Self::titlebar_height_physical_for(&self.window, self.titlebar_height_logical)
+    }
+
+    fn titlebar_height_physical_for(window: &Window, height_logical: f64) -> u32 {
+        let height = (height_logical * window.scale_factor()).round();
+        if height.is_finite() {
+            height.max(0.0) as u32
+        } else {
+            0
+        }
+    }
+
+    fn vertex_data_for_top_inset(height_px: u32, top_inset_px: u32) -> [f32; 24] {
+        let height = height_px.max(1) as f32;
+        let inset = top_inset_px.min(height_px.saturating_sub(1)) as f32;
+        let content_top = 1.0 - 2.0 * (inset / height);
+
+        [
+            // pos(x,y) uv(u,v)
+            -1.0,
+            -1.0,
+            0.0,
+            1.0, //
+            1.0,
+            -1.0,
+            1.0,
+            1.0, //
+            1.0,
+            content_top,
+            1.0,
+            0.0, //
+            -1.0,
+            -1.0,
+            0.0,
+            1.0, //
+            1.0,
+            content_top,
+            1.0,
+            0.0, //
+            -1.0,
+            content_top,
+            0.0,
+            0.0, //
+        ]
+    }
+
+    fn update_vertices(&mut self, shared: &WgpuShared) {
+        let vertex_data =
+            Self::vertex_data_for_top_inset(self.config.height, self.titlebar_height_physical());
+        shared
+            .queue
+            .write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&vertex_data));
+    }
+
     fn resize(&mut self, shared: &WgpuShared, size: PhysicalSize<u32>) {
         self.config.width = size.width.max(1);
         self.config.height = size.height.max(1);
         self.surface.configure(&shared.device, &self.config);
+        self.update_vertices(shared);
     }
 
     fn update_texture_from_padded_bgra(
@@ -368,7 +426,16 @@ impl WindowRenderer {
                     view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        load: wgpu::LoadOp::Clear(if self.titlebar_height_logical > 0.0 {
+                            wgpu::Color {
+                                r: 0.10,
+                                g: 0.11,
+                                b: 0.12,
+                                a: 1.0,
+                            }
+                        } else {
+                            wgpu::Color::BLACK
+                        }),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -472,8 +539,10 @@ struct App {
     focused_surface: Option<WlSurfaceId>,
     surfaces_with_frame: HashSet<WlSurfaceId>,
     pressed_keycodes: HashSet<u32>,
+    last_window_cursor_pos:
+        HashMap<winit::window::WindowId, crate::protocols::wprs::geometry::Point<f64>>,
     last_cursor_pos: HashMap<winit::window::WindowId, crate::protocols::wprs::geometry::Point<f64>>,
-    pointer_inside: HashSet<winit::window::WindowId>,
+    pointer_in_content: HashSet<winit::window::WindowId>,
     pointer_surface: Option<WlSurfaceId>,
 
     pinch_state: HashMap<WlSurfaceId, PinchGestureState>,
@@ -488,12 +557,12 @@ impl App {
 
     fn to_remote_surface_coords(
         &self,
-        window_logical: crate::protocols::wprs::geometry::Point<f64>,
+        window_content_logical: crate::protocols::wprs::geometry::Point<f64>,
     ) -> crate::protocols::wprs::geometry::Point<f64> {
         let scale = self.ui_scale();
         crate::protocols::wprs::geometry::Point {
-            x: window_logical.x / scale,
-            y: window_logical.y / scale,
+            x: window_content_logical.x / scale,
+            y: window_content_logical.y / scale,
         }
     }
     fn schedule_decode(
@@ -520,6 +589,13 @@ impl App {
             .or_else(|_| parent_renderer.window.outer_position())
             .ok()?;
 
+        let parent_content_pos = PhysicalPosition::new(
+            parent_pos.x,
+            parent_pos
+                .y
+                .saturating_add(parent_renderer.titlebar_height_physical() as i32),
+        );
+
         // The positioner is expressed in the parent's surface coordinate space.
         // Map it into a global coordinate space using the parent's outer position.
         let anchor = popup.positioner.anchor_rect;
@@ -532,8 +608,8 @@ impl App {
         let dy = (anchor.loc.y + offset.y) as f64 * total_scale;
 
         Some(PhysicalPosition::new(
-            parent_pos.x.saturating_add(dx.round() as i32),
-            parent_pos.y.saturating_add(dy.round() as i32),
+            parent_content_pos.x.saturating_add(dx.round() as i32),
+            parent_content_pos.y.saturating_add(dy.round() as i32),
         ))
     }
 
@@ -968,7 +1044,11 @@ impl App {
             return;
         };
         let size = renderer.window.inner_size();
-        let logical: winit::dpi::LogicalSize<f64> = size.to_logical(renderer.window.scale_factor());
+        let titlebar_px = renderer.titlebar_height_physical();
+        let content_height = size.height.saturating_sub(titlebar_px);
+        let content_size = PhysicalSize::new(size.width, content_height);
+        let logical: winit::dpi::LogicalSize<f64> =
+            content_size.to_logical(renderer.window.scale_factor());
         // Window sizes are in local logical points, but the server expects surface logical points.
         // When `ui_scale_factor` is set, we scale the view (local window size) without resizing the
         // remote surface, so we need to map back into the server's coordinate space.
@@ -1030,12 +1110,39 @@ impl App {
                 if !self.windows.contains_key(&surface_id) {
                     let mut attrs = if let Some(toplevel) = toplevel {
                         let title = toplevel.title.clone().unwrap_or_else(|| "wprs".to_string());
-                        Window::default_attributes().with_title(title)
+                        let attrs = Window::default_attributes().with_title(title);
+
+                        #[cfg(target_os = "macos")]
+                        let attrs = {
+                            use winit::platform::macos::WindowAttributesExtMacOS as _;
+
+                            // Keep native decorations/buttons, but allow drawing into the titlebar
+                            // area (full-size content view).
+                            attrs
+                                .with_title_hidden(true)
+                                .with_titlebar_transparent(true)
+                                .with_fullsize_content_view(true)
+                        };
+
+                        attrs
                     } else {
                         Window::default_attributes()
                             .with_decorations(false)
                             .with_resizable(false)
                             .with_window_level(WindowLevel::AlwaysOnTop)
+                    };
+
+                    let titlebar_height_logical = if toplevel.is_some() {
+                        #[cfg(target_os = "macos")]
+                        {
+                            WindowRenderer::DEFAULT_TITLEBAR_HEIGHT_LOGICAL * self.ui_scale()
+                        }
+                        #[cfg(not(target_os = "macos"))]
+                        {
+                            0.0
+                        }
+                    } else {
+                        0.0
                     };
 
                     if let Some(BufferAssignment::New(buf)) = &state.buffer {
@@ -1047,7 +1154,7 @@ impl App {
                         // Client-side scaling knob: magnify/shrink the window in logical units.
                         attrs = attrs.with_inner_size(LogicalSize::new(
                             logical_w * self.ui_scale(),
-                            logical_h * self.ui_scale(),
+                            logical_h * self.ui_scale() + titlebar_height_logical,
                         ));
 
                         info!(
@@ -1074,7 +1181,8 @@ impl App {
 
                     let window = Arc::new(event_loop.create_window(attrs).location(loc!())?);
                     let renderer =
-                        WindowRenderer::new(&self.shared, window.clone()).location(loc!())?;
+                        WindowRenderer::new(&self.shared, window.clone(), titlebar_height_logical)
+                            .location(loc!())?;
                     self.surface_by_window.insert(window.id(), surface_id);
                     self.windows.insert(surface_id, renderer);
 
@@ -1189,12 +1297,18 @@ impl ApplicationHandler<UserEvent> for App {
                 WindowEvent::Resized(size) => {
                     renderer.resize(&self.shared, *size);
                     debug!("winit window resized: surface={surface_id:?} size={size:?}");
-                    self.send_configure_for_surface(surface_id);
+                    if !self.popup_state_by_surface.contains_key(&surface_id) {
+                        self.send_configure_for_surface(surface_id);
+                    }
                     self.update_popups_for_parent(surface_id);
                 },
                 WindowEvent::ScaleFactorChanged { .. } => {
                     debug!("winit window scale factor changed: surface={surface_id:?}");
-                    self.send_configure_for_surface(surface_id);
+                    let size = renderer.window.inner_size();
+                    renderer.resize(&self.shared, size);
+                    if !self.popup_state_by_surface.contains_key(&surface_id) {
+                        self.send_configure_for_surface(surface_id);
+                    }
                     self.update_popups_for_parent(surface_id);
                 },
                 WindowEvent::Moved(_) => {
@@ -1266,35 +1380,77 @@ impl ApplicationHandler<UserEvent> for App {
                     x: logical.x,
                     y: logical.y,
                 };
-                let pos = self.to_remote_surface_coords(window_pos);
+                self.last_window_cursor_pos.insert(window_id, window_pos);
+
+                let titlebar = renderer.titlebar_height_logical;
+                let in_content = titlebar <= 0.0 || window_pos.y >= titlebar;
+                let was_in_content = self.pointer_in_content.contains(&window_id);
+
+                if !in_content {
+                    if was_in_content {
+                        let serial = self.next_serial();
+                        let pos = self.cursor_pos_for(window_id);
+                        self.send_pointer_event(
+                            surface_id,
+                            pos,
+                            PointerEventKind::Leave { serial },
+                        );
+                        self.pointer_in_content.remove(&window_id);
+                    }
+                    if self.pointer_surface == Some(surface_id) {
+                        self.pointer_surface = None;
+                    }
+                    return;
+                }
+
+                let content_pos = crate::protocols::wprs::geometry::Point {
+                    x: window_pos.x,
+                    y: (window_pos.y - titlebar).max(0.0),
+                };
+                let pos = self.to_remote_surface_coords(content_pos);
                 self.last_cursor_pos.insert(window_id, pos);
                 self.pointer_surface = Some(surface_id);
 
-                // Some platforms don't emit CursorEntered if the cursor is
-                // already inside the window when it is created.
-                if self.pointer_inside.insert(window_id) {
+                if !was_in_content {
                     let serial = self.next_serial();
+                    self.pointer_in_content.insert(window_id);
                     self.send_pointer_event(surface_id, pos, PointerEventKind::Enter { serial });
                 }
                 self.send_pointer_event(surface_id, pos, PointerEventKind::Motion);
             },
             WindowEvent::CursorEntered { .. } => {
-                let pos = self.cursor_pos_for(window_id);
-                let serial = self.next_serial();
-                self.pointer_inside.insert(window_id);
                 self.pointer_surface = Some(surface_id);
-                self.send_pointer_event(surface_id, pos, PointerEventKind::Enter { serial });
             },
             WindowEvent::CursorLeft { .. } => {
                 let pos = self.cursor_pos_for(window_id);
                 let serial = self.next_serial();
-                self.pointer_inside.remove(&window_id);
+                if self.pointer_in_content.remove(&window_id) {
+                    self.send_pointer_event(surface_id, pos, PointerEventKind::Leave { serial });
+                }
                 if self.pointer_surface == Some(surface_id) {
                     self.pointer_surface = None;
                 }
-                self.send_pointer_event(surface_id, pos, PointerEventKind::Leave { serial });
             },
             WindowEvent::MouseInput { state, button, .. } => {
+                let Some(renderer) = self.windows.get(&surface_id) else {
+                    return;
+                };
+
+                let titlebar = renderer.titlebar_height_logical;
+                let in_content = self.pointer_in_content.contains(&window_id);
+                if matches!((state, button), (ElementState::Pressed, MouseButton::Left))
+                    && titlebar > 0.0
+                    && !in_content
+                {
+                    if let Err(err) = renderer.window.drag_window() {
+                        debug!("drag_window failed: {err:?}");
+                    }
+                    return;
+                }
+
+                if !in_content {
+                    return;
+                }
                 let Some(button) = Self::linux_button_from_winit(button) else {
                     return;
                 };
@@ -1312,6 +1468,9 @@ impl ApplicationHandler<UserEvent> for App {
                 self.send_pointer_event(surface_id, pos, kind);
             },
             WindowEvent::MouseWheel { delta, .. } => {
+                if !self.pointer_in_content.contains(&window_id) {
+                    return;
+                }
                 let (h_abs, v_abs, h_discrete, v_discrete) = match delta {
                     MouseScrollDelta::LineDelta(x, y) => {
                         let v120_x = (x * 120.0) as i32;
@@ -1356,6 +1515,9 @@ impl ApplicationHandler<UserEvent> for App {
                 );
             },
             WindowEvent::PinchGesture { delta, phase, .. } => {
+                if !self.pointer_in_content.contains(&window_id) {
+                    return;
+                }
                 debug!("pinch: surface={surface_id:?} phase={phase:?} delta={delta:?}");
                 let pos = self.cursor_pos_for(window_id);
                 let state = self.pinch_state.entry(surface_id).or_default();
@@ -1415,6 +1577,9 @@ impl ApplicationHandler<UserEvent> for App {
             },
 
             WindowEvent::RotationGesture { delta, phase, .. } => {
+                if !self.pointer_in_content.contains(&window_id) {
+                    return;
+                }
                 debug!("rotation: surface={surface_id:?} phase={phase:?} delta_deg={delta}");
                 let pos = self.cursor_pos_for(window_id);
                 let state = self.pinch_state.entry(surface_id).or_default();
@@ -1571,8 +1736,9 @@ pub fn run(
         focused_surface: None,
         surfaces_with_frame: HashSet::new(),
         pressed_keycodes: HashSet::new(),
+        last_window_cursor_pos: HashMap::new(),
         last_cursor_pos: HashMap::new(),
-        pointer_inside: HashSet::new(),
+        pointer_in_content: HashSet::new(),
         pointer_surface: None,
         pinch_state: HashMap::new(),
 
