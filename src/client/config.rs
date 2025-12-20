@@ -40,8 +40,27 @@ impl Default for KeyboardMode {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+#[value(rename_all = "kebab-case")]
+pub enum WprscRole {
+    /// Connects to an existing wprs server and presents remote surfaces.
+    Viewer,
+    /// Hosts local Wayland clients (nested compositor) and presents them locally.
+    WaylandServer,
+}
+
+impl Default for WprscRole {
+    fn default() -> Self {
+        Self::Viewer
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct WprscConfig {
+    #[serde(default)]
+    pub role: WprscRole,
+
     pub socket: PathBuf,
     pub endpoint: Option<Endpoint>,
     pub control_socket: PathBuf,
@@ -54,7 +73,8 @@ pub struct WprscConfig {
     #[serde(default = "default_true")]
     pub auto_reconnect: bool,
 
-    pub backend: ClientBackend,
+    #[serde(alias = "backend")]
+    pub present_backend: ClientBackend,
 
     pub keyboard_mode: KeyboardMode,
     pub xkb_keymap_file: Option<PathBuf>,
@@ -69,6 +89,7 @@ pub struct WprscConfig {
 impl Default for WprscConfig {
     fn default() -> Self {
         Self {
+            role: WprscRole::default(),
             socket: config::default_socket_path(),
             endpoint: None,
             control_socket: config::default_control_socket_path("wprsc"),
@@ -80,7 +101,7 @@ impl Default for WprscConfig {
 
             auto_reconnect: true,
 
-            backend: ClientBackend::default(),
+            present_backend: ClientBackend::default(),
 
             keyboard_mode: KeyboardMode::default(),
             xkb_keymap_file: None,
@@ -132,6 +153,9 @@ pub struct WprscArgs {
 
     #[arg(long, value_name = "STRING")]
     pub title_prefix: Option<String>,
+
+    #[arg(long, value_name = "ROLE")]
+    pub role: Option<WprscRole>,
 
     #[arg(long, value_name = "BACKEND")]
     pub backend: Option<ClientBackend>,
@@ -193,8 +217,11 @@ impl WprscArgs {
         if let Some(prefix) = self.title_prefix {
             cfg.title_prefix = prefix;
         }
+        if let Some(role) = self.role {
+            cfg.role = role;
+        }
         if let Some(backend) = self.backend {
-            cfg.backend = backend;
+            cfg.present_backend = backend;
         }
         if let Some(mode) = self.keyboard_mode {
             cfg.keyboard_mode = mode;
