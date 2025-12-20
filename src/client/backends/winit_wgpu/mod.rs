@@ -29,7 +29,7 @@ use winit::window::WindowLevel;
 
 use calloop::EventLoop as CalloopEventLoop;
 use calloop::channel::Event as CalloopChannelEvent;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::client::config::KeyboardMode;
 use crate::filtering;
@@ -1432,14 +1432,14 @@ impl ApplicationHandler<UserEvent> for App {
             match &event {
                 WindowEvent::Resized(size) => {
                     renderer.resize(&self.shared, *size);
-                    debug!("winit window resized: surface={surface_id:?} size={size:?}");
+                    info!("window resized: surface={surface_id:?} size={size:?}");
                     if !self.popup_state_by_surface.contains_key(&surface_id) {
                         self.send_configure_for_surface(surface_id);
                     }
                     self.update_popups_for_parent(surface_id);
                 },
                 WindowEvent::ScaleFactorChanged { .. } => {
-                    debug!("winit window scale factor changed: surface={surface_id:?}");
+                    info!("window scale factor changed: surface={surface_id:?}");
                     let size = renderer.window.inner_size();
                     renderer.resize(&self.shared, size);
                     if !self.popup_state_by_surface.contains_key(&surface_id) {
@@ -1451,13 +1451,18 @@ impl ApplicationHandler<UserEvent> for App {
                     if let Ok(pos) = renderer.window.inner_position() {
                         self.last_window_inner_pos.insert(window_id, pos);
                     }
+                    if let Ok(pos) = renderer.window.outer_position() {
+                        info!("window moved: surface={surface_id:?} outer_pos={pos:?}");
+                    } else {
+                        info!("window moved: surface={surface_id:?}");
+                    }
                     self.update_popups_for_parent(surface_id);
                 },
                 WindowEvent::RedrawRequested => {
                     renderer.render(&self.shared).log_and_ignore(loc!());
                 },
                 WindowEvent::CloseRequested => {
-                    debug!("winit close requested: surface={surface_id:?}");
+                    info!("window close requested: surface={surface_id:?}");
                     if !self.popup_state_by_surface.contains_key(&surface_id) {
                         self.serializer
                             .writer()
@@ -1480,11 +1485,13 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::Focused(true) => {
                 self.focused_window = Some(window_id);
                 let target = self.keyboard_focus_target_for(surface_id);
+                info!("window focused: surface={surface_id:?} keyboard_target={target:?}");
                 self.set_keyboard_focus(Some(target));
             },
             WindowEvent::Focused(false) => {
                 if self.focused_window == Some(window_id) {
                     self.focused_window = None;
+                    info!("window unfocused: surface={surface_id:?}");
                     self.set_keyboard_focus(None);
                 }
             },

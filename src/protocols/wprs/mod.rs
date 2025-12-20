@@ -1241,6 +1241,7 @@ fn client_connect_loop_unix<ST, RT>(
             Ok(stream) => {
                 enlarge_socket_buffer(&stream);
                 other_end_connected.store(true, Ordering::Release);
+                info!("wprs client connected to {sock_path:?}");
 
                 accept_loop_inner(
                     stream,
@@ -1252,7 +1253,7 @@ fn client_connect_loop_unix<ST, RT>(
 
                 // If we disconnected, try again with backoff reset.
                 backoff = Duration::from_millis(100);
-                warn!("server disconnected; reconnecting...");
+                info!("server disconnected; reconnecting...");
             },
             Err(err) => {
                 other_end_connected.store(false, Ordering::Release);
@@ -1292,6 +1293,7 @@ fn client_connect_loop_tcp<ST, RT>(
                 enlarge_socket_buffer(&stream);
 
                 other_end_connected.store(true, Ordering::Release);
+                info!("wprs client connected to {addr:?}");
 
                 accept_loop_inner(
                     stream,
@@ -1302,7 +1304,7 @@ fn client_connect_loop_tcp<ST, RT>(
                 );
 
                 backoff = Duration::from_millis(100);
-                warn!("server disconnected; reconnecting...");
+                info!("server disconnected; reconnecting...");
             },
             Err(err) => {
                 other_end_connected.store(false, Ordering::Release);
