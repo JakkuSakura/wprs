@@ -485,9 +485,27 @@ fn decode_filtered_to_padded_bgra(
 
 fn output_info_from_monitor(id: u32, monitor: &winit::monitor::MonitorHandle) -> OutputInfo {
     let name = monitor.name();
-    let scale_factor = monitor.scale_factor().round() as i32;
+    let mut scale_factor = monitor.scale_factor().round() as i32;
+    scale_factor = scale_factor.max(1);
+
     let position = monitor.position();
     let size = monitor.size();
+
+    // Force a HiDPI scale on macOS to avoid blurry rendering when the server uses a low scale.
+    // We keep the logical size stable by scaling both the mode dimensions and the scale factor.
+    #[cfg(target_os = "macos")]
+    let (position, size, scale_factor) = {
+        let desired_scale = scale_factor.max(2);
+        let multiplier = (desired_scale / scale_factor).max(1);
+        (
+            winit::dpi::PhysicalPosition::new(position.x * multiplier, position.y * multiplier),
+            winit::dpi::PhysicalSize::new(
+                size.width * multiplier as u32,
+                size.height * multiplier as u32,
+            ),
+            desired_scale,
+        )
+    };
     OutputInfo {
         id,
         model: name.clone().unwrap_or_default(),
@@ -499,7 +517,7 @@ fn output_info_from_monitor(id: u32, monitor: &winit::monitor::MonitorHandle) ->
         physical_size: Size { w: 0, h: 0 },
         subpixel: Subpixel::Unknown,
         transform: Transform::Normal,
-        scale_factor: scale_factor.max(1),
+        scale_factor,
         mode: Mode {
             dimensions: Size {
                 w: size.width as i32,
@@ -539,7 +557,10 @@ struct App {
     last_window_cursor_pos:
         HashMap<winit::window::WindowId, crate::protocols::wprs::geometry::Point<f64>>,
     last_cursor_pos: HashMap<winit::window::WindowId, crate::protocols::wprs::geometry::Point<f64>>,
+    pointer_inside: HashSet<winit::window::WindowId>,
     pointer_surface: Option<WlSurfaceId>,
+
+    last_window_inner_pos: HashMap<winit::window::WindowId, PhysicalPosition<i32>>,
 
     pinch_state: HashMap<WlSurfaceId, PinchGestureState>,
 
@@ -624,13 +645,13 @@ impl App {
 
     fn compute_popup_position(&self, popup: &XdgPopupState) -> Option<PhysicalPosition<i32>> {
         let parent_renderer = self.windows.get(&popup.parent_surface_id)?;
-        // Popups are positioned relative to the parent surface coordinate space (i.e. the parent
-        // window's inner content origin). Using outer_position() shifts popups by decorations.
-        let parent_pos = parent_renderer
-            .window
-            .inner_position()
-            .or_else(|_| parent_renderer.window.outer_position())
-            .ok()?;
+        let parent_window_id = parent_renderer.window.id();
+        let parent_pos = self
+            .last_window_inner_pos
+            .get(&parent_window_id)
+            .copied()
+            .or_else(|| parent_renderer.window.inner_position().ok())
+            .or_else(|| parent_renderer.window.outer_position().ok())?;
 
         // The positioner is expressed in the parent's surface coordinate space.
         // Map it into a global coordinate space using the parent's outer position.
@@ -1268,6 +1289,10 @@ impl App {
                             (popup.positioner.height.max(1) as f64) * self.ui_scale(),
                         ));
 
+                        if let Some(pos) = self.compute_popup_position(popup) {
+                            attrs = attrs.with_position(pos);
+                        }
+
                         info!(
                             "creating window: surface={surface_id:?} kind=popup positioner_px=({}x{}) ui_scale_factor={}",
                             popup.positioner.width, popup.positioner.height, self.ui_scale_factor
@@ -1278,6 +1303,9 @@ impl App {
                     let renderer =
                         WindowRenderer::new(&self.shared, window.clone()).location(loc!())?;
                     self.surface_by_window.insert(window.id(), surface_id);
+                    if let Ok(pos) = window.inner_position() {
+                        self.last_window_inner_pos.insert(window.id(), pos);
+                    }
                     self.windows.insert(surface_id, renderer);
 
                     if let Some(popup) = popup {
@@ -1423,6 +1451,9 @@ impl ApplicationHandler<UserEvent> for App {
                     self.update_popups_for_parent(surface_id);
                 },
                 WindowEvent::Moved(_) => {
+                    if let Ok(pos) = renderer.window.inner_position() {
+                        self.last_window_inner_pos.insert(window_id, pos);
+                    }
                     self.update_popups_for_parent(surface_id);
                 },
                 WindowEvent::RedrawRequested => {
@@ -1502,15 +1533,29 @@ impl ApplicationHandler<UserEvent> for App {
                 let pos = self.to_remote_surface_coords(window_pos);
                 self.last_cursor_pos.insert(window_id, pos);
                 self.pointer_surface = Some(surface_id);
+
+                // Ensure the server has pointer focus before motion/press; otherwise smithay will
+                // drop motion and clicks land at (0,0).
+                if self.pointer_inside.insert(window_id) {
+                    let serial = self.next_serial();
+                    self.send_pointer_event(surface_id, pos, PointerEventKind::Enter { serial });
+                }
                 self.send_pointer_event(surface_id, pos, PointerEventKind::Motion);
             },
             WindowEvent::CursorEntered { .. } => {
                 self.pointer_surface = Some(surface_id);
+
+                if self.pointer_inside.insert(window_id) {
+                    let serial = self.next_serial();
+                    let pos = self.cursor_pos_for(window_id);
+                    self.send_pointer_event(surface_id, pos, PointerEventKind::Enter { serial });
+                }
             },
             WindowEvent::CursorLeft { .. } => {
                 let pos = self.cursor_pos_for(window_id);
                 let serial = self.next_serial();
                 self.send_pointer_event(surface_id, pos, PointerEventKind::Leave { serial });
+                self.pointer_inside.remove(&window_id);
                 if self.pointer_surface == Some(surface_id) {
                     self.pointer_surface = None;
                 }
@@ -1520,6 +1565,10 @@ impl ApplicationHandler<UserEvent> for App {
                     return;
                 };
                 let pos = self.cursor_pos_for(window_id);
+                if self.pointer_inside.insert(window_id) {
+                    let serial = self.next_serial();
+                    self.send_pointer_event(surface_id, pos, PointerEventKind::Enter { serial });
+                }
                 let kind = match state {
                     ElementState::Pressed => PointerEventKind::Press {
                         button,
@@ -1795,7 +1844,10 @@ pub fn run(
         pressed_keycodes: HashSet::new(),
         last_window_cursor_pos: HashMap::new(),
         last_cursor_pos: HashMap::new(),
+        pointer_inside: HashSet::new(),
         pointer_surface: None,
+
+        last_window_inner_pos: HashMap::new(),
         pinch_state: HashMap::new(),
 
         popup_state_by_surface: HashMap::new(),
