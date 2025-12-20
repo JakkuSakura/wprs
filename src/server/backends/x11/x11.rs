@@ -2,9 +2,6 @@ use std::sync::Arc;
 
 use anyhow::ensure;
 
-use crate::server::runtime::backend::BackendObservation;
-use crate::server::runtime::backend::PollingBackend;
-use crate::server::runtime::backend::SurfaceSnapshot;
 use crate::prelude::*;
 use crate::protocols::wprs::Capabilities;
 use crate::protocols::wprs::ClientId;
@@ -19,6 +16,9 @@ use crate::protocols::wprs::wayland::SurfaceState;
 use crate::protocols::wprs::wayland::WlSurfaceId;
 use crate::protocols::wprs::xdg_shell::XdgToplevelId;
 use crate::protocols::wprs::xdg_shell::XdgToplevelState;
+use crate::server::runtime::backend::BackendObservation;
+use crate::server::runtime::backend::PollingBackend;
+use crate::server::runtime::backend::SurfaceSnapshot;
 
 #[cfg(unix)]
 use std::ffi::c_void;
@@ -30,9 +30,9 @@ use std::ptr::NonNull;
 #[cfg(unix)]
 use nix::sys::mman;
 #[cfg(unix)]
-use x11rb::connection::RequestConnection;
-#[cfg(unix)]
 use x11rb::connection::Connection;
+#[cfg(unix)]
+use x11rb::connection::RequestConnection;
 #[cfg(unix)]
 use x11rb::protocol::shm;
 #[cfg(unix)]
@@ -52,11 +52,7 @@ struct PixmapFormatInfo {
 }
 
 impl PixmapFormatInfo {
-    fn for_depth(
-        setup: &x11rb::protocol::xproto::Setup,
-        depth: u8,
-        width: u16,
-    ) -> Result<Self> {
+    fn for_depth(setup: &x11rb::protocol::xproto::Setup, depth: u8, width: u16) -> Result<Self> {
         let format = setup
             .pixmap_formats
             .iter()
@@ -66,7 +62,10 @@ impl PixmapFormatInfo {
         let bits_per_pixel = format.bits_per_pixel;
         let scanline_pad = format.scanline_pad;
 
-        ensure!(bits_per_pixel % 8 == 0, "unsupported bits-per-pixel: {bits_per_pixel}");
+        ensure!(
+            bits_per_pixel % 8 == 0,
+            "unsupported bits-per-pixel: {bits_per_pixel}"
+        );
         ensure!(scanline_pad != 0, "invalid scanline pad: {scanline_pad}");
 
         let bytes_per_pixel = (bits_per_pixel / 8) as usize;
@@ -107,7 +106,11 @@ impl ShmCapture {
             return Ok(None);
         }
 
-        let shm_version = conn.shm_query_version().location(loc!())?.reply().location(loc!())?;
+        let shm_version = conn
+            .shm_query_version()
+            .location(loc!())?
+            .reply()
+            .location(loc!())?;
         let (major, minor) = (shm_version.major_version, shm_version.minor_version);
         // We rely on FD passing via CreateSegment/AttachFd (SHM >= 1.2).
         if (major, minor) < (1, 2) {
@@ -156,7 +159,10 @@ impl ShmCapture {
     }
 
     fn detach(&self, conn: &RustConnection) -> Result<()> {
-        conn.shm_detach(self.shmseg).location(loc!())?.check().location(loc!())?;
+        conn.shm_detach(self.shmseg)
+            .location(loc!())?
+            .check()
+            .location(loc!())?;
         Ok(())
     }
 }
@@ -220,9 +226,12 @@ impl X11FullscreenBackend {
             ) {
                 Ok(shm) => shm,
                 Err(err) => {
-                    tracing::debug!(?err, "failed to initialize MIT-SHM; falling back to GetImage");
+                    tracing::debug!(
+                        ?err,
+                        "failed to initialize MIT-SHM; falling back to GetImage"
+                    );
                     None
-                }
+                },
             };
             Ok(Self {
                 conn,
@@ -489,11 +498,17 @@ fn blit_ximage_to_bgra(
     blue_mask: u32,
     out_bgra: &mut [u8],
 ) -> Result<()> {
-    ensure!(bytes_per_pixel >= 1 && bytes_per_pixel <= 4, "unsupported BPP: {bytes_per_pixel}");
+    ensure!(
+        bytes_per_pixel >= 1 && bytes_per_pixel <= 4,
+        "unsupported BPP: {bytes_per_pixel}"
+    );
 
     let width_usize = width as usize;
     let height_usize = height as usize;
-    ensure!(out_bgra.len() == width_usize * height_usize * 4, "invalid output size");
+    ensure!(
+        out_bgra.len() == width_usize * height_usize * 4,
+        "invalid output size"
+    );
 
     for y in 0..height_usize {
         let row = y
@@ -506,7 +521,10 @@ fn blit_ximage_to_bgra(
                         .ok_or_else(|| anyhow!("pixel offset overflow"))?,
                 )
                 .ok_or_else(|| anyhow!("pixel offset overflow"))?;
-            ensure!(offset + bytes_per_pixel <= data.len(), "pixel read out of bounds");
+            ensure!(
+                offset + bytes_per_pixel <= data.len(),
+                "pixel read out of bounds"
+            );
 
             let pixel = read_pixel(data, offset, bytes_per_pixel, image_byte_order);
 
@@ -534,29 +552,34 @@ fn read_pixel(
 ) -> u32 {
     match bytes_per_pixel {
         4 => {
-            let bytes = [data[offset], data[offset + 1], data[offset + 2], data[offset + 3]];
+            let bytes = [
+                data[offset],
+                data[offset + 1],
+                data[offset + 2],
+                data[offset + 3],
+            ];
             match image_byte_order {
                 xproto::ImageOrder::LSB_FIRST => u32::from_le_bytes(bytes),
                 xproto::ImageOrder::MSB_FIRST => u32::from_be_bytes(bytes),
                 _ => u32::from_ne_bytes(bytes),
             }
-        }
+        },
         3 => match image_byte_order {
             xproto::ImageOrder::LSB_FIRST => {
                 u32::from(data[offset])
                     | (u32::from(data[offset + 1]) << 8)
                     | (u32::from(data[offset + 2]) << 16)
-            }
+            },
             xproto::ImageOrder::MSB_FIRST => {
                 (u32::from(data[offset]) << 16)
                     | (u32::from(data[offset + 1]) << 8)
                     | u32::from(data[offset + 2])
-            }
+            },
             _ => {
                 u32::from(data[offset])
                     | (u32::from(data[offset + 1]) << 8)
                     | (u32::from(data[offset + 2]) << 16)
-            }
+            },
         },
         2 => {
             let bytes = [data[offset], data[offset + 1]];
@@ -565,7 +588,7 @@ fn read_pixel(
                 xproto::ImageOrder::MSB_FIRST => u32::from(u16::from_be_bytes(bytes)),
                 _ => u32::from(u16::from_ne_bytes(bytes)),
             }
-        }
+        },
         1 => u32::from(data[offset]),
         _ => 0,
     }

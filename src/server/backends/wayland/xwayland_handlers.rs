@@ -1,7 +1,7 @@
 use std::process::Stdio;
 
-use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::Resource;
+use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::wayland::compositor;
 use smithay::wayland::xwayland_shell::XWaylandShellHandler;
 use smithay::xwayland::X11Surface;
@@ -47,10 +47,7 @@ impl WprsServerState {
             return Ok(());
         }
 
-        let env = vec![(
-            "WAYLAND_DEBUG",
-            if wayland_debug { "1" } else { "0" },
-        )];
+        let env = vec![("WAYLAND_DEBUG", if wayland_debug { "1" } else { "0" })];
 
         let (xwayland, client) = match XWayland::spawn(
             &self.dh,
@@ -81,7 +78,7 @@ impl WprsServerState {
                 } else {
                     return Err(anyhow!("failed to start Xwayland: {err:?}")).location(loc!());
                 }
-            }
+            },
         };
 
         let token = self
@@ -119,7 +116,10 @@ impl WprsServerState {
         Ok(())
     }
 
-    pub(crate) fn x11_surface_for_wl_surface_id(&self, surface_id: &WlSurfaceId) -> Option<X11Surface> {
+    pub(crate) fn x11_surface_for_wl_surface_id(
+        &self,
+        surface_id: &WlSurfaceId,
+    ) -> Option<X11Surface> {
         let object_id = self.object_map.get(surface_id)?.clone();
         let wl_surface = WlSurface::from_id(&self.dh, object_id).ok()?;
         compositor::with_states(&wl_surface, |surface_data| {
@@ -149,7 +149,9 @@ impl WprsServerState {
 }
 
 impl XWaylandShellHandler for WprsServerState {
-    fn xwayland_shell_state(&mut self) -> &mut smithay::wayland::xwayland_shell::XWaylandShellState {
+    fn xwayland_shell_state(
+        &mut self,
+    ) -> &mut smithay::wayland::xwayland_shell::XWaylandShellState {
         &mut self.xwayland_shell_state
     }
 
@@ -216,9 +218,7 @@ impl XwmHandler for WprsServerState {
         if let Some(wl_surface) = window.wl_surface() {
             self.xwayland_surfaces.remove(&wl_surface.id());
             compositor::with_states(&wl_surface, |surface_data| {
-                if let Some(surface_state) =
-                    surface_data.data_map.get::<LockedSurfaceState>()
-                {
+                if let Some(surface_state) = surface_data.data_map.get::<LockedSurfaceState>() {
                     surface_state.0.lock().unwrap().role = None;
                 }
             });
@@ -279,7 +279,10 @@ impl XwmHandler for WprsServerState {
 
     fn maximize_request(&mut self, _xwm: XwmId, window: X11Surface) {
         if let Some(wl_surface) = window.wl_surface() {
-            self.send_toplevel_request_for_surface(&wl_surface, ToplevelRequestPayload::SetMaximized);
+            self.send_toplevel_request_for_surface(
+                &wl_surface,
+                ToplevelRequestPayload::SetMaximized,
+            );
         }
     }
 
@@ -294,7 +297,10 @@ impl XwmHandler for WprsServerState {
 
     fn fullscreen_request(&mut self, _xwm: XwmId, window: X11Surface) {
         if let Some(wl_surface) = window.wl_surface() {
-            self.send_toplevel_request_for_surface(&wl_surface, ToplevelRequestPayload::SetFullscreen);
+            self.send_toplevel_request_for_surface(
+                &wl_surface,
+                ToplevelRequestPayload::SetFullscreen,
+            );
         }
     }
 
@@ -319,7 +325,11 @@ impl XwmHandler for WprsServerState {
     fn move_request(&mut self, _xwm: XwmId, _window: X11Surface, _button: u32) {}
 
     #[instrument(skip(self), level = "debug")]
-    fn allow_selection_access(&mut self, _xwm: XwmId, _selection: smithay::wayland::selection::SelectionTarget) -> bool {
+    fn allow_selection_access(
+        &mut self,
+        _xwm: XwmId,
+        _selection: smithay::wayland::selection::SelectionTarget,
+    ) -> bool {
         // TODO: selection bridging between Wayland and X11.
         false
     }

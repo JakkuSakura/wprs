@@ -57,8 +57,8 @@ use crate::protocols::wprs::wayland::WlSurfaceId;
 use crate::sharding_compression::ShardingCompressor;
 use crate::utils::SerialMap;
 
-pub mod client_handlers;
 pub mod backend;
+pub mod client_handlers;
 pub mod smithay_handlers;
 pub mod xwayland_handlers;
 

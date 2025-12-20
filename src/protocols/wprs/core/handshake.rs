@@ -35,7 +35,7 @@ fn externalize_compressed_buffer(state: &mut SurfaceState) -> Option<SendType<Re
             let msg = SendType::RawBuffer(Arc::clone(shards));
             *data = BufferData::External;
             Some(msg)
-        }
+        },
         BufferData::External | BufferData::Uncompressed(_) => None,
     }
 }
@@ -78,14 +78,14 @@ mod tests {
     use std::num::NonZeroUsize;
 
     use crate::arc_slice::ArcSlice;
-    use crate::sharding_compression::CompressedShards;
-    use crate::sharding_compression::ShardingCompressor;
     use crate::protocols::wprs::ClientId;
     use crate::protocols::wprs::wayland::BufferFormat;
     use crate::protocols::wprs::wayland::BufferMetadata;
     use crate::protocols::wprs::wayland::SurfaceRequestPayload;
     use crate::protocols::wprs::wayland::UncompressedBufferData;
     use crate::protocols::wprs::wayland::WlSurfaceId;
+    use crate::sharding_compression::CompressedShards;
+    use crate::sharding_compression::ShardingCompressor;
 
     fn make_compressed_shards(payload: &[u8]) -> Arc<CompressedShards> {
         let mut compressor = ShardingCompressor::new(NonZeroUsize::new(1).unwrap(), 1).unwrap();
@@ -254,8 +254,14 @@ mod tests {
         )
         .unwrap();
 
-        assert!(matches!(msgs[0], SendType::Object(Request::Capabilities(_))));
-        assert!(matches!(msgs[1], SendType::Object(Request::DisplayConfig(_))));
+        assert!(matches!(
+            msgs[0],
+            SendType::Object(Request::Capabilities(_))
+        ));
+        assert!(matches!(
+            msgs[1],
+            SendType::Object(Request::DisplayConfig(_))
+        ));
         assert!(matches!(msgs[2], SendType::RawBuffer(_)));
         assert_surface_commit_has_external_buffer(&msgs[3]);
         assert!(matches!(msgs[4], SendType::RawBuffer(_)));

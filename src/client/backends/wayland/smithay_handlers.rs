@@ -82,12 +82,11 @@ use smithay_client_toolkit::shm::Shm;
 use smithay_client_toolkit::shm::ShmHandler;
 use tracing::Span;
 
-use crate::config;
 use super::ObjectBimapExt;
 use super::Role;
-use crate::utils::client::SeatObject;
 use super::WprsClientState;
 use super::subsurface;
+use crate::config;
 use crate::prelude::*;
 use crate::protocols::wprs::Event;
 use crate::protocols::wprs::SendType;
@@ -102,16 +101,17 @@ use crate::protocols::wprs::wayland::KeyState;
 use crate::protocols::wprs::wayland::KeyboardEvent;
 use crate::protocols::wprs::wayland::Output;
 use crate::protocols::wprs::wayland::OutputEvent;
+use crate::protocols::wprs::wayland::PointerGestureEvent;
 use crate::protocols::wprs::wayland::SourceMetadata;
 use crate::protocols::wprs::wayland::SurfaceEvent;
 use crate::protocols::wprs::wayland::SurfaceEventPayload::OutputsChanged;
 use crate::protocols::wprs::wayland::WlSurfaceId;
-use crate::protocols::wprs::wayland::PointerGestureEvent;
 use crate::protocols::wprs::xdg_shell::PopupConfigure;
 use crate::protocols::wprs::xdg_shell::PopupEvent;
 use crate::protocols::wprs::xdg_shell::ToplevelClose;
 use crate::protocols::wprs::xdg_shell::ToplevelConfigure;
 use crate::protocols::wprs::xdg_shell::ToplevelEvent;
+use crate::utils::client::SeatObject;
 
 impl WprsClientState {
     fn send_surface_outputs(&self, surface: &WlSurface) {
@@ -138,7 +138,10 @@ impl WprsClientState {
         }
     }
 
-    fn gesture_position_for_surface(&self, surface_id: WlSurfaceId) -> crate::protocols::wprs::geometry::Point<f64> {
+    fn gesture_position_for_surface(
+        &self,
+        surface_id: WlSurfaceId,
+    ) -> crate::protocols::wprs::geometry::Point<f64> {
         match self.last_pointer_pos {
             Some((sid, pos)) if sid == surface_id => pos,
             _ => (0.0, 0.0).into(),
@@ -413,10 +416,8 @@ impl SeatHandler for WprsClientState {
                 .expect("Failed to create pointer");
             seat_obj.pointer.replace(themed_pointer);
 
-            if let Some(pointer_gestures) = self
-                .wp_pointer_gestures
-                .as_ref()
-                .and_then(|g| g.get().ok())
+            if let Some(pointer_gestures) =
+                self.wp_pointer_gestures.as_ref().and_then(|g| g.get().ok())
             {
                 let pointer = seat_obj.pointer.as_ref().unwrap().pointer();
                 seat_obj.pinch_gesture = Some(pointer_gestures.get_pinch_gesture(pointer, qh, ()));
@@ -690,10 +691,8 @@ impl PointerHandler for WprsClientState {
                             .get_wl_surface_id(&event.surface.id())
                             .expect("Object corresponding to client object id {key} not found.");
 
-                        self.last_pointer_pos = Some((
-                            surface_id,
-                            (event.position.0, event.position.1).into(),
-                        ));
+                        self.last_pointer_pos =
+                            Some((surface_id, (event.position.0, event.position.1).into()));
 
                         wayland::PointerEvent::from_smithay(&surface_id, event)
                     })
@@ -731,7 +730,8 @@ impl Dispatch<ZwpPointerGesturePinchV1, (), WprsClientState> for WprsClientState
                 surface,
                 fingers,
             } => {
-                let Some((_, surface_id)) = state.object_bimap.get_wl_surface_id(&surface.id()) else {
+                let Some((_, surface_id)) = state.object_bimap.get_wl_surface_id(&surface.id())
+                else {
                     return;
                 };
                 state.active_pinch_surface = Some(surface_id);
@@ -742,7 +742,7 @@ impl Dispatch<ZwpPointerGesturePinchV1, (), WprsClientState> for WprsClientState
                     serial,
                     fingers,
                 });
-            }
+            },
             zwp_pointer_gesture_pinch_v1::Event::Update {
                 time: _,
                 dx,
@@ -761,7 +761,7 @@ impl Dispatch<ZwpPointerGesturePinchV1, (), WprsClientState> for WprsClientState
                     scale,
                     rotation,
                 });
-            }
+            },
             zwp_pointer_gesture_pinch_v1::Event::End {
                 serial,
                 time: _,
@@ -777,8 +777,8 @@ impl Dispatch<ZwpPointerGesturePinchV1, (), WprsClientState> for WprsClientState
                     serial,
                     cancelled: cancelled != 0,
                 });
-            }
-            _ => {}
+            },
+            _ => {},
         }
     }
 }
@@ -799,7 +799,8 @@ impl Dispatch<ZwpPointerGestureSwipeV1, (), WprsClientState> for WprsClientState
                 surface,
                 fingers,
             } => {
-                let Some((_, surface_id)) = state.object_bimap.get_wl_surface_id(&surface.id()) else {
+                let Some((_, surface_id)) = state.object_bimap.get_wl_surface_id(&surface.id())
+                else {
                     return;
                 };
                 state.active_swipe_surface = Some(surface_id);
@@ -810,7 +811,7 @@ impl Dispatch<ZwpPointerGestureSwipeV1, (), WprsClientState> for WprsClientState
                     serial,
                     fingers,
                 });
-            }
+            },
             zwp_pointer_gesture_swipe_v1::Event::Update { time: _, dx, dy } => {
                 let Some(surface_id) = state.active_swipe_surface else {
                     return;
@@ -821,7 +822,7 @@ impl Dispatch<ZwpPointerGestureSwipeV1, (), WprsClientState> for WprsClientState
                     position: pos,
                     delta: (dx, dy).into(),
                 });
-            }
+            },
             zwp_pointer_gesture_swipe_v1::Event::End {
                 serial,
                 time: _,
@@ -837,8 +838,8 @@ impl Dispatch<ZwpPointerGestureSwipeV1, (), WprsClientState> for WprsClientState
                     serial,
                     cancelled: cancelled != 0,
                 });
-            }
-            _ => {}
+            },
+            _ => {},
         }
     }
 }
@@ -859,7 +860,8 @@ impl Dispatch<ZwpPointerGestureHoldV1, (), WprsClientState> for WprsClientState 
                 surface,
                 fingers,
             } => {
-                let Some((_, surface_id)) = state.object_bimap.get_wl_surface_id(&surface.id()) else {
+                let Some((_, surface_id)) = state.object_bimap.get_wl_surface_id(&surface.id())
+                else {
                     return;
                 };
                 state.active_hold_surface = Some(surface_id);
@@ -870,7 +872,7 @@ impl Dispatch<ZwpPointerGestureHoldV1, (), WprsClientState> for WprsClientState 
                     serial,
                     fingers,
                 });
-            }
+            },
             zwp_pointer_gesture_hold_v1::Event::End {
                 serial,
                 time: _,
@@ -886,8 +888,8 @@ impl Dispatch<ZwpPointerGestureHoldV1, (), WprsClientState> for WprsClientState 
                     serial,
                     cancelled: cancelled != 0,
                 });
-            }
-            _ => {}
+            },
+            _ => {},
         }
     }
 }

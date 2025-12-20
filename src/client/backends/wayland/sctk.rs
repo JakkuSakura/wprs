@@ -55,7 +55,6 @@ use smithay_client_toolkit::shm::slot::SlotPool;
 
 use smithay::reexports::wayland_protocols::wp::pointer_gestures::zv1::client::zwp_pointer_gestures_v1::ZwpPointerGesturesV1;
 
-use crate::utils::client::SeatObject;
 use crate::constants;
 use crate::filtering;
 use crate::prelude::*;
@@ -76,6 +75,7 @@ use crate::protocols::wprs::wayland::SubsurfacePosition;
 use crate::protocols::wprs::wayland::UncompressedBufferData;
 use crate::protocols::wprs::wayland::ViewportState;
 use crate::protocols::wprs::wayland::WlSurfaceId;
+use crate::utils::client::SeatObject;
 use crate::vec4u8::Vec4u8s;
 
 use super::smithay_handlers;

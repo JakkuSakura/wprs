@@ -3,9 +3,6 @@ use std::sync::Arc;
 
 use clap::Parser;
 
-use crate::server::runtime::backend::BackendObservation;
-use crate::server::runtime::backend::PollingBackend;
-use crate::server::runtime::backend::SurfaceSnapshot;
 use crate::prelude::*;
 use crate::protocols::wprs::Capabilities;
 use crate::protocols::wprs::ClientId;
@@ -20,6 +17,9 @@ use crate::protocols::wprs::wayland::SurfaceState;
 use crate::protocols::wprs::wayland::WlSurfaceId;
 use crate::protocols::wprs::xdg_shell::XdgToplevelId;
 use crate::protocols::wprs::xdg_shell::XdgToplevelState;
+use crate::server::runtime::backend::BackendObservation;
+use crate::server::runtime::backend::PollingBackend;
+use crate::server::runtime::backend::SurfaceSnapshot;
 
 pub mod patterns;
 

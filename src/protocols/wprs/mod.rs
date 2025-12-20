@@ -34,9 +34,9 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::str;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
-use std::sync::Mutex;
 use std::thread;
 use std::thread::Scope;
 use std::thread::ScopedJoinHandle;
@@ -44,9 +44,9 @@ use std::time::Duration;
 use std::time::Instant;
 use std::time::SystemTime;
 
+use anyhow::ensure;
 use calloop::channel;
 use calloop::channel::Channel;
-use anyhow::ensure;
 use crossbeam_channel::Receiver;
 use crossbeam_channel::RecvTimeoutError;
 use crossbeam_channel::Sender;
@@ -74,13 +74,13 @@ use sysctl::Ctl;
 use sysctl::Sysctl;
 
 use crate::arc_slice::ArcSlice;
-use crate::utils::channel::DiscardingSender;
-use crate::utils::channel::InfallibleSender;
 use crate::prelude::*;
 use crate::sharding_compression::CompressedShards;
 use crate::sharding_compression::ShardingCompressor;
 use crate::sharding_compression::ShardingDecompressor;
 use crate::utils;
+use crate::utils::channel::DiscardingSender;
+use crate::utils::channel::InfallibleSender;
 
 #[derive(Debug, Clone, Eq, PartialEq, serde_derive::Serialize, serde_derive::Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
@@ -131,7 +131,11 @@ impl fmt::Display for Endpoint {
                 local,
                 ssh_args,
             } => {
-                write!(f, "ssh://{}?remote={remote}", format_ssh_destination(destination))?;
+                write!(
+                    f,
+                    "ssh://{}?remote={remote}",
+                    format_ssh_destination(destination)
+                )?;
                 if let Some(local) = local {
                     write!(f, "&local={local}")?;
                 }
@@ -139,7 +143,7 @@ impl fmt::Display for Endpoint {
                     write!(f, "&ssh-arg={a}")?;
                 }
                 Ok(())
-            }
+            },
         }
     }
 }
@@ -194,7 +198,9 @@ impl ClientTransportGuard {
 /// For `ssh://...` endpoints this spawns `ssh` to create a local-forward tunnel
 /// and returns the chosen local endpoint plus a guard that keeps the tunnel
 /// alive.
-pub fn setup_client_transport(endpoint: Endpoint) -> Result<(Endpoint, Option<ClientTransportGuard>)> {
+pub fn setup_client_transport(
+    endpoint: Endpoint,
+) -> Result<(Endpoint, Option<ClientTransportGuard>)> {
     match endpoint {
         Endpoint::Ssh {
             destination,
@@ -206,7 +212,7 @@ pub fn setup_client_transport(endpoint: Endpoint) -> Result<(Endpoint, Option<Cl
                 setup_ssh_forwarding(destination, *remote, local.map(|b| *b), ssh_args)
                     .location(loc!())?;
             Ok((local_endpoint, Some(ClientTransportGuard(guard))))
-        }
+        },
         other => Ok((other, None)),
     }
 }
@@ -342,13 +348,16 @@ fn parse_ssh_destination(authority: &str) -> Result<SshDestination> {
         let (host, rest) = hp
             .split_once(']')
             .ok_or_else(|| anyhow!("invalid ssh host {hostport:?} (missing ']')"))?;
-        let port = rest.strip_prefix(':').map(|p| p.parse::<u16>()).transpose()?;
+        let port = rest
+            .strip_prefix(':')
+            .map(|p| p.parse::<u16>())
+            .transpose()?;
         (host.to_string(), port)
     } else {
         match hostport.rsplit_once(':') {
             Some((h, p)) if !h.is_empty() && p.chars().all(|c| c.is_ascii_digit()) => {
                 (h.to_string(), Some(p.parse::<u16>()?))
-            }
+            },
             _ => (hostport.to_string(), None),
         }
     };
@@ -382,20 +391,26 @@ fn setup_ssh_forwarding(
     match (&local, &remote) {
         (Endpoint::Tcp { addr: l }, Endpoint::Tcp { addr: r }) => {
             // Local binds to loopback to avoid exposing an unauthenticated TCP port.
-            ensure!(l.ip().is_loopback(), "ssh local tcp endpoint must be loopback");
+            ensure!(
+                l.ip().is_loopback(),
+                "ssh local tcp endpoint must be loopback"
+            );
             cmd.arg("-L")
                 .arg(format!("{}:{}:{}:{}", l.ip(), l.port(), r.ip(), r.port()));
-        }
+        },
         #[cfg(unix)]
         (Endpoint::Unix { path: l }, Endpoint::Unix { path: r }) => {
             cmd.arg("-o").arg("StreamLocalBindUnlink=yes");
-            cmd.arg("-L").arg(format!("{}:{}", l.display(), r.display()));
-        }
+            cmd.arg("-L")
+                .arg(format!("{}:{}", l.display(), r.display()));
+        },
         #[cfg(not(unix))]
         (Endpoint::Unix { .. }, _) | (_, Endpoint::Unix { .. }) => {
             bail!("unix socket forwarding over ssh is not supported on this platform")
-        }
-        _ => bail!("ssh forwarding requires local and remote endpoints to have the same type (tcp or unix)"),
+        },
+        _ => bail!(
+            "ssh forwarding requires local and remote endpoints to have the same type (tcp or unix)"
+        ),
     }
 
     for a in ssh_args {
@@ -432,12 +447,15 @@ fn choose_local_forward_endpoint(
     if let Some(local) = local {
         match &local {
             Endpoint::Tcp { addr } => {
-                ensure!(addr.ip().is_loopback(), "ssh local tcp endpoint must be loopback")
-            }
+                ensure!(
+                    addr.ip().is_loopback(),
+                    "ssh local tcp endpoint must be loopback"
+                )
+            },
             Endpoint::Unix { .. } => {
                 #[cfg(not(unix))]
                 bail!("unix endpoint is not supported on this platform")
-            }
+            },
             Endpoint::Ssh { .. } => bail!("nested ssh endpoints are not supported"),
         }
         return Ok((local, None));
@@ -452,7 +470,7 @@ fn choose_local_forward_endpoint(
                 },
                 None,
             ))
-        }
+        },
         Endpoint::Unix { .. } => {
             #[cfg(unix)]
             {
@@ -462,7 +480,7 @@ fn choose_local_forward_endpoint(
 
             #[cfg(not(unix))]
             bail!("unix endpoint is not supported on this platform")
-        }
+        },
         Endpoint::Ssh { .. } => bail!("nested ssh endpoints are not supported"),
     }
 }
@@ -486,7 +504,9 @@ fn wait_for_local_forward_ready(endpoint: &Endpoint, timeout: Duration) -> Resul
     let start = Instant::now();
     loop {
         let ready = match endpoint {
-            Endpoint::Tcp { addr } => TcpStream::connect_timeout(addr, Duration::from_millis(200)).is_ok(),
+            Endpoint::Tcp { addr } => {
+                TcpStream::connect_timeout(addr, Duration::from_millis(200)).is_ok()
+            },
             Endpoint::Unix { path } => {
                 #[cfg(unix)]
                 {
@@ -498,7 +518,7 @@ fn wait_for_local_forward_ready(endpoint: &Endpoint, timeout: Duration) -> Resul
                     let _ = path;
                     false
                 }
-            }
+            },
             Endpoint::Ssh { .. } => false,
         };
 
@@ -974,7 +994,10 @@ where
     {
         let frames = on_connect_frames.lock().unwrap().clone();
         for frame in frames {
-            frame.message_type.framed_write(&mut stream).location(loc!())?;
+            frame
+                .message_type
+                .framed_write(&mut stream)
+                .location(loc!())?;
             frame
                 .compressed_shards
                 .framed_write(&mut stream)
@@ -1230,7 +1253,7 @@ fn client_connect_loop_unix<ST, RT>(
                 // If we disconnected, try again with backoff reset.
                 backoff = Duration::from_millis(100);
                 warn!("server disconnected; reconnecting...");
-            }
+            },
             Err(err) => {
                 other_end_connected.store(false, Ordering::Release);
                 warn!(
@@ -1239,7 +1262,7 @@ fn client_connect_loop_unix<ST, RT>(
                 );
                 thread::sleep(backoff);
                 backoff = backoff.saturating_mul(2).min(backoff_max);
-            }
+            },
         }
     }
 }
@@ -1280,7 +1303,7 @@ fn client_connect_loop_tcp<ST, RT>(
 
                 backoff = Duration::from_millis(100);
                 warn!("server disconnected; reconnecting...");
-            }
+            },
             Err(err) => {
                 other_end_connected.store(false, Ordering::Release);
                 warn!(
@@ -1289,7 +1312,7 @@ fn client_connect_loop_tcp<ST, RT>(
                 );
                 thread::sleep(backoff);
                 backoff = backoff.saturating_mul(2).min(backoff_max);
-            }
+            },
         }
     }
 }
@@ -1392,7 +1415,7 @@ where
                     message_type: MessageType::Object,
                     compressed_shards: Arc::new(shards),
                 })
-            }
+            },
             SendType::RawBuffer(compressed_shards) => Ok(OnConnectFrame {
                 message_type: MessageType::RawBuffer,
                 compressed_shards,
@@ -1407,8 +1430,10 @@ where
             Endpoint::Unix { path } => Self::new_server(&path),
             Endpoint::Tcp { addr } => Self::new_server_tcp(addr),
             Endpoint::Ssh { .. } => {
-                bail!("ssh endpoint is only supported for clients (use ssh port forwarding to expose a local tcp/unix endpoint for the server)")
-            }
+                bail!(
+                    "ssh endpoint is only supported for clients (use ssh port forwarding to expose a local tcp/unix endpoint for the server)"
+                )
+            },
         }
     }
 
@@ -1428,7 +1453,7 @@ where
             Endpoint::Tcp { addr } => Self::new_client_tcp_with_options(*addr, options),
             Endpoint::Ssh { .. } => {
                 unreachable!("ssh forwarding resolves to a concrete local endpoint")
-            }
+            },
         }
         .location(loc!())?;
         s.transport_guard = guard.map(|g| g.into_inner());
@@ -1444,42 +1469,42 @@ where
 
         #[cfg(unix)]
         {
-        let listener = utils::bind_user_socket(sock_path).location(loc!())?;
-        enlarge_socket_buffer(&listener);
+            let listener = utils::bind_user_socket(sock_path).location(loc!())?;
+            enlarge_socket_buffer(&listener);
 
-        let (reader_tx, reader_rx): (channel::SyncSender<RecvType<RT>>, Channel<RecvType<RT>>) =
-            channel::sync_channel(CHANNEL_SIZE);
-        let (writer_tx, writer_rx): (Sender<SendType<ST>>, Receiver<SendType<ST>>) =
-            crossbeam_channel::unbounded();
-        let other_end_connected = Arc::new(AtomicBool::new(false));
-        let on_connect_frames = Arc::new(Mutex::new(Vec::new()));
+            let (reader_tx, reader_rx): (channel::SyncSender<RecvType<RT>>, Channel<RecvType<RT>>) =
+                channel::sync_channel(CHANNEL_SIZE);
+            let (writer_tx, writer_rx): (Sender<SendType<ST>>, Receiver<SendType<ST>>) =
+                crossbeam_channel::unbounded();
+            let other_end_connected = Arc::new(AtomicBool::new(false));
+            let on_connect_frames = Arc::new(Mutex::new(Vec::new()));
 
-        {
-            let other_end_connected = other_end_connected.clone();
-            let on_connect_frames = on_connect_frames.clone();
-            thread::spawn(move || {
-                accept_loop_unix(
-                    listener,
-                    reader_tx,
-                    writer_rx,
-                    other_end_connected,
-                    on_connect_frames,
-                )
-            });
-        }
+            {
+                let other_end_connected = other_end_connected.clone();
+                let on_connect_frames = on_connect_frames.clone();
+                thread::spawn(move || {
+                    accept_loop_unix(
+                        listener,
+                        reader_tx,
+                        writer_rx,
+                        other_end_connected,
+                        on_connect_frames,
+                    )
+                });
+            }
 
-        let writer_tx = DiscardingSender {
-            sender: writer_tx,
-            actually_send: other_end_connected.clone(),
-        };
+            let writer_tx = DiscardingSender {
+                sender: writer_tx,
+                actually_send: other_end_connected.clone(),
+            };
 
-        Ok(Self {
-            read_handle: Some(reader_rx),
-            write_handle: writer_tx,
-            other_end_connected,
-            on_connect_frames,
-            transport_guard: None,
-        })
+            Ok(Self {
+                read_handle: Some(reader_rx),
+                write_handle: writer_tx,
+                other_end_connected,
+                on_connect_frames,
+                transport_guard: None,
+            })
         }
     }
 
@@ -1499,65 +1524,65 @@ where
 
         #[cfg(unix)]
         {
-        let sock_path = sock_path.as_ref().to_path_buf();
+            let sock_path = sock_path.as_ref().to_path_buf();
 
-        let (reader_tx, reader_rx): (channel::SyncSender<RecvType<RT>>, Channel<RecvType<RT>>) =
-            channel::sync_channel(CHANNEL_SIZE);
-        let (writer_tx, writer_rx): (Sender<SendType<ST>>, Receiver<SendType<ST>>) =
-            crossbeam_channel::unbounded();
-        let other_end_connected = Arc::new(AtomicBool::new(false));
-        let on_connect_frames = Arc::new(Mutex::new(Vec::new()));
-        {
-            let mut frames = on_connect_frames.lock().unwrap();
-            for msg in options.on_connect {
-                frames.push(Self::encode_on_connect_frame(msg).location(loc!())?);
+            let (reader_tx, reader_rx): (channel::SyncSender<RecvType<RT>>, Channel<RecvType<RT>>) =
+                channel::sync_channel(CHANNEL_SIZE);
+            let (writer_tx, writer_rx): (Sender<SendType<ST>>, Receiver<SendType<ST>>) =
+                crossbeam_channel::unbounded();
+            let other_end_connected = Arc::new(AtomicBool::new(false));
+            let on_connect_frames = Arc::new(Mutex::new(Vec::new()));
+            {
+                let mut frames = on_connect_frames.lock().unwrap();
+                for msg in options.on_connect {
+                    frames.push(Self::encode_on_connect_frame(msg).location(loc!())?);
+                }
             }
-        }
 
-        {
-            let other_end_connected = other_end_connected.clone();
-            let on_connect_frames = on_connect_frames.clone();
+            {
+                let other_end_connected = other_end_connected.clone();
+                let on_connect_frames = on_connect_frames.clone();
 
-            if options.auto_reconnect {
-                thread::spawn(move || {
-                    client_connect_loop_unix(
-                        sock_path,
-                        reader_tx,
-                        writer_rx,
-                        other_end_connected,
-                        on_connect_frames,
-                    )
-                });
-            } else {
-                let stream = UnixStream::connect(&sock_path).location(loc!())?;
-                enlarge_socket_buffer(&stream);
-                other_end_connected.store(true, Ordering::Release);
-                thread::spawn(move || {
-                    accept_loop_inner(
-                        stream,
-                        reader_tx,
-                        writer_rx,
-                        other_end_connected,
-                        on_connect_frames,
-                    );
-                    eprintln!("server disconnected");
-                    std::process::exit(1);
-                });
+                if options.auto_reconnect {
+                    thread::spawn(move || {
+                        client_connect_loop_unix(
+                            sock_path,
+                            reader_tx,
+                            writer_rx,
+                            other_end_connected,
+                            on_connect_frames,
+                        )
+                    });
+                } else {
+                    let stream = UnixStream::connect(&sock_path).location(loc!())?;
+                    enlarge_socket_buffer(&stream);
+                    other_end_connected.store(true, Ordering::Release);
+                    thread::spawn(move || {
+                        accept_loop_inner(
+                            stream,
+                            reader_tx,
+                            writer_rx,
+                            other_end_connected,
+                            on_connect_frames,
+                        );
+                        eprintln!("server disconnected");
+                        std::process::exit(1);
+                    });
+                }
             }
-        }
 
-        let writer_tx = DiscardingSender {
-            sender: writer_tx,
-            actually_send: other_end_connected.clone(),
-        };
+            let writer_tx = DiscardingSender {
+                sender: writer_tx,
+                actually_send: other_end_connected.clone(),
+            };
 
-        Ok(Self {
-            read_handle: Some(reader_rx),
-            write_handle: writer_tx,
-            other_end_connected,
-            on_connect_frames,
-            transport_guard: None,
-        })
+            Ok(Self {
+                read_handle: Some(reader_rx),
+                write_handle: writer_tx,
+                other_end_connected,
+                on_connect_frames,
+                transport_guard: None,
+            })
         }
     }
 

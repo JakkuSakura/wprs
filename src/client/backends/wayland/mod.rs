@@ -6,14 +6,13 @@ use crate::protocols::wprs::ObjectId;
 
 pub(crate) type ObjectBimap = BiMap<(ClientId, ObjectId), SctkObjectId>;
 
-mod sctk;
 pub mod backend;
+mod sctk;
 
 pub mod server_handlers;
 pub mod smithay_handlers;
 mod subsurface;
 mod xdg_shell;
 
-
-pub use sctk::*;
 pub use backend::WaylandClientBackend;
+pub use sctk::*;

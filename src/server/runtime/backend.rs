@@ -2,11 +2,11 @@ use std::sync::Arc;
 
 use crate::prelude::*;
 use crate::protocols::wprs::Capabilities;
+use crate::protocols::wprs::ClientId;
+use crate::protocols::wprs::DisplayConfig;
 use crate::protocols::wprs::Event;
 use crate::protocols::wprs::Request;
 use crate::protocols::wprs::Serializer;
-use crate::protocols::wprs::DisplayConfig;
-use crate::protocols::wprs::ClientId;
 use crate::protocols::wprs::wayland::SurfaceState;
 use crate::protocols::wprs::wayland::WlSurfaceId;
 

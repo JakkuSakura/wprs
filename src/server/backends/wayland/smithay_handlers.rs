@@ -99,12 +99,13 @@ use smithay::wayland::shm::ShmState;
 use smithay::wayland::viewporter::ViewportCachedState;
 use smithay::xwayland::XWaylandClientData;
 
-use crate::utils::channel::DiscardingSender;
-use crate::utils::compositor as compositor_utils;
+use super::LockedSurfaceState;
+use super::WprsServerState;
 use crate::prelude::*;
 use crate::protocols::wprs::ClientId;
 use crate::protocols::wprs::Request;
 use crate::protocols::wprs::SendType;
+use crate::protocols::wprs::core;
 use crate::protocols::wprs::tuple::Tuple2;
 use crate::protocols::wprs::wayland::BufferAssignment;
 use crate::protocols::wprs::wayland::ClientSurface;
@@ -118,7 +119,6 @@ use crate::protocols::wprs::wayland::Role;
 use crate::protocols::wprs::wayland::SourceMetadata;
 use crate::protocols::wprs::wayland::SubSurfaceState;
 use crate::protocols::wprs::wayland::SubsurfacePosition;
-use crate::protocols::wprs::core;
 use crate::protocols::wprs::wayland::SurfaceState;
 use crate::protocols::wprs::wayland::Transform;
 use crate::protocols::wprs::wayland::WlSurfaceId;
@@ -133,8 +133,8 @@ use crate::protocols::wprs::xdg_shell::XdgPopupState;
 use crate::protocols::wprs::xdg_shell::XdgPositioner;
 use crate::protocols::wprs::xdg_shell::XdgSurfaceState;
 use crate::protocols::wprs::xdg_shell::XdgToplevelState;
-use super::LockedSurfaceState;
-use super::WprsServerState;
+use crate::utils::channel::DiscardingSender;
+use crate::utils::compositor as compositor_utils;
 
 impl BufferHandler for WprsServerState {
     #[instrument(skip(self), level = "debug")]

@@ -1,9 +1,9 @@
-use crate::server::runtime::backend::BackendObservation;
-use crate::server::runtime::backend::PollingBackend;
-use crate::server::runtime::backend::SurfaceSnapshot;
 use crate::prelude::*;
 use crate::protocols::wprs::Capabilities;
 use crate::protocols::wprs::Event;
+use crate::server::runtime::backend::BackendObservation;
+use crate::server::runtime::backend::PollingBackend;
+use crate::server::runtime::backend::SurfaceSnapshot;
 
 #[derive(Debug, Default)]
 pub struct WindowsFullscreenBackend;

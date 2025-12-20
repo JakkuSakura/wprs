@@ -55,15 +55,15 @@ use smithay::input::keyboard::ModifiersState;
 use smithay::input::keyboard::XkbContext;
 use smithay::input::pointer::AxisFrame;
 use smithay::input::pointer::ButtonEvent;
+use smithay::input::pointer::Focus;
+use smithay::input::pointer::GestureHoldBeginEvent;
+use smithay::input::pointer::GestureHoldEndEvent;
 use smithay::input::pointer::GesturePinchBeginEvent;
 use smithay::input::pointer::GesturePinchEndEvent;
 use smithay::input::pointer::GesturePinchUpdateEvent;
 use smithay::input::pointer::GestureSwipeBeginEvent;
 use smithay::input::pointer::GestureSwipeEndEvent;
 use smithay::input::pointer::GestureSwipeUpdateEvent;
-use smithay::input::pointer::GestureHoldBeginEvent;
-use smithay::input::pointer::GestureHoldEndEvent;
-use smithay::input::pointer::Focus;
 use smithay::input::pointer::MotionEvent;
 use smithay::output::Output;
 use smithay::output::PhysicalProperties;
@@ -79,14 +79,17 @@ use smithay::wayland::selection::data_device::SourceMetadata;
 use smithay::wayland::selection::primary_selection;
 use smithay::xwayland::xwm::X11SurfaceError;
 
+use super::LockedSurfaceState;
+use super::WprsServerState;
+use super::smithay_handlers::DndGrab;
 use crate::config;
-use crate::utils::compositor as compositor_utils;
 use crate::prelude::*;
+use crate::protocols::wprs::DisplayConfig;
 use crate::protocols::wprs::Event;
 use crate::protocols::wprs::RecvType;
 use crate::protocols::wprs::Request;
 use crate::protocols::wprs::SendType;
-use crate::protocols::wprs::DisplayConfig;
+use crate::protocols::wprs::core;
 use crate::protocols::wprs::wayland::DataDestinationEvent;
 use crate::protocols::wprs::wayland::DataEvent;
 use crate::protocols::wprs::wayland::DataRequest;
@@ -108,10 +111,7 @@ use crate::protocols::wprs::xdg_shell::PopupConfigure;
 use crate::protocols::wprs::xdg_shell::PopupEvent;
 use crate::protocols::wprs::xdg_shell::ToplevelConfigure;
 use crate::protocols::wprs::xdg_shell::ToplevelEvent;
-use super::LockedSurfaceState;
-use super::WprsServerState;
-use super::smithay_handlers::DndGrab;
-use crate::protocols::wprs::core;
+use crate::utils::compositor as compositor_utils;
 
 fn configure_x11_surface_with_override_redirect_fallback(
     requested_configure: impl FnOnce() -> std::result::Result<(), X11SurfaceError>,
@@ -161,14 +161,46 @@ impl WprsServerState {
         let pointer = self.seat.get_pointer().location(loc!())?;
 
         let (surface_id, position) = match event {
-            PointerGestureEvent::SwipeBegin { surface_id, position, .. }
-            | PointerGestureEvent::SwipeUpdate { surface_id, position, .. }
-            | PointerGestureEvent::SwipeEnd { surface_id, position, .. }
-            | PointerGestureEvent::HoldBegin { surface_id, position, .. }
-            | PointerGestureEvent::HoldEnd { surface_id, position, .. }
-            | PointerGestureEvent::PinchBegin { surface_id, position, .. }
-            | PointerGestureEvent::PinchUpdate { surface_id, position, .. }
-            | PointerGestureEvent::PinchEnd { surface_id, position, .. } => (surface_id, position),
+            PointerGestureEvent::SwipeBegin {
+                surface_id,
+                position,
+                ..
+            }
+            | PointerGestureEvent::SwipeUpdate {
+                surface_id,
+                position,
+                ..
+            }
+            | PointerGestureEvent::SwipeEnd {
+                surface_id,
+                position,
+                ..
+            }
+            | PointerGestureEvent::HoldBegin {
+                surface_id,
+                position,
+                ..
+            }
+            | PointerGestureEvent::HoldEnd {
+                surface_id,
+                position,
+                ..
+            }
+            | PointerGestureEvent::PinchBegin {
+                surface_id,
+                position,
+                ..
+            }
+            | PointerGestureEvent::PinchUpdate {
+                surface_id,
+                position,
+                ..
+            }
+            | PointerGestureEvent::PinchEnd {
+                surface_id,
+                position,
+                ..
+            } => (surface_id, position),
         };
 
         let surface = match self.object_client_surface_from_id(&surface_id) {
@@ -176,13 +208,22 @@ impl WprsServerState {
             Err(err) => {
                 let msg = match err {
                     UnknownSurfaceErr::ObjectId(surface_id) => {
-                        anyhow!("Ignoring pointer gesture event for unknown object {:?}", surface_id)
+                        anyhow!(
+                            "Ignoring pointer gesture event for unknown object {:?}",
+                            surface_id
+                        )
                     },
                     UnknownSurfaceErr::Client(object_id) => {
-                        anyhow!("Ignoring pointer gesture event for unknown client {:?}", object_id)
+                        anyhow!(
+                            "Ignoring pointer gesture event for unknown client {:?}",
+                            object_id
+                        )
                     },
                     UnknownSurfaceErr::Surface(client) => {
-                        anyhow!("Ignoring pointer gesture event for unknown surface {:?}", client)
+                        anyhow!(
+                            "Ignoring pointer gesture event for unknown surface {:?}",
+                            client
+                        )
                     },
                 };
                 warn!("{msg:?}");
@@ -205,9 +246,7 @@ impl WprsServerState {
 
         match event {
             PointerGestureEvent::SwipeBegin {
-                serial,
-                fingers,
-                ..
+                serial, fingers, ..
             } => {
                 let serial = self.serial_map.insert(serial);
                 pointer.gesture_swipe_begin(
@@ -229,9 +268,7 @@ impl WprsServerState {
                 );
             },
             PointerGestureEvent::SwipeEnd {
-                serial,
-                cancelled,
-                ..
+                serial, cancelled, ..
             } => {
                 let serial = self.serial_map.insert(serial);
                 pointer.gesture_swipe_end(
@@ -245,9 +282,7 @@ impl WprsServerState {
             },
 
             PointerGestureEvent::HoldBegin {
-                serial,
-                fingers,
-                ..
+                serial, fingers, ..
             } => {
                 let serial = self.serial_map.insert(serial);
                 pointer.gesture_hold_begin(
@@ -260,9 +295,7 @@ impl WprsServerState {
                 );
             },
             PointerGestureEvent::HoldEnd {
-                serial,
-                cancelled,
-                ..
+                serial, cancelled, ..
             } => {
                 let serial = self.serial_map.insert(serial);
                 pointer.gesture_hold_end(
@@ -276,9 +309,7 @@ impl WprsServerState {
             },
 
             PointerGestureEvent::PinchBegin {
-                serial,
-                fingers,
-                ..
+                serial, fingers, ..
             } => {
                 let serial = self.serial_map.insert(serial);
                 pointer.gesture_pinch_begin(
@@ -307,9 +338,7 @@ impl WprsServerState {
                 );
             },
             PointerGestureEvent::PinchEnd {
-                serial,
-                cancelled,
-                ..
+                serial, cancelled, ..
             } => {
                 let serial = self.serial_map.insert(serial);
                 pointer.gesture_pinch_end(
@@ -882,7 +911,7 @@ impl WprsServerState {
             DisplayConfig::default(),
             surfaces,
         )
-            .location(loc!())?
+        .location(loc!())?
         {
             self.serializer.writer().send(msg);
         }

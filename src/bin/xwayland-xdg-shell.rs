@@ -110,7 +110,11 @@ mod linux {
         let xwayland_options = XwaylandOptions {
             env: vec![(
                 "WAYLAND_DEBUG",
-                if config.xwayland_wayland_debug { "1" } else { "0" },
+                if config.xwayland_wayland_debug {
+                    "1"
+                } else {
+                    "0"
+                },
             )],
             display: Some(config.display),
         };
@@ -151,8 +155,8 @@ mod linux {
                         Signal::SIGINT | Signal::SIGTERM => {
                             info!("received signal {sig:?}, exiting");
                             loop_signal.stop();
-                        }
-                        _ => {}
+                        },
+                        _ => {},
                     }
                 })
                 .location(loc!())?;

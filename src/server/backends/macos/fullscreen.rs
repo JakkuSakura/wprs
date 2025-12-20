@@ -2,15 +2,15 @@ use std::sync::Arc;
 
 use crate::prelude::*;
 use crate::protocols::wprs::Capabilities;
+use crate::protocols::wprs::ClientId;
 use crate::protocols::wprs::DisplayConfig;
 use crate::protocols::wprs::Event;
-use crate::protocols::wprs::ClientId;
 use crate::protocols::wprs::wayland;
+use crate::protocols::wprs::wayland::AxisSource;
 use crate::protocols::wprs::wayland::Buffer;
 use crate::protocols::wprs::wayland::BufferAssignment;
 use crate::protocols::wprs::wayland::BufferData;
 use crate::protocols::wprs::wayland::BufferMetadata;
-use crate::protocols::wprs::wayland::AxisSource;
 use crate::protocols::wprs::wayland::PointerEventKind;
 use crate::protocols::wprs::wayland::PointerGestureEvent;
 use crate::protocols::wprs::wayland::SurfaceState;
@@ -45,10 +45,7 @@ impl MacosFullscreenBackend {
             display_scale_factor_and_dpi().unwrap_or((1, None));
         let scale_factor = detected_scale_factor.max(1);
         let dpi = config.dpi.or(detected_dpi);
-        let display_config = DisplayConfig {
-            scale_factor,
-            dpi,
-        };
+        let display_config = DisplayConfig { scale_factor, dpi };
 
         // A single synthetic surface representing the main display.
         let toplevel = xdg_shell::XdgToplevelState {
@@ -126,15 +123,15 @@ impl PollingBackend for MacosFullscreenBackend {
                 for e in events {
                     self.handle_pointer_event(e).log_and_ignore(loc!());
                 }
-            }
+            },
             Event::PointerGesture(event) => {
                 self.handle_pointer_gesture(event).log_and_ignore(loc!());
-            }
+            },
             // Keyboard input injection is currently best-effort.
             // wprsc primarily emits Linux evdev raw codes, which don't map 1:1
             // to macOS CGKeyCode.
-            Event::KeyboardEvent(_) => {}
-            _ => {}
+            Event::KeyboardEvent(_) => {},
+            _ => {},
         }
         Ok(())
     }
@@ -147,22 +144,20 @@ impl MacosFullscreenBackend {
         self.last_pos = (x, y);
 
         match e.kind {
-            PointerEventKind::Enter { .. } | PointerEventKind::Leave { .. } => {
-                Ok(())
-            }
+            PointerEventKind::Enter { .. } | PointerEventKind::Leave { .. } => Ok(()),
             PointerEventKind::Motion => {
                 post_mouse_motion(self.pressed_buttons, x, y).location(loc!())
-            }
+            },
             PointerEventKind::Press { button, .. } => {
                 let mask = button_mask(button);
                 self.pressed_buttons |= mask;
                 post_mouse_button(true, button, x, y).location(loc!())
-            }
+            },
             PointerEventKind::Release { button, .. } => {
                 let mask = button_mask(button);
                 self.pressed_buttons &= !mask;
                 post_mouse_button(false, button, x, y).location(loc!())
-            }
+            },
             PointerEventKind::Axis {
                 horizontal,
                 vertical,
@@ -174,13 +169,10 @@ impl MacosFullscreenBackend {
                 };
 
                 match unit {
-                    ScrollUnit::Line => post_scroll(
-                        unit,
-                        horizontal.discrete,
-                        vertical.discrete,
-                        false,
-                    )
-                    .location(loc!()),
+                    ScrollUnit::Line => {
+                        post_scroll(unit, horizontal.discrete, vertical.discrete, false)
+                            .location(loc!())
+                    },
                     ScrollUnit::Pixel => post_scroll(
                         unit,
                         horizontal.absolute.round() as i32,
@@ -189,7 +181,7 @@ impl MacosFullscreenBackend {
                     )
                     .location(loc!()),
                 }
-            }
+            },
         }
     }
 
@@ -209,7 +201,7 @@ impl MacosFullscreenBackend {
                     post_scroll(ScrollUnit::Pixel, 0, delta, true).location(loc!())?;
                 }
                 Ok(())
-            }
+            },
             PointerGestureEvent::PinchEnd { .. } => Ok(()),
         }
     }
@@ -343,7 +335,10 @@ mod macos {
         unsafe {
             let display = CGMainDisplayID();
             let image = CGDisplayCreateImage(display);
-            ensure!(!image.is_null(), "CGDisplayCreateImage returned null (Screen Recording permission?)");
+            ensure!(
+                !image.is_null(),
+                "CGDisplayCreateImage returned null (Screen Recording permission?)"
+            );
 
             let width = CGImageGetWidth(image) as i32;
             let height = CGImageGetHeight(image) as i32;
@@ -362,9 +357,18 @@ mod macos {
 
             // Best-effort: most systems will produce a 32bpp image. If not,
             // bail with a clear message rather than silently corrupting.
-            ensure!(bpp == 32 && bpc == 8, "unsupported capture format: bpp={bpp}, bpc={bpc}");
-            ensure!(stride > 0 && width > 0 && height > 0, "invalid captured dimensions");
-            ensure!(len >= (height as usize) * (stride as usize), "captured buffer is smaller than expected");
+            ensure!(
+                bpp == 32 && bpc == 8,
+                "unsupported capture format: bpp={bpp}, bpc={bpc}"
+            );
+            ensure!(
+                stride > 0 && width > 0 && height > 0,
+                "invalid captured dimensions"
+            );
+            ensure!(
+                len >= (height as usize) * (stride as usize),
+                "captured buffer is smaller than expected"
+            );
 
             let bytes = std::slice::from_raw_parts(ptr, (height as usize) * (stride as usize));
             let out = bytes.to_vec();
@@ -419,15 +423,27 @@ mod macos {
 
             let (event_type, mouse_button) = match button {
                 272 => (
-                    if down { K_CG_EVENT_LEFT_MOUSE_DOWN } else { K_CG_EVENT_LEFT_MOUSE_UP },
+                    if down {
+                        K_CG_EVENT_LEFT_MOUSE_DOWN
+                    } else {
+                        K_CG_EVENT_LEFT_MOUSE_UP
+                    },
                     K_CG_MOUSE_BUTTON_LEFT,
                 ),
                 273 => (
-                    if down { K_CG_EVENT_RIGHT_MOUSE_DOWN } else { K_CG_EVENT_RIGHT_MOUSE_UP },
+                    if down {
+                        K_CG_EVENT_RIGHT_MOUSE_DOWN
+                    } else {
+                        K_CG_EVENT_RIGHT_MOUSE_UP
+                    },
                     K_CG_MOUSE_BUTTON_RIGHT,
                 ),
                 274 => (
-                    if down { K_CG_EVENT_OTHER_MOUSE_DOWN } else { K_CG_EVENT_OTHER_MOUSE_UP },
+                    if down {
+                        K_CG_EVENT_OTHER_MOUSE_DOWN
+                    } else {
+                        K_CG_EVENT_OTHER_MOUSE_UP
+                    },
                     K_CG_MOUSE_BUTTON_CENTER,
                 ),
                 _ => return Ok(()),
@@ -452,13 +468,7 @@ mod macos {
                 super::ScrollUnit::Line => K_CG_SCROLL_EVENT_UNIT_LINE,
                 super::ScrollUnit::Pixel => K_CG_SCROLL_EVENT_UNIT_PIXEL,
             };
-            let ev = CGEventCreateScrollWheelEvent(
-                ptr::null(),
-                units,
-                2,
-                vertical,
-                horizontal,
-            );
+            let ev = CGEventCreateScrollWheelEvent(ptr::null(), units, 2, vertical, horizontal);
             ensure!(!ev.is_null(), "CGEventCreateScrollWheelEvent returned null");
             if control {
                 CGEventSetFlags(ev, K_CG_EVENT_FLAG_MASK_CONTROL);
@@ -495,8 +505,14 @@ mod macos {
             // CGDisplayModeRef is a CFType.
             CFRelease(mode as CFTypeRef);
 
-            ensure!(width_points > 0.0 && height_points > 0.0, "invalid display mode size");
-            ensure!(width_pixels > 0.0 && height_pixels > 0.0, "invalid display mode pixel size");
+            ensure!(
+                width_points > 0.0 && height_points > 0.0,
+                "invalid display mode size"
+            );
+            ensure!(
+                width_pixels > 0.0 && height_pixels > 0.0,
+                "invalid display mode pixel size"
+            );
 
             let scale_w = width_pixels / width_points;
             let scale_h = height_pixels / height_points;
@@ -550,11 +566,6 @@ fn post_mouse_button(_down: bool, _button: u32, _x: f64, _y: f64) -> Result<()> 
 }
 
 #[cfg(not(target_os = "macos"))]
-fn post_scroll(
-    _unit: ScrollUnit,
-    _horizontal: i32,
-    _vertical: i32,
-    _control: bool,
-) -> Result<()> {
+fn post_scroll(_unit: ScrollUnit, _horizontal: i32, _vertical: i32, _control: bool) -> Result<()> {
     Ok(())
 }

@@ -120,13 +120,13 @@ use smithay_client_toolkit::shm::ShmHandler;
 use smithay_client_toolkit::subcompositor::SubcompositorState;
 use tracing::Span;
 
-use crate::config;
 use crate::buffer_pointer::BufferPointer;
-use crate::utils::client::SeatObject;
+use crate::config;
 use crate::prelude::*;
 use crate::protocols::wprs::geometry::Point;
 use crate::protocols::wprs::wayland::BufferMetadata;
 use crate::protocols::wprs::wayland::KeyState;
+use crate::utils::client::SeatObject;
 use crate::xwayland_xdg_shell::WprsState;
 use crate::xwayland_xdg_shell::XWaylandSurface;
 use crate::xwayland_xdg_shell::compositor::DecorationBehavior;
@@ -594,9 +594,9 @@ impl KeyboardHandler for WprsState {
                     Err(err) => {
                         warn!("failed to initialize compositor keyboard: {err:?}");
                         return;
-                    }
+                    },
                 }
-            }
+            },
         };
 
         // We simulate keycodes before focusing since that is what a normal wayland application would see.
@@ -686,9 +686,9 @@ impl KeyboardHandler for WprsState {
                     Err(err) => {
                         warn!("failed to initialize compositor keyboard: {err:?}");
                         return;
-                    }
+                    },
                 }
-            }
+            },
         };
 
         let serial = self.compositor_state.serial_map.insert(serial);
@@ -889,7 +889,7 @@ impl PointerHandler for WprsState {
                 // This can happen early during startup if we haven't created the compositor
                 // pointer capability yet.
                 self.compositor_state.seat.add_pointer()
-            }
+            },
         };
 
         for event in events {
@@ -909,8 +909,7 @@ impl PointerHandler for WprsState {
                     self.client_state.last_enter_serial = serial;
                     // TODO: allow this to be a popup?
                     if let Some(Role::XdgToplevel(toplevel)) = &xwayland_surface.role {
-                        let Some(parent_id) =
-                            self.surface_bimap.get_by_right(&event.surface.id())
+                        let Some(parent_id) = self.surface_bimap.get_by_right(&event.surface.id())
                         else {
                             warn!(
                                 "received pointer enter for unmapped surface_id={:?}",
@@ -1016,33 +1015,27 @@ impl PointerHandler for WprsState {
                     horizontal,
                     vertical,
                     source,
-                } => x11_surface.axis(
-                    &compositor_seat,
-                    self,
-                    {
-                        let frame = AxisFrame::new(time)
-                            .value(Axis::Horizontal, horizontal.absolute)
-                            .value(Axis::Vertical, vertical.absolute)
-                            .v120(Axis::Horizontal, horizontal.discrete * 120)
-                            .v120(Axis::Vertical, vertical.discrete * 120);
+                } => x11_surface.axis(&compositor_seat, self, {
+                    let frame = AxisFrame::new(time)
+                        .value(Axis::Horizontal, horizontal.absolute)
+                        .value(Axis::Vertical, vertical.absolute)
+                        .v120(Axis::Horizontal, horizontal.discrete * 120)
+                        .v120(Axis::Vertical, vertical.discrete * 120);
 
-                        match source {
-                            Some(WlPointerAxisSource::Wheel) => frame.source(AxisSource::Wheel),
-                            Some(WlPointerAxisSource::Finger) => frame.source(AxisSource::Finger),
-                            Some(WlPointerAxisSource::Continuous) => {
-                                frame.source(AxisSource::Continuous)
-                            }
-                            Some(WlPointerAxisSource::WheelTilt) => {
-                                frame.source(AxisSource::WheelTilt)
-                            }
-                            Some(other) => {
-                                warn!("got unknown AxisSource {other:?}; omitting axis source");
-                                frame
-                            }
-                            None => frame,
-                        }
-                    },
-                ),
+                    match source {
+                        Some(WlPointerAxisSource::Wheel) => frame.source(AxisSource::Wheel),
+                        Some(WlPointerAxisSource::Finger) => frame.source(AxisSource::Finger),
+                        Some(WlPointerAxisSource::Continuous) => {
+                            frame.source(AxisSource::Continuous)
+                        },
+                        Some(WlPointerAxisSource::WheelTilt) => frame.source(AxisSource::WheelTilt),
+                        Some(other) => {
+                            warn!("got unknown AxisSource {other:?}; omitting axis source");
+                            frame
+                        },
+                        None => frame,
+                    }
+                }),
             }
         }
         compositor_pointer.frame(self);
@@ -1121,8 +1114,7 @@ impl XWaylandSurface {
         data: BufferPointer<u8>,
         pool: &mut SlotPool,
     ) -> Result<()> {
-        let metadata =
-            BufferMetadata::from_buffer_data(metadata).location(loc!())?;
+        let metadata = BufferMetadata::from_buffer_data(metadata).location(loc!())?;
         let buffer = match &mut self.buffer {
             // Surface was previously committed.
             Some(buffer) => {

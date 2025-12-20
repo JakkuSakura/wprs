@@ -103,7 +103,10 @@ impl MacosWindowBackend {
         };
 
         let local_x = e.position.x.clamp(0.0, tracked.bounds.width.max(1.0) - 1.0);
-        let local_y = e.position.y.clamp(0.0, tracked.bounds.height.max(1.0) - 1.0);
+        let local_y = e
+            .position
+            .y
+            .clamp(0.0, tracked.bounds.height.max(1.0) - 1.0);
 
         let x = (tracked.bounds.x + local_x).round();
         // Convert from (0,0)=top-left surface-local to Quartz global coords (0,0)=bottom-left.
@@ -113,17 +116,17 @@ impl MacosWindowBackend {
             PointerEventKind::Enter { .. } | PointerEventKind::Leave { .. } => Ok(()),
             PointerEventKind::Motion => {
                 post_mouse_motion(self.pressed_buttons, x, y).location(loc!())
-            }
+            },
             PointerEventKind::Press { button, .. } => {
                 let mask = button_mask(button);
                 self.pressed_buttons |= mask;
                 post_mouse_button(true, button, x, y).location(loc!())
-            }
+            },
             PointerEventKind::Release { button, .. } => {
                 let mask = button_mask(button);
                 self.pressed_buttons &= !mask;
                 post_mouse_button(false, button, x, y).location(loc!())
-            }
+            },
             PointerEventKind::Axis { .. } => Ok(()),
         }
     }
@@ -145,20 +148,11 @@ impl PollingBackend for MacosWindowBackend {
         for w in windows {
             // Capture once to get the initial window size.
             let (metadata, _bgra) = capture_window_bgra(w.window_id).location(loc!())?;
-            self.windows.insert(
-                w.window_id,
-                TrackedWindow {
-                    bounds: w.bounds,
-                },
-            );
+            self.windows
+                .insert(w.window_id, TrackedWindow { bounds: w.bounds });
 
             out.push(SurfaceSnapshot {
-                state: self.surface_state_for_window(
-                    w.window_id,
-                    &w.title,
-                    &w.app_id,
-                    metadata,
-                ),
+                state: self.surface_state_for_window(w.window_id, &w.title, &w.app_id, metadata),
             });
         }
 
@@ -192,14 +186,9 @@ impl PollingBackend for MacosWindowBackend {
         // Emit commits for currently-visible windows.
         for w in windows {
             let (metadata, bgra) = capture_window_bgra(w.window_id).location(loc!())?;
-            self.windows.insert(
-                w.window_id,
-                TrackedWindow {
-                    bounds: w.bounds,
-                },
-            );
-            let state =
-                self.surface_state_for_window(w.window_id, &w.title, &w.app_id, metadata);
+            self.windows
+                .insert(w.window_id, TrackedWindow { bounds: w.bounds });
+            let state = self.surface_state_for_window(w.window_id, &w.title, &w.app_id, metadata);
 
             out.push(BackendObservation::SurfaceCommit {
                 state,
@@ -216,8 +205,8 @@ impl PollingBackend for MacosWindowBackend {
                 for e in events {
                     self.handle_pointer_event(e).log_and_ignore(loc!());
                 }
-            }
-            _ => {}
+            },
+            _ => {},
         }
         Ok(())
     }
@@ -359,8 +348,16 @@ mod macos {
         fn CGDisplayScreenSize(display_id: u32) -> CGSize;
 
         fn CGWindowListCopyWindowInfo(option: u32, relative_to_window: CGWindowID) -> CFArrayRef;
-        fn CGWindowListCreateImage(rect: CGRect, option: u32, window_id: CGWindowID, image_option: u32) -> CGImageRef;
-        fn CGRectMakeWithDictionaryRepresentation(dict: CFDictionaryRef, rect: *mut CGRect) -> Boolean;
+        fn CGWindowListCreateImage(
+            rect: CGRect,
+            option: u32,
+            window_id: CGWindowID,
+            image_option: u32,
+        ) -> CGImageRef;
+        fn CGRectMakeWithDictionaryRepresentation(
+            dict: CFDictionaryRef,
+            rect: *mut CGRect,
+        ) -> Boolean;
 
         fn CGImageGetWidth(image: CGImageRef) -> usize;
         fn CGImageGetHeight(image: CGImageRef) -> usize;
@@ -388,7 +385,12 @@ mod macos {
         fn CFStringGetCStringPtr(the_string: CFStringRef, encoding: u32) -> *const u8;
         fn CFStringGetLength(the_string: CFStringRef) -> CFIndex;
         fn CFStringGetMaximumSizeForEncoding(length: CFIndex, encoding: u32) -> CFIndex;
-        fn CFStringGetCString(the_string: CFStringRef, buffer: *mut u8, buffer_size: CFIndex, encoding: u32) -> Boolean;
+        fn CFStringGetCString(
+            the_string: CFStringRef,
+            buffer: *mut u8,
+            buffer_size: CFIndex,
+            encoding: u32,
+        ) -> Boolean;
         fn CFNumberGetValue(number: CFNumberRef, the_type: i32, value_ptr: *mut c_void) -> Boolean;
         fn CFDataGetLength(the_data: CFDataRef) -> CFIndex;
         fn CFDataGetBytePtr(the_data: CFDataRef) -> *const u8;
@@ -432,7 +434,8 @@ mod macos {
 
     pub(super) fn list_windows() -> Result<Vec<WindowInfo>> {
         unsafe {
-            let options = K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY | K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS;
+            let options =
+                K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY | K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS;
             let array = CGWindowListCopyWindowInfo(options, 0);
             ensure!(!array.is_null(), "CGWindowListCopyWindowInfo returned null");
 
@@ -455,7 +458,8 @@ mod macos {
                     continue;
                 }
 
-                let owner = cf_dict_string(dict, kCGWindowOwnerName).unwrap_or_else(|| "macos".to_string());
+                let owner =
+                    cf_dict_string(dict, kCGWindowOwnerName).unwrap_or_else(|| "macos".to_string());
                 let name = cf_dict_string(dict, kCGWindowName).unwrap_or_else(|| "".to_string());
                 let title = if name.is_empty() { owner.clone() } else { name };
 
@@ -466,9 +470,15 @@ mod macos {
 
                 let mut rect = CGRect {
                     origin: CGPoint { x: 0.0, y: 0.0 },
-                    size: CGSize { width: 0.0, height: 0.0 },
+                    size: CGSize {
+                        width: 0.0,
+                        height: 0.0,
+                    },
                 };
-                let ok = CGRectMakeWithDictionaryRepresentation(bounds_dict as CFDictionaryRef, &mut rect as *mut CGRect);
+                let ok = CGRectMakeWithDictionaryRepresentation(
+                    bounds_dict as CFDictionaryRef,
+                    &mut rect as *mut CGRect,
+                );
                 if ok == 0 {
                     continue;
                 }
@@ -522,7 +532,10 @@ mod macos {
                 window_id,
                 K_CG_WINDOW_IMAGE_BOUNDS_IGNORE_FRAMING | K_CG_WINDOW_IMAGE_BEST_RESOLUTION,
             );
-            ensure!(!img.is_null(), "CGWindowListCreateImage returned null (Screen Recording permission?)");
+            ensure!(
+                !img.is_null(),
+                "CGWindowListCreateImage returned null (Screen Recording permission?)"
+            );
 
             let width = CGImageGetWidth(img) as i32;
             let height = CGImageGetHeight(img) as i32;
@@ -530,8 +543,14 @@ mod macos {
             let bpp = CGImageGetBitsPerPixel(img);
             let bpc = CGImageGetBitsPerComponent(img);
 
-            ensure!(bpp == 32 && bpc == 8, "unsupported capture format: bpp={bpp}, bpc={bpc}");
-            ensure!(stride > 0 && width > 0 && height > 0, "invalid captured dimensions");
+            ensure!(
+                bpp == 32 && bpc == 8,
+                "unsupported capture format: bpp={bpp}, bpc={bpc}"
+            );
+            ensure!(
+                stride > 0 && width > 0 && height > 0,
+                "invalid captured dimensions"
+            );
 
             let provider = CGImageGetDataProvider(img);
             ensure!(!provider.is_null(), "CGImageGetDataProvider returned null");
@@ -540,7 +559,10 @@ mod macos {
             let len = CFDataGetLength(cf_data) as usize;
             let ptr = CFDataGetBytePtr(cf_data);
             ensure!(!ptr.is_null(), "CFDataGetBytePtr returned null");
-            ensure!(len >= (height as usize) * (stride as usize), "captured buffer is smaller than expected");
+            ensure!(
+                len >= (height as usize) * (stride as usize),
+                "captured buffer is smaller than expected"
+            );
 
             let bytes = std::slice::from_raw_parts(ptr, (height as usize) * (stride as usize));
             let out = bytes.to_vec();
@@ -588,15 +610,27 @@ mod macos {
 
             let (event_type, mouse_button) = match button {
                 272 => (
-                    if down { K_CG_EVENT_LEFT_MOUSE_DOWN } else { K_CG_EVENT_LEFT_MOUSE_UP },
+                    if down {
+                        K_CG_EVENT_LEFT_MOUSE_DOWN
+                    } else {
+                        K_CG_EVENT_LEFT_MOUSE_UP
+                    },
                     K_CG_MOUSE_BUTTON_LEFT,
                 ),
                 273 => (
-                    if down { K_CG_EVENT_RIGHT_MOUSE_DOWN } else { K_CG_EVENT_RIGHT_MOUSE_UP },
+                    if down {
+                        K_CG_EVENT_RIGHT_MOUSE_DOWN
+                    } else {
+                        K_CG_EVENT_RIGHT_MOUSE_UP
+                    },
                     K_CG_MOUSE_BUTTON_RIGHT,
                 ),
                 274 => (
-                    if down { K_CG_EVENT_OTHER_MOUSE_DOWN } else { K_CG_EVENT_OTHER_MOUSE_UP },
+                    if down {
+                        K_CG_EVENT_OTHER_MOUSE_DOWN
+                    } else {
+                        K_CG_EVENT_OTHER_MOUSE_UP
+                    },
                     K_CG_MOUSE_BUTTON_CENTER,
                 ),
                 _ => return Ok(()),
@@ -623,8 +657,14 @@ mod macos {
 
             CFRelease(mode as CFTypeRef);
 
-            ensure!(width_points > 0.0 && height_points > 0.0, "invalid display mode size");
-            ensure!(width_pixels > 0.0 && height_pixels > 0.0, "invalid display mode pixel size");
+            ensure!(
+                width_points > 0.0 && height_points > 0.0,
+                "invalid display mode size"
+            );
+            ensure!(
+                width_pixels > 0.0 && height_pixels > 0.0,
+                "invalid display mode pixel size"
+            );
 
             let scale_w = width_pixels / width_points;
             let scale_h = height_pixels / height_points;
@@ -654,7 +694,8 @@ mod macos {
         let v = unsafe { CFDictionaryGetValue(dict, key) };
         ensure!(!v.is_null(), "missing required key");
         let mut out: i64 = 0;
-        let ok = unsafe { CFNumberGetValue(v as CFNumberRef, 4, &mut out as *mut i64 as *mut c_void) };
+        let ok =
+            unsafe { CFNumberGetValue(v as CFNumberRef, 4, &mut out as *mut i64 as *mut c_void) };
         ensure!(ok != 0, "CFNumberGetValue failed");
         Ok(out as u32)
     }

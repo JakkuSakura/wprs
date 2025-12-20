@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fs;
 use std::env;
+use std::fs;
 use std::process::Child;
 use std::process::Command;
 use std::time::Duration;
@@ -21,16 +21,16 @@ use std::time::Duration;
 use clap::Parser;
 use wprs::config;
 use wprs::prelude::*;
-use wprs::protocols::wprs::Event as ProtoEvent;
 #[cfg(feature = "rdp")]
 use wprs::protocols::wprs::Endpoint;
+use wprs::protocols::wprs::Event as ProtoEvent;
 use wprs::protocols::wprs::Request as ProtoRequest;
 use wprs::protocols::wprs::Serializer;
 use wprs::server::backends;
+use wprs::server::config::IntegrationMode;
 use wprs::server::config::WprsdArgs;
 use wprs::server::config::WprsdBackend;
 use wprs::server::config::WprsdConfig;
-use wprs::server::config::IntegrationMode;
 use wprs::server::runtime::backend::ServerBackend;
 use wprs::server::runtime::backend::TickMode;
 use wprs::utils;
@@ -122,9 +122,11 @@ fn maybe_start_rdp_bridge(config: &WprsdConfig) -> Result<Option<ChildGuard>> {
 
     match config.rdp_mode {
         IntegrationMode::External => {
-            info!("enable_rdp=true but rdp_mode=external; expecting external RDP bridge management");
+            info!(
+                "enable_rdp=true but rdp_mode=external; expecting external RDP bridge management"
+            );
             Ok(None)
-        }
+        },
         IntegrationMode::Embedded => {
             #[cfg(feature = "rdp")]
             {
@@ -151,7 +153,7 @@ fn maybe_start_rdp_bridge(config: &WprsdConfig) -> Result<Option<ChildGuard>> {
             {
                 bail!("rdp_mode=embedded requires building wprsd with `--features rdp`")
             }
-        }
+        },
         IntegrationMode::Spawned => {
             let wprs_endpoint = match &config.endpoint {
                 Some(endpoint) => endpoint.to_string(),
@@ -171,22 +173,29 @@ fn maybe_start_rdp_bridge(config: &WprsdConfig) -> Result<Option<ChildGuard>> {
             let child = cmd.spawn().location(loc!())?;
             info!("RDP bridge spawned pid={pid}", pid = child.id());
             Ok(Some(ChildGuard(child)))
-        }
+        },
     }
 }
 
 fn build_backend(backend: &WprsdBackend, config: &WprsdConfig) -> Result<Box<dyn ServerBackend>> {
     match backend {
         WprsdBackend::X11Fullscreen => Ok(Box::new(
-            backends::x11::X11FullscreenBackend::connect(config.x11_title.clone()).location(loc!())?,
+            backends::x11::X11FullscreenBackend::connect(config.x11_title.clone())
+                .location(loc!())?,
         )),
-        WprsdBackend::WindowsFullscreen => Ok(Box::new(backends::windows::WindowsFullscreenBackend::new())),
-        WprsdBackend::MacosFullscreen => Ok(Box::new(backends::macos::MacosFullscreenBackend::new(
-            backends::macos::MacosFullscreenBackendConfig {
-                dpi: config.display_dpi,
-            },
-        ))),
-        WprsdBackend::WindowsSeamless => Ok(Box::new(backends::windows::WindowsWindowBackend::new())),
+        WprsdBackend::WindowsFullscreen => {
+            Ok(Box::new(backends::windows::WindowsFullscreenBackend::new()))
+        },
+        WprsdBackend::MacosFullscreen => {
+            Ok(Box::new(backends::macos::MacosFullscreenBackend::new(
+                backends::macos::MacosFullscreenBackendConfig {
+                    dpi: config.display_dpi,
+                },
+            )))
+        },
+        WprsdBackend::WindowsSeamless => {
+            Ok(Box::new(backends::windows::WindowsWindowBackend::new()))
+        },
         WprsdBackend::MacosSeamless => Ok(Box::new(backends::macos::MacosWindowBackend::new(
             backends::macos::MacosWindowBackendConfig {
                 dpi: config.display_dpi,
@@ -204,7 +213,8 @@ fn build_backend(backend: &WprsdBackend, config: &WprsdConfig) -> Result<Box<dyn
                             xwayland_mode: config.xwayland_mode,
                             xwayland_display: config.xwayland_display,
                             xwayland_xdg_shell_path: config.xwayland_xdg_shell_path.clone(),
-                            xwayland_xdg_shell_wayland_debug: config.xwayland_xdg_shell_wayland_debug,
+                            xwayland_xdg_shell_wayland_debug: config
+                                .xwayland_xdg_shell_wayland_debug,
                             xwayland_xdg_shell_args: config.xwayland_xdg_shell_args.clone(),
                             kde_server_side_decorations: config.kde_server_side_decorations,
                         },
@@ -216,6 +226,6 @@ fn build_backend(backend: &WprsdBackend, config: &WprsdConfig) -> Result<Box<dyn
                 let _ = config;
                 bail!("wayland backend requires building wprsd with `--features wayland`")
             }
-        }
+        },
     }
 }

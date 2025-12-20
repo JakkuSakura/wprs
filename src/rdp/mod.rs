@@ -33,9 +33,9 @@ use crate::protocols::wprs::wayland::AxisScroll;
 use crate::protocols::wprs::wayland::AxisSource;
 use crate::protocols::wprs::wayland::BufferAssignment;
 use crate::protocols::wprs::wayland::BufferData;
-use crate::protocols::wprs::wayland::KeyboardEvent;
 use crate::protocols::wprs::wayland::KeyInner;
 use crate::protocols::wprs::wayland::KeyState;
+use crate::protocols::wprs::wayland::KeyboardEvent;
 use crate::protocols::wprs::wayland::PointerEvent;
 use crate::protocols::wprs::wayland::PointerEventKind;
 use crate::protocols::wprs::wayland::UncompressedBufferData;
@@ -79,7 +79,8 @@ impl RdpServerDisplay for DisplayHandler {
 }
 
 struct InputHandler {
-    writer: crate::utils::channel::DiscardingSender<crossbeam_channel::Sender<SendType<ProtoEvent>>>,
+    writer:
+        crate::utils::channel::DiscardingSender<crossbeam_channel::Sender<SendType<ProtoEvent>>>,
     selected_surface: Arc<Mutex<Option<WlSurfaceId>>>,
     serial: Arc<AtomicU32>,
     pointer_entered: Arc<Mutex<bool>>,
@@ -148,17 +149,17 @@ impl RdpServerInputHandler for InputHandler {
                 if let Some(keycode) = linux_keycode_from_rdp_scancode(code, extended) {
                     self.send_key(keycode, KeyState::Pressed);
                 }
-            }
+            },
             RdpKeyboardEvent::Released { code, extended } => {
                 if let Some(keycode) = linux_keycode_from_rdp_scancode(code, extended) {
                     self.send_key(keycode, KeyState::Released);
                 }
-            }
+            },
             RdpKeyboardEvent::UnicodePressed(_)
             | RdpKeyboardEvent::UnicodeReleased(_)
             | RdpKeyboardEvent::Synchronize(_) => {
                 // TODO: map unicode input and lock state events.
-            }
+            },
         }
     }
 
@@ -167,7 +168,7 @@ impl RdpServerInputHandler for InputHandler {
             RdpMouseEvent::Move { x, y } => {
                 *self.last_pointer_pos.lock().unwrap() = (x, y);
                 self.send_pointer(PointerEventKind::Motion, x, y);
-            }
+            },
             RdpMouseEvent::LeftPressed => {
                 let (x, y) = self.pointer_pos();
                 self.send_pointer(
@@ -178,7 +179,7 @@ impl RdpServerInputHandler for InputHandler {
                     x,
                     y,
                 );
-            }
+            },
             RdpMouseEvent::LeftReleased => {
                 let (x, y) = self.pointer_pos();
                 self.send_pointer(
@@ -189,7 +190,7 @@ impl RdpServerInputHandler for InputHandler {
                     x,
                     y,
                 );
-            }
+            },
             RdpMouseEvent::RightPressed => {
                 let (x, y) = self.pointer_pos();
                 self.send_pointer(
@@ -200,7 +201,7 @@ impl RdpServerInputHandler for InputHandler {
                     x,
                     y,
                 );
-            }
+            },
             RdpMouseEvent::RightReleased => {
                 let (x, y) = self.pointer_pos();
                 self.send_pointer(
@@ -211,7 +212,7 @@ impl RdpServerInputHandler for InputHandler {
                     x,
                     y,
                 );
-            }
+            },
             RdpMouseEvent::MiddlePressed => {
                 let (x, y) = self.pointer_pos();
                 self.send_pointer(
@@ -222,7 +223,7 @@ impl RdpServerInputHandler for InputHandler {
                     x,
                     y,
                 );
-            }
+            },
             RdpMouseEvent::MiddleReleased => {
                 let (x, y) = self.pointer_pos();
                 self.send_pointer(
@@ -233,9 +234,9 @@ impl RdpServerInputHandler for InputHandler {
                     x,
                     y,
                 );
-            }
-            RdpMouseEvent::Button4Pressed | RdpMouseEvent::Button4Released => {}
-            RdpMouseEvent::Button5Pressed | RdpMouseEvent::Button5Released => {}
+            },
+            RdpMouseEvent::Button4Pressed | RdpMouseEvent::Button4Released => {},
+            RdpMouseEvent::Button5Pressed | RdpMouseEvent::Button5Released => {},
             RdpMouseEvent::VerticalScroll { value } => {
                 let Some(surface_id) = self.surface_id() else {
                     return;
@@ -262,8 +263,8 @@ impl RdpServerInputHandler for InputHandler {
                 let _ = self
                     .writer
                     .send(SendType::Object(ProtoEvent::PointerFrame(events)));
-            }
-            RdpMouseEvent::Scroll { .. } | RdpMouseEvent::RelMove { .. } => {}
+            },
+            RdpMouseEvent::Scroll { .. } | RdpMouseEvent::RelMove { .. } => {},
         }
     }
 }
@@ -315,7 +316,11 @@ fn push_bitmap_update(
     tx.send(DisplayUpdate::Bitmap(update)).ok();
 }
 
-pub fn run_bridge(wprs_endpoint: Endpoint, rdp_listen: SocketAddr, security: Security) -> Result<()> {
+pub fn run_bridge(
+    wprs_endpoint: Endpoint,
+    rdp_listen: SocketAddr,
+    security: Security,
+) -> Result<()> {
     let mut serializer: Serializer<ProtoEvent, ProtoRequest> =
         Serializer::new_client_endpoint_with_options(
             wprs_endpoint,
@@ -343,8 +348,7 @@ pub fn run_bridge(wprs_endpoint: Endpoint, rdp_listen: SocketAddr, security: Sec
         let display_tx = display_tx.clone();
 
         std::thread::spawn(move || {
-            let mut event_loop =
-                calloop::EventLoop::try_new().expect("calloop init failed");
+            let mut event_loop = calloop::EventLoop::try_new().expect("calloop init failed");
 
             let mut buffer_cache: Option<UncompressedBufferData> = None;
             let mut desktop_size = DesktopSize {
@@ -484,7 +488,7 @@ pub fn run_bridge(wprs_endpoint: Endpoint, rdp_listen: SocketAddr, security: Sec
                 .with_input_handler(input_handler)
                 .with_display_handler(display_handler)
                 .build()
-        }
+        },
     };
 
     let rt = tokio::runtime::Builder::new_current_thread()
@@ -497,4 +501,3 @@ pub fn run_bridge(wprs_endpoint: Endpoint, rdp_listen: SocketAddr, security: Sec
 
     Ok(())
 }
-

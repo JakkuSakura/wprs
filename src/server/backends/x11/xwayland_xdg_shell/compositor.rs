@@ -76,12 +76,12 @@ use smithay_client_toolkit::reexports::protocols::xdg::shell::client::xdg_surfac
 use smithay_client_toolkit::shell::WaylandSurface;
 use smithay_client_toolkit::shell::xdg::XdgSurface;
 
-use crate::utils::compositor as compositor_utils;
 use crate::fallible_entry::FallibleEntryExt;
 use crate::prelude::*;
 use crate::protocols::wprs::geometry::Point;
 use crate::protocols::wprs::wayland::OutputInfo;
 use crate::utils::SerialMap;
+use crate::utils::compositor as compositor_utils;
 use crate::xwayland_xdg_shell::WprsState;
 use crate::xwayland_xdg_shell::XWaylandSurface;
 use crate::xwayland_xdg_shell::client::Role;
@@ -169,7 +169,9 @@ impl WprsCompositorState {
                 x11_socket,
                 display_number,
             } => {
-                info!("XWayland ready: set DISPLAY=:{display_number} to run X11 apps in this session");
+                info!(
+                    "XWayland ready: set DISPLAY=:{display_number} to run X11 apps in this session"
+                );
                 let wm =
                     X11Wm::start_wm(data.event_loop_handle.clone(), x11_socket, client.clone())
                         .expect("Failed to attach X11 Window Manager.");

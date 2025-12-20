@@ -58,7 +58,12 @@ impl WindowsWindowBackend {
         }
     }
 
-    fn surface_state_for_window(&self, hwnd_key: u64, title: &str, metadata: BufferMetadata) -> SurfaceState {
+    fn surface_state_for_window(
+        &self,
+        hwnd_key: u64,
+        title: &str,
+        metadata: BufferMetadata,
+    ) -> SurfaceState {
         let toplevel = xdg_shell::XdgToplevelState {
             id: xdg_shell::XdgToplevelId(hwnd_key),
             parent: None,
@@ -109,20 +114,28 @@ impl WindowsWindowBackend {
 
         match e.kind {
             PointerEventKind::Enter { .. } | PointerEventKind::Leave { .. } => Ok(()),
-            PointerEventKind::Motion => post_mouse_motion(self.pressed_buttons, x, y).location(loc!()),
+            PointerEventKind::Motion => {
+                post_mouse_motion(self.pressed_buttons, x, y).location(loc!())
+            },
             PointerEventKind::Press { button, .. } => {
                 let mask = button_mask(button);
                 self.pressed_buttons |= mask;
                 post_mouse_button(true, button, x, y).location(loc!())
-            }
+            },
             PointerEventKind::Release { button, .. } => {
                 let mask = button_mask(button);
                 self.pressed_buttons &= !mask;
                 post_mouse_button(false, button, x, y).location(loc!())
-            }
-            PointerEventKind::Axis { horizontal, vertical, .. } => {
-                post_scroll(horizontal.absolute.round() as i32, vertical.absolute.round() as i32).location(loc!())
-            }
+            },
+            PointerEventKind::Axis {
+                horizontal,
+                vertical,
+                ..
+            } => post_scroll(
+                horizontal.absolute.round() as i32,
+                vertical.absolute.round() as i32,
+            )
+            .location(loc!()),
         }
     }
 }
@@ -141,12 +154,8 @@ impl PollingBackend for WindowsWindowBackend {
         let mut out = Vec::new();
         for w in windows {
             let (metadata, _bgra) = capture_window_bgra(w.hwnd_key).location(loc!())?;
-            self.windows.insert(
-                w.hwnd_key,
-                TrackedWindow {
-                    rect: w.rect,
-                },
-            );
+            self.windows
+                .insert(w.hwnd_key, TrackedWindow { rect: w.rect });
             out.push(SurfaceSnapshot {
                 state: self.surface_state_for_window(w.hwnd_key, &w.title, metadata),
             });
@@ -178,12 +187,8 @@ impl PollingBackend for WindowsWindowBackend {
 
         for w in windows {
             let (metadata, bgra) = capture_window_bgra(w.hwnd_key).location(loc!())?;
-            self.windows.insert(
-                w.hwnd_key,
-                TrackedWindow {
-                    rect: w.rect,
-                },
-            );
+            self.windows
+                .insert(w.hwnd_key, TrackedWindow { rect: w.rect });
             let state = self.surface_state_for_window(w.hwnd_key, &w.title, metadata);
             out.push(BackendObservation::SurfaceCommit {
                 state,
@@ -199,8 +204,8 @@ impl PollingBackend for WindowsWindowBackend {
                 for e in events {
                     self.handle_pointer_event(e).log_and_ignore(loc!());
                 }
-            }
-            _ => {}
+            },
+            _ => {},
         }
         Ok(())
     }
@@ -421,8 +426,26 @@ mod win {
         fn CreateCompatibleBitmap(hdc: HDC, w: i32, h: i32) -> HBITMAP;
         fn SelectObject(hdc: HDC, obj: HGDIOBJ) -> HGDIOBJ;
         fn DeleteObject(obj: HGDIOBJ) -> BOOL;
-        fn BitBlt(hdc: HDC, x: i32, y: i32, cx: i32, cy: i32, src: HDC, x1: i32, y1: i32, rop: DWORD) -> BOOL;
-        fn GetDIBits(hdc: HDC, hbmp: HBITMAP, start: UINT, lines: UINT, bits: *mut c_void, info: *mut BITMAPINFO, usage: UINT) -> i32;
+        fn BitBlt(
+            hdc: HDC,
+            x: i32,
+            y: i32,
+            cx: i32,
+            cy: i32,
+            src: HDC,
+            x1: i32,
+            y1: i32,
+            rop: DWORD,
+        ) -> BOOL;
+        fn GetDIBits(
+            hdc: HDC,
+            hbmp: HBITMAP,
+            start: UINT,
+            lines: UINT,
+            bits: *mut c_void,
+            info: *mut BITMAPINFO,
+            usage: UINT,
+        ) -> i32;
     }
 
     const SRCCOPY: DWORD = 0x00CC0020;
@@ -504,7 +527,10 @@ mod win {
                 right: 0,
                 bottom: 0,
             };
-            ensure!(GetWindowRect(hwnd, &mut rect as *mut RECT) != 0, "GetWindowRect failed");
+            ensure!(
+                GetWindowRect(hwnd, &mut rect as *mut RECT) != 0,
+                "GetWindowRect failed"
+            );
 
             let width = (rect.right - rect.left).max(1);
             let height = (rect.bottom - rect.top).max(1);
@@ -613,7 +639,11 @@ mod win {
                     },
                 },
             };
-            let sent = SendInput(1, &input as *const INPUT, std::mem::size_of::<INPUT>() as i32);
+            let sent = SendInput(
+                1,
+                &input as *const INPUT,
+                std::mem::size_of::<INPUT>() as i32,
+            );
             ensure!(sent == 1, "SendInput failed");
             let _ = button_mask;
             Ok(())
@@ -648,7 +678,11 @@ mod win {
                     },
                 },
             };
-            let sent = SendInput(1, &input as *const INPUT, std::mem::size_of::<INPUT>() as i32);
+            let sent = SendInput(
+                1,
+                &input as *const INPUT,
+                std::mem::size_of::<INPUT>() as i32,
+            );
             ensure!(sent == 1, "SendInput failed");
             Ok(())
         }
@@ -670,7 +704,11 @@ mod win {
                         },
                     },
                 };
-                let sent = SendInput(1, &input as *const INPUT, std::mem::size_of::<INPUT>() as i32);
+                let sent = SendInput(
+                    1,
+                    &input as *const INPUT,
+                    std::mem::size_of::<INPUT>() as i32,
+                );
                 ensure!(sent == 1, "SendInput failed");
             }
             if horizontal != 0 {
@@ -687,7 +725,11 @@ mod win {
                         },
                     },
                 };
-                let sent = SendInput(1, &input as *const INPUT, std::mem::size_of::<INPUT>() as i32);
+                let sent = SendInput(
+                    1,
+                    &input as *const INPUT,
+                    std::mem::size_of::<INPUT>() as i32,
+                );
                 ensure!(sent == 1, "SendInput failed");
             }
             Ok(())

@@ -45,9 +45,7 @@ mod wayland_server_impl {
         let wayland_socket_path = runtime_dir.join(&wayland_display);
         info!(
             "wprsc wayland-server listening: XDG_RUNTIME_DIR={:?} WAYLAND_DISPLAY={:?} socket={:?}",
-            runtime_dir,
-            wayland_display,
-            wayland_socket_path
+            runtime_dir, wayland_display, wayland_socket_path
         );
 
         // Create an internal wprs transport between the embedded server backend
@@ -109,7 +107,10 @@ mod wayland_server_impl {
         )
         .location(loc!())?;
 
-        info!("wprsc presenting wayland-server via backend: {}", backend.name());
+        info!(
+            "wprsc presenting wayland-server via backend: {}",
+            backend.name()
+        );
         backend.run(serializer).location(loc!())
     }
 }

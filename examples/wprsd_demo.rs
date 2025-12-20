@@ -1,10 +1,10 @@
-use wprs::server;
-use wprs::server::backends::mock;
 use wprs::prelude::*;
-use wprs::protocols::wprs::Event;
 use wprs::protocols::wprs::Endpoint;
+use wprs::protocols::wprs::Event;
 use wprs::protocols::wprs::Request;
 use wprs::protocols::wprs::Serializer;
+use wprs::server;
+use wprs::server::backends::mock;
 
 fn main() -> Result<()> {
     let opts = mock::MockOptions::parse("wprsd_demo");

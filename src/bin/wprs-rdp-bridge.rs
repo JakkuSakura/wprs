@@ -47,4 +47,3 @@ fn main() -> Result<()> {
     };
     wprs::rdp::run_bridge(args.wprs_endpoint, args.rdp_listen, sec).location(loc!())
 }
-

@@ -88,7 +88,11 @@ fn start_xwayland_xdg_shell(
 ) {
     info!(
         "starting xwayland-xdg-shell: path={xwayland_xdg_shell_path:?} WAYLAND_DISPLAY={wayland_display:?} WAYLAND_DEBUG={wayland_debug} args={xwayland_xdg_shell_args:?}",
-        wayland_debug = if xwayland_xdg_shell_wayland_debug { 1 } else { 0 },
+        wayland_debug = if xwayland_xdg_shell_wayland_debug {
+            1
+        } else {
+            0
+        },
     );
 
     let mut child = Command::new(xwayland_xdg_shell_path)

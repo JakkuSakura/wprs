@@ -13,15 +13,15 @@
 // limitations under the License.
 
 use crate::prelude::*;
+use crate::protocols::wprs::DisplayConfig;
 use crate::protocols::wprs::Event;
 use crate::protocols::wprs::Request;
 use crate::protocols::wprs::SendType;
-use crate::protocols::wprs::DisplayConfig;
 use crate::protocols::wprs::wayland::DataEvent;
 use crate::protocols::wprs::wayland::KeyboardEvent;
 use crate::protocols::wprs::wayland::OutputEvent;
-use crate::protocols::wprs::wayland::PointerGestureEvent;
 use crate::protocols::wprs::wayland::PointerEvent;
+use crate::protocols::wprs::wayland::PointerGestureEvent;
 use crate::protocols::wprs::wayland::SurfaceEvent;
 use crate::protocols::wprs::wayland::SurfaceRequest;
 use crate::protocols::wprs::xdg_shell::PopupEvent;
@@ -126,13 +126,13 @@ mod tests {
     use crate::protocols::wprs::wayland::OutputInfo;
     use crate::protocols::wprs::wayland::PointerEvent;
     use crate::protocols::wprs::wayland::PointerEventKind;
+    use crate::protocols::wprs::wayland::PointerGestureEvent;
     use crate::protocols::wprs::wayland::Subpixel;
     use crate::protocols::wprs::wayland::SurfaceEvent;
     use crate::protocols::wprs::wayland::SurfaceEventPayload;
     use crate::protocols::wprs::wayland::Transform;
     use crate::protocols::wprs::wayland::WlSurfaceId;
     use crate::protocols::wprs::wayland::{AxisScroll, AxisSource, KeyboardEvent, Mode};
-    use crate::protocols::wprs::wayland::PointerGestureEvent;
     use crate::protocols::wprs::xdg_shell::{ToplevelClose, ToplevelEvent};
 
     #[derive(Default)]

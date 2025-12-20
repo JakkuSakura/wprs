@@ -35,7 +35,9 @@ impl std::str::FromStr for IntegrationMode {
             "embedded" => Ok(Self::Embedded),
             "spawned" => Ok(Self::Spawned),
             "external" => Ok(Self::External),
-            other => bail!("invalid integration mode {other:?} (expected: embedded|spawned|external)"),
+            other => {
+                bail!("invalid integration mode {other:?} (expected: embedded|spawned|external)")
+            },
         }
     }
 }
@@ -82,9 +84,7 @@ impl std::str::FromStr for XwaylandMode {
             "spawned" | "spawn-proxy" | "proxy" => Ok(Self::Spawned),
             "embedded" | "inline-proxy" | "native" => Ok(Self::Embedded),
             "external" => Ok(Self::External),
-            other => bail!(
-                "invalid xwayland mode {other:?} (expected: embedded|spawned|external)"
-            ),
+            other => bail!("invalid xwayland mode {other:?} (expected: embedded|spawned|external)"),
         }
     }
 }
@@ -290,8 +290,8 @@ impl WprsdArgs {
             .clone()
             .unwrap_or_else(|| config::default_config_file("wprsd"));
         let mut cfg = WprsdConfig::default();
-        if let Some(from_file) = config::maybe_read_ron_file::<WprsdConfig>(&config_file)
-            .location(loc!())?
+        if let Some(from_file) =
+            config::maybe_read_ron_file::<WprsdConfig>(&config_file).location(loc!())?
         {
             cfg = from_file;
         }
@@ -450,8 +450,9 @@ pub mod xwayland_xdg_shell {
                 .clone()
                 .unwrap_or_else(|| config::default_config_file("xwayland-xdg-shell"));
             let mut cfg = XwaylandXdgShellConfig::default();
-            if let Some(from_file) = config::maybe_read_ron_file::<XwaylandXdgShellConfig>(&config_file)
-                .location(loc!())?
+            if let Some(from_file) =
+                config::maybe_read_ron_file::<XwaylandXdgShellConfig>(&config_file)
+                    .location(loc!())?
             {
                 cfg = from_file;
             }
