@@ -46,6 +46,5 @@ fn main() -> Result<()> {
         "wprsc endpoints: socket={:?} control_socket={:?} endpoint={:?}",
         config.socket, config.control_socket, config.endpoint
     );
-
     run_wprsc(config).location(loc!())
 }

@@ -1,6 +1,8 @@
 pub mod backends;
 pub mod backend;
 pub mod config;
+pub mod runner;
+pub mod wayland_server;
 
 #[cfg(feature = "wayland-client")]
 pub use backends::wayland::*;
@@ -11,3 +13,4 @@ pub use backends::winit_wgpu;
 pub use backend::build_client_backend;
 pub use backend::ClientBackend;
 pub use backend::ClientBackendConfig;
+pub use runner::run_wprsc;

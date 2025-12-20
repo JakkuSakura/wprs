@@ -1,0 +1,74 @@
+use std::fs;
+use std::time::Duration;
+
+use crate::client::ClientBackendConfig;
+use crate::client::build_client_backend;
+use crate::client::config::WprscConfig;
+use crate::client::config::WprscRole;
+use crate::prelude::*;
+use crate::protocols::wprs as proto;
+use crate::protocols::wprs::Serializer;
+
+pub fn run_wprsc(config: WprscConfig) -> Result<()> {
+    match config.role {
+        WprscRole::Viewer => run_viewer(config).location(loc!()),
+        WprscRole::WaylandServer => crate::client::wayland_server::run(config).location(loc!()),
+    }
+}
+
+fn run_viewer(config: WprscConfig) -> Result<()> {
+    if config.forward_only {
+        let endpoint = config
+            .endpoint
+            .clone()
+            .ok_or_else(|| anyhow!("--forward-only requires --endpoint=ssh://..."))
+            .location(loc!())?;
+
+        let (local_endpoint, guard) = proto::setup_client_transport(endpoint).location(loc!())?;
+        let _guard = guard
+            .ok_or_else(|| anyhow!("--forward-only requires an ssh:// endpoint"))
+            .location(loc!())?;
+
+        println!("{local_endpoint}");
+        loop {
+            std::thread::sleep(Duration::from_secs(3600));
+        }
+    }
+
+    let serializer_options = proto::SerializerClientOptions {
+        auto_reconnect: config.auto_reconnect,
+        on_connect: vec![proto::SendType::Object(proto::Event::WprsClientConnect)],
+    };
+
+    let serializer: Serializer<proto::Event, proto::Request> = match &config.endpoint {
+        Some(endpoint) => {
+            Serializer::new_client_endpoint_with_options(endpoint.clone(), serializer_options)
+                .with_context(loc!(), || {
+                    format!("Serializer failed to initialize for endpoint {endpoint:?}.")
+                })?
+        }
+        None => {
+            fs::create_dir_all(config.socket.parent().location(loc!())?).location(loc!())?;
+            Serializer::new_client_with_options(&config.socket, serializer_options)
+                .with_context(loc!(), || {
+                    format!("Serializer failed to initialize for socket {:?}.", &config.socket)
+                })?
+        }
+    };
+
+    let backend = build_client_backend(
+        config.present_backend,
+        ClientBackendConfig {
+            title_prefix: config.title_prefix,
+            control_socket: config.control_socket,
+            keyboard_mode: config.keyboard_mode,
+            xkb_keymap_file: config.xkb_keymap_file,
+            ui_scale_factor: config.ui_scale_factor,
+        },
+    )
+    .location(loc!())?;
+
+    info!("wprsc using backend: {}", backend.name());
+    backend.run(serializer).location(loc!())
+}
+
