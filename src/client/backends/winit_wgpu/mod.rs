@@ -35,12 +35,14 @@ use crate::client::config::KeyboardMode;
 use crate::filtering;
 use crate::prelude::*;
 use crate::protocols::wprs as proto;
+use crate::protocols::wprs::ClientId;
 use crate::protocols::wprs::DisplayConfig;
 use crate::protocols::wprs::RecvType;
 use crate::protocols::wprs::Request;
 use crate::protocols::wprs::SendType;
 use crate::protocols::wprs::Serializer;
 use crate::protocols::wprs::geometry::{Point, Size};
+use crate::protocols::wprs::wayland::ClientSurface;
 use crate::protocols::wprs::wayland::PointerGestureEvent;
 use crate::protocols::wprs::wayland::{
     AxisScroll, AxisSource, KeyInner, KeyState, KeyboardEvent, ModifierState, PointerEvent,
@@ -459,6 +461,28 @@ impl WindowRenderer {
     }
 }
 
+#[derive(Debug, Copy, Clone, Hash, Eq, PartialEq)]
+struct ClientSurfaceKey {
+    client: ClientId,
+    surface: WlSurfaceId,
+}
+
+impl ClientSurfaceKey {
+    fn new(client_surface: &ClientSurface) -> Self {
+        Self {
+            client: client_surface.client,
+            surface: client_surface.surface,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct CursorFrame {
+    width: u16,
+    height: u16,
+    rgba: Vec<u8>,
+}
+
 fn align_up(value: usize, alignment: usize) -> usize {
     debug_assert!(alignment.is_power_of_two());
     (value + alignment - 1) & !(alignment - 1)
@@ -536,6 +560,7 @@ struct App {
     ui_scale_factor: f64,
 
     serial_counter: u32,
+    focused_window: Option<winit::window::WindowId>,
     focused_surface: Option<WlSurfaceId>,
     surfaces_with_frame: HashSet<WlSurfaceId>,
     pressed_keycodes: HashSet<u32>,
@@ -548,6 +573,9 @@ struct App {
     pinch_state: HashMap<WlSurfaceId, PinchGestureState>,
 
     popup_state_by_surface: HashMap<WlSurfaceId, XdgPopupState>,
+
+    cursor_frames: HashMap<ClientSurfaceKey, CursorFrame>,
+    cursor_surface_clients: HashMap<WlSurfaceId, ClientId>,
 }
 
 impl App {
@@ -577,6 +605,50 @@ impl App {
             metadata,
             filtered,
         });
+    }
+
+    fn bgra_padded_to_rgba(
+        metadata: &crate::protocols::wprs::wayland::BufferMetadata,
+        padded_row_bytes: u32,
+        padded: &[u8],
+    ) -> Option<CursorFrame> {
+        let width: usize = metadata.width.try_into().ok()?;
+        let height: usize = metadata.height.try_into().ok()?;
+        let width_u16: u16 = metadata.width.try_into().ok()?;
+        let height_u16: u16 = metadata.height.try_into().ok()?;
+        if width == 0 || height == 0 {
+            return None;
+        }
+
+        let padded_row_bytes = padded_row_bytes as usize;
+        let row_bytes = width.checked_mul(4)?;
+        if padded_row_bytes < row_bytes {
+            return None;
+        }
+        let total = padded_row_bytes.checked_mul(height)?;
+        if padded.len() < total {
+            return None;
+        }
+
+        let mut rgba = vec![0u8; row_bytes * height];
+        for y in 0..height {
+            let src = &padded[y * padded_row_bytes..y * padded_row_bytes + row_bytes];
+            let dst = &mut rgba[y * row_bytes..y * row_bytes + row_bytes];
+            for x in 0..width {
+                let s = x * 4;
+                // BGRA -> RGBA
+                dst[s] = src[s + 2];
+                dst[s + 1] = src[s + 1];
+                dst[s + 2] = src[s];
+                dst[s + 3] = src[s + 3];
+            }
+        }
+
+        Some(CursorFrame {
+            width: width_u16,
+            height: height_u16,
+            rgba,
+        })
     }
 
     fn compute_popup_position(&self, popup: &XdgPopupState) -> Option<PhysicalPosition<i32>> {
@@ -631,6 +703,16 @@ impl App {
         }
     }
 
+    fn keyboard_focus_target_for(&self, surface_id: WlSurfaceId) -> WlSurfaceId {
+        // In XDG shell, keyboard focus remains with the toplevel. Popups are never keyboard focus
+        // targets.
+        let mut target = surface_id;
+        while let Some(popup) = self.popup_state_by_surface.get(&target) {
+            target = popup.parent_surface_id;
+        }
+        target
+    }
+
     fn cursor_icon_from_wayland_name(name: &str) -> winit::window::CursorIcon {
         use winit::window::CursorIcon;
 
@@ -666,7 +748,11 @@ impl App {
         }
     }
 
-    fn handle_cursor_image(&mut self, cursor: crate::protocols::wprs::wayland::CursorImage) {
+    fn handle_cursor_image(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        cursor: crate::protocols::wprs::wayland::CursorImage,
+    ) {
         let serial = cursor.serial;
         let status = cursor.status;
 
@@ -695,16 +781,43 @@ impl App {
                 renderer.window.set_cursor_visible(true);
                 renderer.window.set_cursor(icon);
             },
-            crate::protocols::wprs::wayland::CursorImageStatus::Surface { .. } => {
-                // winit doesn't expose a cross-platform API to set a custom bitmap cursor.
+            crate::protocols::wprs::wayland::CursorImageStatus::Surface {
+                client_surface,
+                hotspot,
+            } => {
+                let key = ClientSurfaceKey::new(&client_surface);
+                let Some(frame) = self.cursor_frames.get(&key) else {
+                    debug!(
+                        "cursor surface: surface={surface_id:?} serial={serial} cursor_surface={key:?} (no frame yet)"
+                    );
+                    return;
+                };
+
+                let hotspot_x = hotspot.x.clamp(0, frame.width as i32) as u16;
+                let hotspot_y = hotspot.y.clamp(0, frame.height as i32) as u16;
+
+                let source = match winit::window::CustomCursor::from_rgba(
+                    frame.rgba.clone(),
+                    frame.width,
+                    frame.height,
+                    hotspot_x,
+                    hotspot_y,
+                ) {
+                    Ok(source) => source,
+                    Err(err) => {
+                        debug!(
+                            "cursor surface: failed to create custom cursor: surface={surface_id:?} serial={serial} err={err:?}"
+                        );
+                        return;
+                    },
+                };
+                let custom = event_loop.create_custom_cursor(source);
                 debug!(
-                    "cursor surface: surface={surface_id:?} serial={} (custom cursor unsupported in winit backend)",
-                    serial
+                    "cursor surface: surface={surface_id:?} serial={serial} cursor_surface={key:?} size=({}x{}) hotspot=({hotspot_x},{hotspot_y})",
+                    frame.width, frame.height
                 );
                 renderer.window.set_cursor_visible(true);
-                renderer
-                    .window
-                    .set_cursor(winit::window::CursorIcon::Default);
+                renderer.window.set_cursor(custom);
             },
         }
     }
@@ -1031,7 +1144,7 @@ impl App {
                 Ok(())
             },
             RecvType::Object(Request::CursorImage(cursor)) => {
-                self.handle_cursor_image(cursor);
+                self.handle_cursor_image(event_loop, cursor);
                 Ok(())
             },
             // Not yet handled in this backend.
@@ -1084,6 +1197,12 @@ impl App {
                     self.surface_by_window.remove(&renderer.window.id());
                 }
                 self.popup_state_by_surface.remove(&surface_id);
+                if let Some(client) = self.cursor_surface_clients.remove(&surface_id) {
+                    self.cursor_frames.remove(&ClientSurfaceKey {
+                        client,
+                        surface: surface_id,
+                    });
+                }
                 return Ok(());
             },
             SurfaceRequestPayload::Commit(mut state) => {
@@ -1095,7 +1214,14 @@ impl App {
                 };
                 let toplevel = role.as_xdg_toplevel();
                 let popup = role.as_xdg_popup();
-                if toplevel.is_none() && popup.is_none() {
+                let cursor = role.as_cursor();
+
+                if cursor.is_some() {
+                    self.cursor_surface_clients.insert(surface_id, state.client);
+                }
+
+                let is_presented = toplevel.is_some() || popup.is_some();
+                if !is_presented && cursor.is_none() {
                     return Ok(());
                 }
 
@@ -1106,10 +1232,16 @@ impl App {
                     self.popup_state_by_surface.remove(&surface_id);
                 }
 
-                // Ensure we have a window for this surface.
-                if !self.windows.contains_key(&surface_id) {
+                // Ensure we have a window for this surface if it is presented.
+                if is_presented && !self.windows.contains_key(&surface_id) {
                     let mut attrs = if let Some(toplevel) = toplevel {
                         let title = toplevel.title.clone().unwrap_or_else(|| "wprs".to_string());
+
+                        // On macOS we draw a custom titlebar and keep the native title hidden, so
+                        // avoid setting a non-empty native title string.
+                        #[cfg(target_os = "macos")]
+                        let title = String::new();
+
                         let attrs = Window::default_attributes().with_title(title);
 
                         #[cfg(target_os = "macos")]
@@ -1265,17 +1397,34 @@ impl ApplicationHandler<UserEvent> for App {
                     .log_and_ignore(loc!());
             },
             UserEvent::DecodedFrame(frame) => {
-                let Some(renderer) = self.windows.get_mut(&frame.surface_id) else {
+                if let Some(renderer) = self.windows.get_mut(&frame.surface_id) {
+                    renderer.update_texture_from_padded_bgra(
+                        &self.shared,
+                        &frame.metadata,
+                        frame.padded_row_bytes,
+                        &frame.data,
+                    );
+                    renderer.window.request_redraw();
+                    self.surfaces_with_frame.insert(frame.surface_id);
+                    return;
+                }
+
+                let Some(client) = self.cursor_surface_clients.get(&frame.surface_id).copied()
+                else {
                     return;
                 };
-                renderer.update_texture_from_padded_bgra(
-                    &self.shared,
-                    &frame.metadata,
-                    frame.padded_row_bytes,
-                    &frame.data,
+                let Some(cursor_frame) =
+                    Self::bgra_padded_to_rgba(&frame.metadata, frame.padded_row_bytes, &frame.data)
+                else {
+                    return;
+                };
+                self.cursor_frames.insert(
+                    ClientSurfaceKey {
+                        client,
+                        surface: frame.surface_id,
+                    },
+                    cursor_frame,
                 );
-                renderer.window.request_redraw();
-                self.surfaces_with_frame.insert(frame.surface_id);
             },
         }
     }
@@ -1319,14 +1468,17 @@ impl ApplicationHandler<UserEvent> for App {
                 },
                 WindowEvent::CloseRequested => {
                     debug!("winit close requested: surface={surface_id:?}");
-                    self.serializer
-                        .writer()
-                        .send(SendType::Object(proto::Event::Toplevel(
-                            ToplevelEvent::Close(ToplevelClose { surface_id }),
-                        )));
+                    if !self.popup_state_by_surface.contains_key(&surface_id) {
+                        self.serializer
+                            .writer()
+                            .send(SendType::Object(proto::Event::Toplevel(
+                                ToplevelEvent::Close(ToplevelClose { surface_id }),
+                            )));
+                    }
                     self.windows.remove(&surface_id);
                     self.surface_by_window.remove(&window_id);
-                    if self.focused_surface == Some(surface_id) {
+                    if self.focused_window == Some(window_id) {
+                        self.focused_window = None;
                         self.set_keyboard_focus(None);
                     }
                 },
@@ -1336,10 +1488,13 @@ impl ApplicationHandler<UserEvent> for App {
 
         match event {
             WindowEvent::Focused(true) => {
-                self.set_keyboard_focus(Some(surface_id));
+                self.focused_window = Some(window_id);
+                let target = self.keyboard_focus_target_for(surface_id);
+                self.set_keyboard_focus(Some(target));
             },
             WindowEvent::Focused(false) => {
-                if self.focused_surface == Some(surface_id) {
+                if self.focused_window == Some(window_id) {
+                    self.focused_window = None;
                     self.set_keyboard_focus(None);
                 }
             },
@@ -1733,6 +1888,7 @@ pub fn run(
         ui_scale_factor: options.ui_scale_factor,
 
         serial_counter: 1,
+        focused_window: None,
         focused_surface: None,
         surfaces_with_frame: HashSet::new(),
         pressed_keycodes: HashSet::new(),
@@ -1743,6 +1899,9 @@ pub fn run(
         pinch_state: HashMap::new(),
 
         popup_state_by_surface: HashMap::new(),
+
+        cursor_frames: HashMap::new(),
+        cursor_surface_clients: HashMap::new(),
     };
 
     event_loop.run_app(&mut app)?;
