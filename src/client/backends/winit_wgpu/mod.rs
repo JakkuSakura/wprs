@@ -19,7 +19,6 @@ use std::sync::Arc;
 use std::thread;
 
 use winit::application::ApplicationHandler;
-use winit::dpi::LogicalPosition;
 use winit::dpi::LogicalSize;
 use winit::dpi::PhysicalPosition;
 use winit::dpi::PhysicalSize;
@@ -36,6 +35,9 @@ use calloop::channel::Event as CalloopChannelEvent;
 use tracing::{debug, info, warn};
 
 use crate::client::config::KeyboardMode;
+use crate::client::coords;
+use crate::client::coords::ServerBufferScale;
+use crate::client::coords::UiScaleFactor;
 use crate::filtering;
 use crate::prelude::*;
 use crate::protocols::wprs as proto;
@@ -678,16 +680,6 @@ impl App {
         self.ui_scale_factor.max(0.1)
     }
 
-    fn to_remote_surface_coords(
-        &self,
-        window_content_logical: crate::protocols::wprs::geometry::Point<f64>,
-    ) -> crate::protocols::wprs::geometry::Point<f64> {
-        let scale = self.ui_scale();
-        crate::protocols::wprs::geometry::Point {
-            x: window_content_logical.x / scale,
-            y: window_content_logical.y / scale,
-        }
-    }
     fn schedule_decode(
         &self,
         surface_id: WlSurfaceId,
@@ -765,17 +757,21 @@ impl App {
             .surface_scale_factor
             .get(&popup.parent_surface_id)
             .copied()
-            .unwrap_or(1)
-            .max(1) as f64;
-        let client_scale = parent_renderer.window.scale_factor();
-        let total_scale = (client_scale / server_scale) * self.ui_scale();
+            .unwrap_or(1);
+        let dx_server = anchor.loc.x + offset.x;
+        let dy_server = anchor.loc.y + offset.y;
 
-        let dx = (anchor.loc.x + offset.x) as f64 * total_scale;
-        let dy = (anchor.loc.y + offset.y) as f64 * total_scale;
+        let (dx, dy) = coords::winit::popup_offset_to_host_px(
+            parent_renderer.window.as_ref(),
+            UiScaleFactor(self.ui_scale_factor),
+            ServerBufferScale(server_scale),
+            dx_server,
+            dy_server,
+        );
 
         Some(PhysicalPosition::new(
-            parent_pos.x.saturating_add(dx.round() as i32),
-            parent_pos.y.saturating_add(dy.round() as i32),
+            parent_pos.x.saturating_add(dx),
+            parent_pos.y.saturating_add(dy),
         ))
     }
 
@@ -1349,7 +1345,16 @@ impl App {
                 // Ensure we have a window for this surface if it is presented.
                 if is_presented && !self.windows.contains_key(&surface_id) {
                     let mut attrs = if let Some(_toplevel) = toplevel {
-                        let use_native_decorations = _toplevel.decoration_mode != Some(DecorationMode::Client);
+                        // Remote apps (e.g. KDE/Qt) may render their own client-side titlebars.
+                        // On macOS, the native traffic-light buttons can overlap that remote UI.
+                        // Prefer going fully borderless on macOS and rely on the decorationless
+                        // move/resize handling.
+                        #[cfg(target_os = "macos")]
+                        let use_native_decorations = false;
+
+                        #[cfg(not(target_os = "macos"))]
+                        let use_native_decorations =
+                            _toplevel.decoration_mode != Some(DecorationMode::Client);
 
                         #[cfg(not(target_os = "macos"))]
                         let title = _toplevel.title.clone().unwrap_or_else(|| "wprs".to_string());
@@ -1685,16 +1690,15 @@ impl ApplicationHandler<UserEvent> for App {
                 };
 
                 self.last_window_cursor_pos_physical.insert(window_id, position);
-                let logical = position.to_logical::<f64>(window.scale_factor());
-                let window_pos = crate::protocols::wprs::geometry::Point {
-                    x: logical.x,
-                    y: logical.y,
-                };
+                let window_pos = coords::winit::physical_to_window_logical(window.as_ref(), position);
                 self.last_window_cursor_pos.insert(window_id, window_pos);
 
                 self.update_decorationless_cursor(surface_id, window_id, window.as_ref(), position);
 
-                let pos = self.to_remote_surface_coords(window_pos);
+                let pos = coords::winit::window_logical_to_remote_logical(
+                    UiScaleFactor(self.ui_scale_factor),
+                    window_pos,
+                );
                 self.last_cursor_pos.insert(window_id, pos);
                 self.pointer_surface = Some(surface_id);
 
@@ -1743,35 +1747,22 @@ impl ApplicationHandler<UserEvent> for App {
                     // Match winit's `custom_decorations` example: right click shows the system
                     // window menu, if supported by the platform.
                     if state == ElementState::Pressed && button == MouseButton::Right {
-                        // `show_window_menu` expects window-local coordinates, but the expected
-                        // unit (logical vs physical) differs across platforms.
+                        // winit's Wayland implementation expects coordinates in *window-local
+                        // logical* space (it converts incoming `Position` to logical internally).
                         //
-                        // We already compute and store the cursor position in window logical
-                        // coordinates for mapping into remote surface coordinates; reuse that to
-                        // avoid HiDPI mismatches.
-                        let (logical_x, logical_y) = self
-                            .last_window_cursor_pos
-                            .get(&window_id)
-                            .map(|p| (p.x, p.y))
-                            .unwrap_or_else(|| {
-                                let size = renderer.window.inner_size();
-                                let scale = renderer.window.scale_factor();
-                                (
-                                    (f64::from(size.width) / scale) / 2.0,
-                                    (f64::from(size.height) / scale) / 2.0,
-                                )
-                            });
+                        // `MouseInput` doesn't include a position, so we use the last seen cursor
+                        // location.
+                        let Some(cursor_physical) =
+                            self.last_window_cursor_pos_physical.get(&window_id).copied()
+                        else {
+                            return;
+                        };
 
-                        #[cfg(target_os = "macos")]
-                        renderer
-                            .window
-                            .show_window_menu(LogicalPosition::new(logical_x, logical_y));
-
-                        #[cfg(not(target_os = "macos"))]
-                        renderer.window.show_window_menu(PhysicalPosition::new(
-                            logical_x * renderer.window.scale_factor(),
-                            logical_y * renderer.window.scale_factor(),
-                        ));
+                        let menu_pos = coords::winit::window_menu_position(
+                            renderer.window.as_ref(),
+                            cursor_physical,
+                        );
+                        renderer.window.show_window_menu(menu_pos);
                         return;
                     }
 
