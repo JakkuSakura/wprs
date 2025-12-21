@@ -58,7 +58,7 @@ use super::geometry::Point;
 use super::geometry::Rectangle;
 use super::geometry::Size;
 use super::wayland::WlSurfaceId;
-#[cfg(any(feature = "wayland", feature = "wayland-client"))]
+#[cfg(feature = "wayland")]
 use crate::prelude::*;
 
 #[derive(Archive, Deserialize, Serialize, Debug, Copy, Clone, Hash, Eq, PartialEq)]

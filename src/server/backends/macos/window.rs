@@ -22,6 +22,7 @@ use crate::server::runtime::backend::SurfaceSnapshot;
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MacosWindowBackendConfig {
     pub dpi: Option<u32>,
+    pub target_pid: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -42,6 +43,7 @@ pub struct MacosWindowBackend {
     display_config: DisplayConfig,
     windows: HashMap<u32, TrackedWindow>,
     pressed_buttons: u32,
+    target_pid: Option<u32>,
 }
 
 impl MacosWindowBackend {
@@ -56,6 +58,7 @@ impl MacosWindowBackend {
             display_config,
             windows: HashMap::new(),
             pressed_buttons: 0,
+            target_pid: config.target_pid,
         }
     }
 
@@ -147,6 +150,11 @@ impl PollingBackend for MacosWindowBackend {
 
         let windows = list_windows().location(loc!())?;
         for w in windows {
+            if let Some(pid) = self.target_pid {
+                if w.owner_pid != pid {
+                    continue;
+                }
+            }
             // Capture once to get the initial window size.
             let (metadata, _bgra) = capture_window_bgra(w.window_id).location(loc!())?;
             self.windows
@@ -164,6 +172,11 @@ impl PollingBackend for MacosWindowBackend {
         let mut out = Vec::new();
 
         let windows = list_windows().location(loc!())?;
+        let windows: Vec<WindowInfo> = if let Some(pid) = self.target_pid {
+            windows.into_iter().filter(|w| w.owner_pid == pid).collect()
+        } else {
+            windows
+        };
         let mut seen = std::collections::HashSet::new();
         for w in &windows {
             seen.insert(w.window_id);
@@ -240,6 +253,7 @@ struct WindowInfo {
     window_id: u32,
     title: String,
     app_id: String,
+    owner_pid: u32,
     bounds: WindowBounds,
 }
 
@@ -401,6 +415,7 @@ mod macos {
     // CFStringRef keys exported by CoreGraphics.
     unsafe extern "C" {
         static kCGWindowNumber: CFStringRef;
+        static kCGWindowOwnerPID: CFStringRef;
         static kCGWindowOwnerName: CFStringRef;
         static kCGWindowName: CFStringRef;
         static kCGWindowBounds: CFStringRef;
@@ -461,6 +476,7 @@ mod macos {
 
                 let owner =
                     cf_dict_string(dict, kCGWindowOwnerName).unwrap_or_else(|| "macos".to_string());
+                let owner_pid = cf_dict_i64(dict, kCGWindowOwnerPID).unwrap_or(0).max(0) as u32;
                 let name = cf_dict_string(dict, kCGWindowName).unwrap_or_else(|| "".to_string());
                 let title = if name.is_empty() { owner.clone() } else { name };
 
@@ -492,6 +508,7 @@ mod macos {
                     window_id,
                     title,
                     app_id: owner,
+                    owner_pid,
                     bounds: WindowBounds {
                         x: rect.origin.x,
                         y: rect.origin.y,

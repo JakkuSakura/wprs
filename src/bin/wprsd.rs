@@ -199,6 +199,7 @@ fn build_backend(backend: &WprsdBackend, config: &WprsdConfig) -> Result<Box<dyn
         WprsdBackend::MacosSeamless => Ok(Box::new(backends::macos::MacosWindowBackend::new(
             backends::macos::MacosWindowBackendConfig {
                 dpi: config.display_dpi,
+                target_pid: None,
             },
         ))),
         WprsdBackend::Wayland => {

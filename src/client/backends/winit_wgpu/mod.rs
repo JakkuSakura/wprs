@@ -554,6 +554,9 @@ fn output_info_from_monitor(
     let position = monitor.position();
     let size = monitor.size();
 
+    #[cfg(not(target_os = "macos"))]
+    let _ = min_output_scale_factor;
+
     // Force a HiDPI scale on macOS to avoid blurry rendering when the server uses a low scale.
     // We keep the logical size stable by scaling both the mode dimensions and the scale factor.
     #[cfg(target_os = "macos")]
