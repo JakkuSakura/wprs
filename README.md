@@ -1,28 +1,51 @@
-# wprs
+# wprsx
+
+wprsx (wprs eXtended) is a fork of
+[wprs](https://github.com/wayland-transpositor/wprs) with additional fixes and
+improvements. It keeps the original architecture and workflow while extending
+it for better stability, usability, and long-term maintenance.
 
 Like [xpra](https://en.wikipedia.org/wiki/Xpra), but for Wayland, and written in
 Rust.
 
-wprs implements rootless remote desktop access for remote Wayland (and X11, via
+wprsx implements rootless remote desktop access for remote Wayland (and X11, via
 XWayland) applications.
+
+Fork notes:
+
+- This repository is named `wprsx`, but the binaries and package names may
+  still be `wprs`, `wprsc`, and `wprsd` for compatibility with existing setups.
+- This fork carries additional fixes and incremental improvements; review the
+  commit history for a detailed change list.
+- If you are looking for upstream behavior or documentation, refer to the
+  original wprs repository linked above.
 
 ## Building
 
-wprs is currently only available on x86-64 with AVX2. Support for [ARM](https://github.com/wayland-transpositor/wprs/issues/31) and support for more fast compression implementations welcome.
-
-Currently building wprs without AVX2 will lead to build failures.
+wprsx is primarily developed and tested on x86-64. The compression path has an
+AVX2-optimized implementation that is compiled when the target enables AVX2
+(for example via `-C target-feature=+avx2` or `-C target-cpu=native`). Without
+AVX2, a scalar fallback is used and will be slower. Other architectures (for
+example ARM) may build but are less exercised today.
 
 ### Platform Support
 
 - `wprsc` (client) is intended to be cross-platform and should build on Linux/macOS/Windows.
+  - Wayland client backend (Linux/Wayland): requires the `wayland-client` feature and Wayland system libraries.
+  - Cross-platform `winit` + `wgpu` backend (default).
 - `wprsd` has multiple backends:
-  - Wayland compositor backend (Linux/Wayland): requires the `server` feature (Smithay) and is not supported on Apple platforms.
-  - Fullscreen capture backends (macOS/Windows): use OS screen capture + input injection APIs (macOS requires Screen Recording + Accessibility permissions).
+  - Wayland compositor backend (Linux/Wayland): requires the `wayland` feature (Smithay).
+  - X11 fullscreen backend (Linux/X11).
+  - macOS fullscreen and window/seamless backends (requires Screen Recording + Accessibility permissions).
+  - Windows fullscreen and window/seamless backends.
+  - Mock backend (used by the `wprsd_demo` example).
 
 In practice:
 
-- For macOS/Windows development, build `wprsc` only. If you want to include "wayland" feature, you need to brew install `pkg-config` + `libxkbcommon`. 
-- For Linux deployment, build both `wprsc` and `wprsd`.
+- For macOS/Windows development, build `wprsc` (default `winit` + `wgpu`) and the
+  native `wprsd` backends if needed.
+- For Linux deployment, build both `wprsc` and `wprsd`. Enable `wayland` for the
+  compositor backend and `wayland-client` for the Wayland client backend.
 
 ### Source
 
@@ -45,11 +68,13 @@ cross build --target x86_64-unknown-linux-gnu --profile=release-lto --bin wprsc
 cross build --target aarch64-unknown-linux-gnu --profile=release-lto --bin wprsc
 ```
 
-On non-Linux hosts (for example macOS), only the client is expected to build.
-By default, `wprsc` builds with the cross-platform client backend:
+On non-Linux hosts (for example macOS), the Wayland compositor backend is not
+available; `wprsc` uses the cross-platform client backend by default. Build the
+platform-native `wprsd` backends if needed:
 
 ```bash
 cargo build --bin wprsc
+cargo build --bin wprsd
 ```
 
 You can also run a self-contained server demo that speaks the protocol and streams a
@@ -65,7 +90,8 @@ Then connect to it with the cross-platform client backend:
 cargo run --bin wprsc -- --socket /path/printed/by/demo.sock
 ```
 
-The following dependencies are required for `wprsc`, `wprsd`, `xwayland-xdg-shell`:
+Wayland-related components (`wprsc` Wayland backend, `wprsd` Wayland backend,
+and `xwayland-xdg-shell`) require:
 
 * libxkbcommon (-dev on debian)
 * libwayland (-dev on debian)
@@ -94,8 +120,10 @@ Outputs are written under `dist/`.
 
 ### Arch-Linux (AUR)
 
-wprs is available from the [Arch User Repository](https://aur.archlinux.org/packages/wprs-git)
-as `wprs-git`
+Upstream wprs is available from the
+[Arch User Repository](https://aur.archlinux.org/packages/wprs-git) as
+`wprs-git`. wprsx includes packaging templates you can adapt if you need a
+separate forked package.
 
 ## Usage
 
@@ -128,13 +156,13 @@ wprs <remote_host> attach
 
 ## System Tuning
 
-Increasing linux's socket buffer limits as described in
+Increasing Linux's socket buffer limits as described in
 <https://wiki.archlinux.org/title/sysctl#Increase_the_memory_dedicated_to_the_network_interfaces>
-will result in improved performance.
+can result in improved performance.
 
-TODO: test ssh socket forwarding performance with different values of
-wmem_default. wprs uses setsockopt to increase its buffer size, but it doesn't
-seem that ssh does.
+TODO: test SSH socket forwarding performance with different values of
+wmem_default. wprsx uses setsockopt to increase its buffer size; verify whether
+SSH forwarding applies similar buffering.
 
 ## Configuration Files
 
@@ -157,14 +185,13 @@ Then update the `wprsc.ron` and `wprsd.ron` files with your desired settings.
 
 ### Running `wprsc` Without Wayland (Experimental)
 
-`wprsc` is normally a Wayland client and requires a local Wayland compositor.
-For development and experimentation on non-Wayland desktops (for example macOS
-or Windows), `wprsc` also supports a cross-platform backend using `winit` +
-`wgpu`.
+`wprsc` can use a Wayland client backend or a cross-platform backend based on
+`winit` + `wgpu`.
 
-When no Wayland compositor is detected, `wprsc` will automatically fall back to
-this backend (it is enabled by default). You can override the selection with
-`--backend auto|wayland|winit-wgpu`.
+When `--backend auto` is selected (the default), `wprsc` prefers the Wayland
+backend if a compositor is available; otherwise it falls back to the
+`winit-wgpu` backend (when compiled with `winit-wgpu-client`). You can override
+the selection with `--backend auto|wayland|winit-wgpu`.
 
 If you compile `wprsc` with one of the `smithay_*` feature bundles, the same
 bundle names are also accepted as `--backend` values (they currently alias to
@@ -184,44 +211,46 @@ Keyboard behavior is configurable:
 
 Current limitations of the `winit` + `wgpu` backend:
 
-* Only `xdg-toplevel` surfaces are displayed.
-* Input forwarding is best-effort (pointer and basic keyboard).
+* Subsurfaces are not fully supported.
+* Input forwarding is best-effort (pointer/keyboard/gestures).
   Keyboard events are translated to Linux evdev keycodes and may be incomplete
   on non-Linux hosts.
-* Popups/subsurfaces are not fully supported.
+* Touch input is not forwarded end-to-end (trackpad gestures are supported).
 
 ## Current Limitations
 
-Currently only the the Core and XDG shell protocols are implemented. In
-particular, hardware rendering/dmabuf support is not yet implemented.
+Protocol coverage is evolving. The WPRS protocol currently includes core
+surface/buffer state, `xdg-shell`, decoration metadata, viewporter state, and
+data-device/primary-selection events in `src/protocols/wprs`, but not every
+Wayland protocol is implemented.
 
-* Touch event support is not yet implemented.
-* Drag-and-drop may be wonky in some cases.
-* XWayland drag-and-drop is not (yet?) implemented.
-* webauthn security keys don't yet work in browsers
+* Drag-and-drop support is best-effort and may be unreliable.
+* XWayland selection/drag-and-drop bridging is still TODO.
 
-Generally, wprs will aim to support as many protocols as feasible, it's a
+Generally, wprsx will aim to support as many protocols as feasible; it is a
 question of time and prioritization.
 
 ## Architecture
 
-On the remote (server) side, `wprsd` implements a wayland compositor using
-[Smithay](https://github.com/Smithay/smithay). Instead of compositing and
-rendering though, wprsd serializes the state of the wayland session and sends it
-to the connected wprsc client using a custom protocol.
+On the remote (server) side, `wprsd` can implement a Wayland compositor using
+[Smithay](https://github.com/Smithay/smithay) when built with the `wayland`
+feature. Instead of compositing and rendering, wprsd serializes the state of the
+Wayland session and sends it to the connected wprsc client using a custom
+protocol.
 
-On the local (client) side, `wprsc` implements a wayland client (using the
-[Smithay Client Toolkit](https://github.com/Smithay/client-toolkit) that creates
-local wayland objects that correspond to remote wayland objects. For example, if
-a remote application running against wprsd creates a surface and an
-xdg-toplevel, wprsc will create a surface with the same contents, an
-xdg-toplevel with the same metadata, etc.. From the local compositor's point of
-view, wprsc is just a normal application with a bunch of windows. Input and
-other events from the local compositor that wprsc are serialized and sent to
-wprsd, which forwards them to the appropriate application (the owner of the
-surface which the wprsc surface which received the events corresponds to).
+On the local (client) side, `wprsc` implements a Wayland client (using the
+[Smithay Client Toolkit](https://github.com/Smithay/client-toolkit)) when built
+with the `wayland-client` feature. It creates local Wayland objects that
+correspond to remote Wayland objects. For example, if a remote application
+running against wprsd creates a surface and an xdg-toplevel, wprsc will create a
+surface with the same contents, an xdg-toplevel with the same metadata, etc.
+From the local compositor's point of view, wprsc is just a normal application
+with a bunch of windows. Input and other events from the local compositor that
+wprsc receives are serialized and sent to wprsd, which forwards them to the
+appropriate application (the owner of the surface which the wprsc surface which
+received the events corresponds to).
 
-wprs supports session resumption across temporary disconnects. By default,
+wprsx supports session resumption across temporary disconnects. By default,
 `wprsc` will automatically reconnect to `wprsd` (disable with
 `wprsc --no-auto-reconnect`). The wayland protocol is not natively resumable in this way
 because it relies on shared state between the compositor and client
@@ -233,12 +262,13 @@ necessary wayland objects. wprsc is stateless, but wprsd is not, so a wprsd
 restart will still terminate all wayland applications running against it, like
 with any other wayland compositor.
 
-Communication between wprsd and wprsc happens over unix domain sockets; wprsd
-creates a socket and wprsc connects to it. The default mode of operation is to,
-on the client side, use ssh to forward a local socket to the remote wprsd
-socket, but a different transport could be used with, for example, socat or a
-custom proxy application. A launcher script (`wprs`) is provided which sets up
-the ssh socket forwarding.
+Communication between wprsd and wprsc happens over Unix domain sockets by
+default; wprsd creates a socket and wprsc connects to it. The protocol also
+supports TCP endpoints (and SSH tunnels via the `Endpoint` URI syntax). The
+default mode of operation is to use SSH to forward a local socket to the remote
+wprsd socket, but a different transport could be used with, for example, socat
+or a custom proxy application. A launcher script (`wprs`) is provided which sets
+up the SSH socket forwarding.
 
 ### Protocol
 
@@ -247,9 +277,9 @@ and wprsd is a simplified version of the wayland protocol. Wayland objects are
 represented as rust types and serialized using
 [rkyv](https://github.com/rkyv/rkyv). Unlike the wayland protocol, the wprs
 protocol tries to be idempotent when possible. For example, instead of the
-repeated back-and-forth involved in created a surface, creating an xdg-surface,
+repeated back-and-forth involved in creating a surface, creating an xdg-surface,
 creating an xdg-toplevel, waiting for it to be configured, creating a buffer,
-attaching the buffer, and comitting it, wprsd will send a single commit message
+attaching the buffer, and committing it, wprsd will send a single commit message
 to wprsc with the complete state of the surface (surface's attached buffer
 contents (if any), its role (if any) and any associated metadata, etc.) and
 wprsc will execute the appropriate dance with the local compositor.
@@ -263,7 +293,7 @@ Buffer compression is handled using a custom multithreaded and SIMD-accelerated
 lossless image compression algorithm:
 
 1. Transpose the image from an [array of structures to a struct of
-   arrays](https://en.wikipedia.org/wiki/AoS_and_SoA). This makes the subequent
+   arrays](https://en.wikipedia.org/wiki/AoS_and_SoA). This makes the subsequent
    steps significantly faster by letting them be implemented with SIMD
    instructions and additionally improves the compression ratio because each
    color channel is more closely spatially correlated with itself than with the
@@ -281,38 +311,37 @@ lossless image compression algorithm:
    correlation.
 4. Compress the data with zstd.
 
-This algorithm was designed for reasonably good compression ratios while being
-extremely fast: single-digit milliseconds per frame. Decompression is done by
-inverting those steps.
+This algorithm was designed for good compression ratios while remaining fast;
+performance depends on resolution and CPU. Decompression is done by inverting
+those steps.
 
-This protocol is *not stable*: there is no guarantee that different versions of
-wprsc and wprsd, or wprsc and wprsd built with different versions of
-dependencies or even rustc will be compatible. This may change in the future,
-but it will not happen soon.
+Protocol compatibility is not guaranteed across builds. A version handshake
+warns when versions differ, but mixing binaries from different revisions (or
+different dependency/rustc versions) may still break.
 
 ### Comparison to Waypipe
 
 [Waypipe](https://gitlab.freedesktop.org/mstoeckl/waypipe)'s model is analogous
-to X forwarding, while wprs's model is analgous to Xpra. Waypipe ~transparently
-forwards messages between the local compositor and the remote application, so
-the client ends up being stateful and sessions can only be resumed through
-network reconnections, not client restarts. There are tradeoffs to the two
-approaches. Waypipe's approach is partially forward-compatible: it can support
-new wayland protocols automatically, however those protocols may be broken if
-they use shared resources in a way that waypipe doesn't know how to handle.
-wprs, on the other hand, requires explicit implementation for every wayland
-protocol.
+to X forwarding, while wprsx's model is analogous to Xpra. Waypipe forwards
+Wayland protocol messages between the local compositor and the remote
+application, so the client ends up being stateful and sessions are resumed via
+network reconnections rather than client restarts. There are tradeoffs to the
+two approaches. Waypipe's approach can be forward-compatible with newer Wayland
+protocols, but those protocols may be unreliable if they use shared resources in
+ways Waypipe does not handle. wprsx, on the other hand, requires explicit
+implementation for each Wayland protocol.
 
 ### XWayland
 
-XWayland support is implemented via the helper `xwayland-xdg-shell` by default.
-The helper implements a Wayland compositor (but only for the protocol features used
-by Xwayland) and client, just like wprsd and wprsc, but in a single binary (so
-skipping the serialization/deserialization).
+XWayland support uses the helper `xwayland-xdg-shell` when
+`xwayland_mode = "supervised"` (the default unless built with the `xwayland`
+feature). The helper implements a Wayland compositor (but only for the protocol
+features used by Xwayland) and client, just like wprsd and wprsc, but in a
+single binary (so skipping the serialization/deserialization).
 
-For deployments that prefer fewer processes, wprsd can also run the Xwayland
-proxy inline (without spawning `xwayland-xdg-shell`) by setting
-`xwayland_mode = "inline-proxy"`.
+For deployments that prefer fewer processes, set
+`xwayland_mode = "embedded"` (requires the `xwayland` feature) to run the
+Xwayland proxy inline inside `wprsd`.
 
 To run the helper without letting wprsd spawn it (e.g. if you want separate
 process supervision), set `xwayland_mode = "external"` and start
@@ -320,7 +349,7 @@ process supervision), set `xwayland_mode = "external"` and start
 
 ### HiDPI
 
-wprs tracks scale using Wayland-style semantics:
+wprsx tracks scale using Wayland-style semantics:
 
 - `SurfaceState.buffer_scale` is the number of buffer pixels per logical point.
   For example, a Retina capture typically uses `buffer_scale = 2`.
@@ -352,7 +381,7 @@ The helper binary model is the same as
 which is itself inspired by
 [sommelier](https://chromium.googlesource.com/chromiumos/platform2/+/main/vm_tools/sommelier/).
 xwayland-xdg-shell was primarily written (instead of just using
-xwayland-proxy-virtwl) so as to share a common design/codebase with wprs and to
+xwayland-proxy-virtwl) so as to share a common design/codebase with wprsx and to
 make use of common wayland development in the form of Smithay and its wayland
 crates. Additionally, xwayland-xdg-shell is more narrowly focused and its sole
 purpose is xwayland support, not virtio-gpu or virtwl.
@@ -367,16 +396,17 @@ getting special access.
 
 ### Security
 
-wprsd is a wayland compositor, so it has access to all surfaces displayed by
-applications running against it and it can inject input into them. Any process
-which implements the wprs protocol and connects to the wprs socket will have the
-same access. For that reason, the wprs socket is created in a directory which
-only the user has access to ($XDG_RUNTIME_DIR) and the socket itself is only
-readable/writable by the user. Malicious applications running as the same user
-as wprsd can still access this socket, but at that point you have bigger
-problems.
+When using the Wayland backend, wprsd is a Wayland compositor, so it has access
+to all surfaces displayed by applications running against it and it can inject
+input into them. Any process which implements the wprs protocol and connects to
+the wprsd socket will have
+the same access. By default, the socket is created in `$XDG_RUNTIME_DIR` (or a
+per-user directory under `/tmp` if `XDG_RUNTIME_DIR` is unset). Ensure that
+directory permissions are restricted to the current user. Malicious applications
+running as the same user as wprsd can still access this socket, but at that
+point you have bigger problems.
 
-wprs does not do any auth of its own, it relies entirely on whatever transport
+wprsx does not do any auth of its own, it relies entirely on whatever transport
 is being used (ssh, in the default case).
 
 ## Thanks
