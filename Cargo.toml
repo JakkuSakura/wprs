@@ -42,8 +42,7 @@ serde_derive = "1.0.219"
 serde_json = "1.0.143"
 smithay = { version = "0.7", default-features = false, features = [
     "desktop",
-    "xwayland",
-    "wayland_frontend",
+    "wayland_frontend"
 ], optional = true }
 smithay-client-toolkit = { version = "0.20", optional = true }
 static_assertions = "1.1.0"
@@ -81,6 +80,8 @@ default = ["winit-wgpu-client"]
 # Note: `wprsd` is the server binary regardless of backend; this feature only
 # controls whether the Wayland compositor backend is compiled in.
 wayland = ["dep:smithay"]
+
+xwayland = ["wayland", "smithay/xwayland"]
 
 # Backwards-compatible alias.
 server = ["wayland"]
@@ -120,7 +121,7 @@ required-features = ["rdp"]
 sspi = { path = "vendor/sspi" }
 
 [dev-dependencies]
-criterion = { version = "0.7.0", features = ["html_reports"] }
+criterion = { version = "0.8", features = ["html_reports"] }
 png = "0.18.0"
 proptest = "1.7.0"
 trybuild = "1.0.110"

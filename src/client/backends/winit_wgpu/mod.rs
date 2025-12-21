@@ -116,8 +116,6 @@ struct WindowRenderer {
 }
 
 impl WindowRenderer {
-    #[cfg(target_os = "macos")]
-    const DEFAULT_TITLEBAR_HEIGHT_LOGICAL: f64 = 28.0;
 
     fn new(shared: &WgpuShared, window: Arc<Window>) -> Result<Self> {
         let surface = shared
@@ -1250,8 +1248,9 @@ impl App {
 
                 // Ensure we have a window for this surface if it is presented.
                 if is_presented && !self.windows.contains_key(&surface_id) {
-                    let mut attrs = if let Some(toplevel) = toplevel {
-                        let title = toplevel.title.clone().unwrap_or_else(|| "wprs".to_string());
+                    let mut attrs = if let Some(_toplevel) = toplevel {
+                        #[cfg(not(target_os = "macos"))]
+                        let title = _toplevel.title.clone().unwrap_or_else(|| "wprs".to_string());
 
                         // On macOS we draw a custom titlebar and keep the native title hidden, so
                         // avoid setting a non-empty native title string.

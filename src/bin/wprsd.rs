@@ -49,7 +49,7 @@ fn infer_backend(config: &WprsdConfig) -> Result<WprsdBackend> {
         return Ok(backend);
     }
 
-    if cfg!(all(target_os = "linux", feature = "wayland")) {
+    if cfg!(feature = "wayland") {
         return Ok(WprsdBackend::Wayland);
     }
 

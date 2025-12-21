@@ -97,6 +97,7 @@ use smithay::wayland::shell::xdg::decoration::XdgDecorationHandler;
 use smithay::wayland::shm::ShmHandler;
 use smithay::wayland::shm::ShmState;
 use smithay::wayland::viewporter::ViewportCachedState;
+#[cfg(feature = "xwayland")]
 use smithay::xwayland::XWaylandClientData;
 
 use super::LockedSurfaceState;
@@ -572,6 +573,7 @@ impl CompositorHandler for WprsServerState {
         if let Some(state) = client.get_data::<ClientState>() {
             return &state.compositor_state;
         }
+        #[cfg(feature = "xwayland")]
         if let Some(state) = client.get_data::<XWaylandClientData>() {
             return &state.compositor_state;
         }
@@ -1247,4 +1249,5 @@ smithay::delegate_data_device!(WprsServerState);
 smithay::delegate_output!(WprsServerState);
 smithay::delegate_primary_selection!(WprsServerState);
 smithay::delegate_viewporter!(WprsServerState);
+#[cfg(feature = "xwayland")]
 smithay::delegate_xwayland_shell!(WprsServerState);

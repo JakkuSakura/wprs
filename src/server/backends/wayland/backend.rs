@@ -154,17 +154,18 @@ impl crate::server::runtime::backend::ServerBackend for WaylandSmithayBackend {
 
         if config.enable_xwayland {
             match config.xwayland_mode {
-                XwaylandMode::Spawned => {
+                XwaylandMode::Supervised => {
                     start_xwayland_xdg_shell(
                         &config.wayland_display,
                         &config.xwayland_xdg_shell_path,
                         config.xwayland_xdg_shell_wayland_debug,
                         &config.xwayland_xdg_shell_args,
                     );
-                },
+                }
+                #[cfg(feature = "xwayland")]
                 XwaylandMode::Embedded => {
                     state
-                        .start_xwayland_inline_proxy(
+                        .start_xwayland_embedded(
                             config.xwayland_xdg_shell_wayland_debug,
                             config.xwayland_display,
                         )

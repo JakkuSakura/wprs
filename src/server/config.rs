@@ -56,23 +56,21 @@ pub enum WprsdBackend {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum XwaylandMode {
-    /// Spawns the external `xwayland-xdg-shell` helper process.
-    #[serde(alias = "spawn-proxy", alias = "proxy")]
-    Spawned,
-    /// Runs the Xwayland proxy inline inside `wprsd`.
-    #[serde(alias = "inline-proxy", alias = "native")]
-    Embedded,
     /// Does not spawn any helper; expects external management.
     External,
+    /// Spawns the external `xwayland-xdg-shell` helper process.
+    Supervised,
+    /// Runs the Xwayland proxy inline inside `wprsd`.
+    #[cfg(feature = "xwayland")]
+    Embedded,
 }
 
 impl Default for XwaylandMode {
     fn default() -> Self {
-        if cfg!(all(feature = "wayland", target_os = "linux")) {
-            Self::Embedded
-        } else {
-            Self::Spawned
-        }
+        #[cfg(feature = "xwayland")]
+        return Self::Embedded;
+        #[cfg(not(feature = "xwayland"))]
+        Self::Supervised
     }
 }
 
@@ -81,10 +79,11 @@ impl std::str::FromStr for XwaylandMode {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "spawned" | "spawn-proxy" | "proxy" => Ok(Self::Spawned),
-            "embedded" | "inline-proxy" | "native" => Ok(Self::Embedded),
+            "supervised" => Ok(Self::Supervised),
+            #[cfg(feature = "xwayland")]
+            "embedded" => Ok(Self::Embedded),
             "external" => Ok(Self::External),
-            other => bail!("invalid xwayland mode {other:?} (expected: embedded|spawned|external)"),
+            other => bail!("invalid xwayland mode {other:?} (expected: embedded(requires xwayland feature)|supervised|external)"),
         }
     }
 }
@@ -372,7 +371,7 @@ impl WprsdArgs {
     }
 }
 
-#[cfg(all(feature = "wayland", feature = "wayland-client", target_os = "linux"))]
+#[cfg(all(feature = "wayland", feature = "wayland-client"))]
 pub mod xwayland_xdg_shell {
     use super::*;
 

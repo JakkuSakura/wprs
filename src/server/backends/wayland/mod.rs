@@ -42,7 +42,9 @@ use smithay::wayland::shell::xdg::decoration::XdgDecorationState;
 use smithay::wayland::shm::ShmState;
 use smithay::reexports::wayland_protocols_misc::server_decoration::server::org_kde_kwin_server_decoration_manager::Mode as KdeDecorationMode;
 use smithay::wayland::viewporter::ViewporterState;
+#[cfg(feature = "xwayland")]
 use smithay::wayland::xwayland_shell::XWaylandShellState;
+#[cfg(feature = "xwayland")]
 use smithay::xwayland::X11Wm;
 
 use crate::prelude::*;
@@ -60,6 +62,7 @@ use crate::utils::SerialMap;
 pub mod backend;
 pub mod client_handlers;
 pub mod smithay_handlers;
+#[cfg(feature = "xwayland")]
 pub mod xwayland_handlers;
 
 pub(crate) struct LockedSurfaceState(pub(crate) Mutex<SurfaceState>);
@@ -83,6 +86,7 @@ fn surface_destruction_callback(state: &mut WprsServerState, surface: &WlSurface
         })));
 
         state.object_map.remove(&surface_state.id);
+        #[cfg(feature = "xwayland")]
         state.xwayland_surfaces.remove(&surface.id());
     });
 }
@@ -106,7 +110,9 @@ pub struct WprsServerState {
     pub primary_selection_state: PrimarySelectionState,
     pub viewporter_state: ViewporterState,
     pub xwayland_mode: crate::server::config::XwaylandMode,
+    #[cfg(feature = "xwayland")]
     pub xwayland_shell_state: XWaylandShellState,
+    #[cfg(feature = "xwayland")]
     pub xwm: Option<X11Wm>,
     pub xwayland_surfaces: HashSet<ObjectId>,
 
@@ -169,7 +175,9 @@ impl WprsServerState {
             primary_selection_state: PrimarySelectionState::new::<Self>(&dh),
             viewporter_state: ViewporterState::new::<Self>(&dh),
             xwayland_mode,
+            #[cfg(feature = "xwayland")]
             xwayland_shell_state: XWaylandShellState::new::<Self>(&dh),
+            #[cfg(feature = "xwayland")]
             xwm: None,
             xwayland_surfaces: HashSet::new(),
             seat,

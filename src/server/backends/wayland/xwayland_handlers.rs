@@ -35,13 +35,13 @@ pub(crate) struct XwaylandSurfaceData {
 }
 
 impl WprsServerState {
-    pub fn start_xwayland_inline_proxy(
+    pub fn start_xwayland_embedded(
         &mut self,
         wayland_debug: bool,
         preferred_display: Option<u32>,
     ) -> Result<()> {
         if self.xwayland_mode != XwaylandMode::Embedded {
-            bail!("start_xwayland_inline_proxy called when xwayland_mode != embedded");
+            bail!("start_xwayland_embedded called when xwayland_mode != embedded");
         }
         if self.xwm.is_some() {
             return Ok(());
