@@ -1503,7 +1503,11 @@ impl ApplicationHandler<UserEvent> for App {
         match event {
             WindowEvent::Focused(true) => {
                 self.focused_window = Some(window_id);
-                let target = self.keyboard_focus_target_for(surface_id);
+                let target = self
+                    .popup_state_by_surface
+                    .get(&surface_id)
+                    .and_then(|popup| popup.grab_requested.then_some(surface_id))
+                    .unwrap_or_else(|| self.keyboard_focus_target_for(surface_id));
                 info!("window focused: surface={surface_id:?} keyboard_target={target:?}");
                 self.set_keyboard_focus(Some(target));
             },
@@ -1564,7 +1568,6 @@ impl ApplicationHandler<UserEvent> for App {
                     self.send_pointer_event(surface_id, pos, PointerEventKind::Enter { serial });
                 }
                 self.send_pointer_event(surface_id, pos, PointerEventKind::Motion);
-                self.apply_cursor_for_surface(surface_id);
             },
             WindowEvent::CursorEntered { .. } => {
                 self.pointer_surface = Some(surface_id);
@@ -1574,7 +1577,6 @@ impl ApplicationHandler<UserEvent> for App {
                     let pos = self.cursor_pos_for(window_id);
                     self.send_pointer_event(surface_id, pos, PointerEventKind::Enter { serial });
                 }
-                self.apply_cursor_for_surface(surface_id);
             },
             WindowEvent::CursorLeft { .. } => {
                 let pos = self.cursor_pos_for(window_id);
@@ -1605,7 +1607,6 @@ impl ApplicationHandler<UserEvent> for App {
                     },
                 };
                 self.send_pointer_event(surface_id, pos, kind);
-                self.apply_cursor_for_surface(surface_id);
             },
             WindowEvent::MouseWheel { delta, .. } => {
                 let (h_abs, v_abs, h_discrete, v_discrete) = match delta {
@@ -1652,7 +1653,6 @@ impl ApplicationHandler<UserEvent> for App {
                         source,
                     },
                 );
-                self.apply_cursor_for_surface(surface_id);
             },
             WindowEvent::PinchGesture { delta, phase, .. } => {
                 debug!("pinch: surface={surface_id:?} phase={phase:?} delta={delta:?}");
@@ -1711,7 +1711,6 @@ impl ApplicationHandler<UserEvent> for App {
                         }
                     },
                 }
-                self.apply_cursor_for_surface(surface_id);
             },
 
             WindowEvent::RotationGesture { delta, phase, .. } => {
@@ -1768,7 +1767,6 @@ impl ApplicationHandler<UserEvent> for App {
                         }
                     },
                 }
-                self.apply_cursor_for_surface(surface_id);
             },
             _ => {},
         }
