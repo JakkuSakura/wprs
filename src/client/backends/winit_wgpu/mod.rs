@@ -572,6 +572,7 @@ struct App {
 
     current_cursor: Option<Cursor>,
     warned_cursor_names: HashSet<String>,
+    cursor_dirty: bool,
 }
 
 impl App {
@@ -662,8 +663,14 @@ impl App {
         let anchor = popup.positioner.anchor_rect;
         let offset = popup.positioner.offset;
 
+        let server_scale = self
+            .surface_scale_factor
+            .get(&popup.parent_surface_id)
+            .copied()
+            .unwrap_or(1)
+            .max(1) as f64;
         let client_scale = parent_renderer.window.scale_factor();
-        let total_scale = client_scale * self.ui_scale();
+        let total_scale = (client_scale / server_scale) * self.ui_scale();
 
         let dx = (anchor.loc.x + offset.x) as f64 * total_scale;
         let dy = (anchor.loc.y + offset.y) as f64 * total_scale;
@@ -756,18 +763,14 @@ impl App {
         let serial = cursor.serial;
         let status = cursor.status;
 
+        // Cursor is a seat-global concept; we apply it to whichever surface is currently active.
+        // If we don't have an active surface yet, mark it dirty and apply on next pointer enter.
         let target_surface = self.pointer_surface.or(self.focused_surface);
-        let Some(surface_id) = target_surface else {
-            debug!(
-                "cursor image update without an active window: serial={serial} status={status:?}"
-            );
-            return;
-        };
         match status {
             crate::protocols::wprs::wayland::CursorImageStatus::Hidden => {
-                debug!("cursor hidden: surface={surface_id:?} serial={serial}");
+                debug!("cursor hidden: serial={serial}");
                 self.current_cursor = None;
-                self.apply_cursor_for_surface(surface_id);
+                self.cursor_dirty = true;
             },
             crate::protocols::wprs::wayland::CursorImageStatus::Named(name) => {
                 let icon = Self::cursor_icon_from_wayland_name(&name);
@@ -776,11 +779,11 @@ impl App {
                 }
                 let icon = icon.unwrap_or(winit::window::CursorIcon::Default);
                 debug!(
-                    "cursor named: surface={surface_id:?} serial={} name={name:?} icon={icon:?}",
+                    "cursor named: serial={} name={name:?} icon={icon:?}",
                     serial
                 );
                 self.current_cursor = Some(Cursor::from(icon));
-                self.apply_cursor_for_surface(surface_id);
+                self.cursor_dirty = true;
             },
             crate::protocols::wprs::wayland::CursorImageStatus::Surface {
                 client_surface,
@@ -788,9 +791,7 @@ impl App {
             } => {
                 let key = ClientSurfaceKey::new(&client_surface);
                 let Some(frame) = self.cursor_frames.get(&key) else {
-                    debug!(
-                        "cursor surface: surface={surface_id:?} serial={serial} cursor_surface={key:?} (no frame yet)"
-                    );
+                    debug!("cursor surface: serial={serial} cursor_surface={key:?} (no frame yet)");
                     return;
                 };
 
@@ -820,19 +821,24 @@ impl App {
                     Ok(source) => source,
                     Err(err) => {
                         debug!(
-                            "cursor surface: failed to create custom cursor: surface={surface_id:?} serial={serial} err={err:?}"
+                            "cursor surface: failed to create custom cursor: serial={serial} err={err:?}"
                         );
                         return;
                     },
                 };
                 let custom = event_loop.create_custom_cursor(source);
                 debug!(
-                    "cursor surface: surface={surface_id:?} serial={serial} cursor_surface={key:?} size=({}x{}) hotspot=({hotspot_x},{hotspot_y})",
+                    "cursor surface: serial={serial} cursor_surface={key:?} size=({}x{}) hotspot=({hotspot_x},{hotspot_y})",
                     frame.width, frame.height
                 );
                 self.current_cursor = Some(Cursor::from(custom));
-                self.apply_cursor_for_surface(surface_id);
+                self.cursor_dirty = true;
             },
+        }
+
+        if let Some(surface_id) = target_surface {
+            self.apply_cursor_for_surface(surface_id);
+            self.cursor_dirty = false;
         }
     }
 
@@ -1568,6 +1574,11 @@ impl ApplicationHandler<UserEvent> for App {
                     self.send_pointer_event(surface_id, pos, PointerEventKind::Enter { serial });
                 }
                 self.send_pointer_event(surface_id, pos, PointerEventKind::Motion);
+
+                if self.cursor_dirty {
+                    self.apply_cursor_for_surface(surface_id);
+                    self.cursor_dirty = false;
+                }
             },
             WindowEvent::CursorEntered { .. } => {
                 self.pointer_surface = Some(surface_id);
@@ -1576,6 +1587,11 @@ impl ApplicationHandler<UserEvent> for App {
                     let serial = self.next_serial();
                     let pos = self.cursor_pos_for(window_id);
                     self.send_pointer_event(surface_id, pos, PointerEventKind::Enter { serial });
+                }
+
+                if self.cursor_dirty {
+                    self.apply_cursor_for_surface(surface_id);
+                    self.cursor_dirty = false;
                 }
             },
             WindowEvent::CursorLeft { .. } => {
@@ -1886,6 +1902,7 @@ pub fn run(
 
         current_cursor: None,
         warned_cursor_names: HashSet::new(),
+        cursor_dirty: true,
     };
 
     event_loop.run_app(&mut app)?;
