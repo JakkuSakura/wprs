@@ -570,7 +570,7 @@ struct App {
     cursor_frames: HashMap<ClientSurfaceKey, CursorFrame>,
     cursor_surface_clients: HashMap<WlSurfaceId, ClientId>,
 
-    current_cursor: HashMap<WlSurfaceId, Option<Cursor>>,
+    current_cursor: Option<Cursor>,
     warned_cursor_names: HashSet<String>,
 }
 
@@ -738,11 +738,8 @@ impl App {
         let Some(renderer) = self.windows.get(&surface_id) else {
             return;
         };
-        let Some(cursor) = self.current_cursor.get(&surface_id) else {
-            return;
-        };
 
-        match cursor {
+        match &self.current_cursor {
             None => renderer.window.set_cursor_visible(false),
             Some(cursor) => {
                 renderer.window.set_cursor_visible(true);
@@ -769,7 +766,7 @@ impl App {
         match status {
             crate::protocols::wprs::wayland::CursorImageStatus::Hidden => {
                 debug!("cursor hidden: surface={surface_id:?} serial={serial}");
-                self.current_cursor.insert(surface_id, None);
+                self.current_cursor = None;
                 self.apply_cursor_for_surface(surface_id);
             },
             crate::protocols::wprs::wayland::CursorImageStatus::Named(name) => {
@@ -782,8 +779,7 @@ impl App {
                     "cursor named: surface={surface_id:?} serial={} name={name:?} icon={icon:?}",
                     serial
                 );
-                self.current_cursor
-                    .insert(surface_id, Some(Cursor::from(icon)));
+                self.current_cursor = Some(Cursor::from(icon));
                 self.apply_cursor_for_surface(surface_id);
             },
             crate::protocols::wprs::wayland::CursorImageStatus::Surface {
@@ -834,8 +830,7 @@ impl App {
                     "cursor surface: surface={surface_id:?} serial={serial} cursor_surface={key:?} size=({}x{}) hotspot=({hotspot_x},{hotspot_y})",
                     frame.width, frame.height
                 );
-                self.current_cursor
-                    .insert(surface_id, Some(Cursor::from(custom)));
+                self.current_cursor = Some(Cursor::from(custom));
                 self.apply_cursor_for_surface(surface_id);
             },
         }
@@ -1891,7 +1886,7 @@ pub fn run(
         cursor_frames: HashMap::new(),
         cursor_surface_clients: HashMap::new(),
 
-        current_cursor: HashMap::new(),
+        current_cursor: None,
         warned_cursor_names: HashSet::new(),
     };
 
