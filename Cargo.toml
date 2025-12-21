@@ -176,6 +176,19 @@ smithay_vulkan_support = ["dep:smithay", "smithay/backend_vulkan"]
 # Enables Smithay's full default feature set (heavy; mostly Linux).
 smithay_default_all = ["dep:smithay", "smithay/default"]
 
+# Curated "everything we might want on Linux" bundle without relying on smithay's own `default`.
+# This is useful if you want to toggle a broad set of backends/renderers while still being explicit
+# about what you pull in.
+smithay_all_linux = [
+    "smithay_drm_gbm_egl_gl_wayland",
+    "smithay_drm_pixman_wayland",
+    "smithay_drm_multi_gpu_wayland",
+    "smithay_x11_gl_wayland",
+    "smithay_winit_gl_wayland",
+    "smithay_xwayland",
+    "smithay_vulkan_support",
+]
+
 # Enables exporting data to the Tracy profiler.
 # NOTE: opens a port on localhost.
 # NOTE: breaks client reconnection due to sigpipe handling.
