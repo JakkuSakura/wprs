@@ -447,6 +447,20 @@ impl WprsServerState {
                 PointerEventKind::Press { serial, button } => {
                     debug!("button {:x} pressed at {:?}", button, event.position);
                     let serial = self.serial_map.insert(serial);
+
+                    // Button events in smithay don't carry a position; they use the last motion
+                    // location. Ensure the pointer location is up-to-date so cursor updates and
+                    // hit-testing happen immediately.
+                    pointer.motion(
+                        self,
+                        Some((surface.clone(), (0 as f64, 0 as f64).into())),
+                        &MotionEvent {
+                            location: event.position.into(),
+                            serial,
+                            time,
+                        },
+                    );
+
                     pointer.button(
                         self,
                         &ButtonEvent {
@@ -461,6 +475,17 @@ impl WprsServerState {
                 PointerEventKind::Release { serial, button } => {
                     debug!("button {:x} released at {:?}", button, event.position);
                     let serial = self.serial_map.insert(serial);
+
+                    pointer.motion(
+                        self,
+                        Some((surface.clone(), (0 as f64, 0 as f64).into())),
+                        &MotionEvent {
+                            location: event.position.into(),
+                            serial,
+                            time,
+                        },
+                    );
+
                     pointer.button(
                         self,
                         &ButtonEvent {
@@ -480,6 +505,17 @@ impl WprsServerState {
                     debug!(
                         "axis event: horizontal {horizontal:?}, vertical {vertical:?}, source {source:?}"
                     );
+
+                    pointer.motion(
+                        self,
+                        Some((surface.clone(), (0 as f64, 0 as f64).into())),
+                        &MotionEvent {
+                            location: event.position.into(),
+                            serial: 0.into(), // unused
+                            time,
+                        },
+                    );
+
                     let mut axis_frame = AxisFrame::new(time)
                         .value(Axis::Horizontal, horizontal.absolute)
                         .value(Axis::Vertical, vertical.absolute)
