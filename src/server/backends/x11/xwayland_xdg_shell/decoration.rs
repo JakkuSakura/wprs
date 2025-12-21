@@ -260,6 +260,15 @@ impl FramedSurface for XWaylandXdgToplevel {
                     _ => return Ok(None),
                 };
 
+                // Ensure `on_click` uses the current pointer location.
+                //
+                // `FallbackFrame::on_click` computes `FrameAction::ShowMenu` from the internally
+                // cached `mouse_coords`. If we don't update it here, a click without a preceding
+                // Motion event can use stale coordinates and the menu appears at the wrong spot.
+                let _ = self
+                    .window_frame
+                    .click_point_moved(Duration::ZERO, &event.surface.id(), x, y);
+
                 if let Some(action) = self.window_frame.on_click(Duration::ZERO, click, pressed) {
                     debug!("button: {click:?}, kind: {kind:?}, action {action:?}");
 
@@ -380,6 +389,13 @@ impl FramedSurface for XWaylandSubSurface {
                     BTN_RIGHT => FrameClick::Alternate,
                     _ => return Ok(None),
                 };
+
+                // See comment in `XWaylandXdgToplevel`.
+                let _ = self
+                    .frame
+                    .as_mut()
+                    .unwrap()
+                    .click_point_moved(Duration::ZERO, &event.surface.id(), x, y);
 
                 if let Some(action) =
                     self.frame

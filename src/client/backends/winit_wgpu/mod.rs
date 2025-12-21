@@ -19,12 +19,15 @@ use std::sync::Arc;
 use std::thread;
 
 use winit::application::ApplicationHandler;
+use winit::dpi::LogicalPosition;
 use winit::dpi::LogicalSize;
 use winit::dpi::PhysicalPosition;
 use winit::dpi::PhysicalSize;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::Cursor;
+use winit::window::CursorIcon;
+use winit::window::ResizeDirection;
 use winit::window::Window;
 use winit::window::WindowLevel;
 
@@ -114,6 +117,14 @@ struct WindowRenderer {
     texture: Option<wgpu::Texture>,
     texture_size: Option<(u32, u32)>,
 }
+
+// See ../winit/winit/examples/custom_decorations.rs for the baseline approach.
+//
+// In wprs, remote surfaces may draw their own UI in the top region of the window, so we avoid
+// taking over a fixed “titlebar area” for click-to-drag. Instead:
+// - Edge/corner resize is enabled in decorationless mode.
+// - Window move is enabled via Alt/Option + left-drag.
+const DECORATIONLESS_RESIZE_BORDER_LOGICAL: f64 = 8.0;
 
 impl WindowRenderer {
 
@@ -556,6 +567,10 @@ struct App {
     last_window_cursor_pos:
         HashMap<winit::window::WindowId, crate::protocols::wprs::geometry::Point<f64>>,
     last_cursor_pos: HashMap<winit::window::WindowId, crate::protocols::wprs::geometry::Point<f64>>,
+    last_window_cursor_pos_physical: HashMap<winit::window::WindowId, PhysicalPosition<f64>>,
+    local_modifiers: winit::keyboard::ModifiersState,
+    window_has_decorations: HashMap<winit::window::WindowId, bool>,
+    window_cursor_overridden: HashSet<winit::window::WindowId>,
     pointer_inside: HashSet<winit::window::WindowId>,
     pointer_surface: Option<WlSurfaceId>,
 
@@ -574,6 +589,91 @@ struct App {
 }
 
 impl App {
+    fn window_has_decorations(&self, window_id: winit::window::WindowId) -> bool {
+        self.window_has_decorations
+            .get(&window_id)
+            .copied()
+            .unwrap_or(true)
+    }
+
+    fn decorationless_resize_border_px(&self, window: &Window) -> f64 {
+        (DECORATIONLESS_RESIZE_BORDER_LOGICAL * window.scale_factor()).max(1.0)
+    }
+
+    fn hit_test_decorationless_resize(
+        &self,
+        window: &Window,
+        position: PhysicalPosition<f64>,
+    ) -> Option<ResizeDirection> {
+        let size = window.inner_size();
+        let width = size.width as f64;
+        let height = size.height as f64;
+        if width <= 0.0 || height <= 0.0 {
+            return None;
+        }
+
+        let border = self.decorationless_resize_border_px(window);
+        let x = position.x;
+        let y = position.y;
+
+        let left = x >= 0.0 && x < border;
+        let right = x <= width && x > width - border;
+        let top = y >= 0.0 && y < border;
+        let bottom = y <= height && y > height - border;
+
+        match (left, right, top, bottom) {
+            (true, _, true, _) => Some(ResizeDirection::NorthWest),
+            (_, true, true, _) => Some(ResizeDirection::NorthEast),
+            (true, _, _, true) => Some(ResizeDirection::SouthWest),
+            (_, true, _, true) => Some(ResizeDirection::SouthEast),
+            (true, _, _, _) => Some(ResizeDirection::West),
+            (_, true, _, _) => Some(ResizeDirection::East),
+            (_, _, true, _) => Some(ResizeDirection::North),
+            (_, _, _, true) => Some(ResizeDirection::South),
+            _ => None,
+        }
+    }
+
+    fn cursor_icon_for_resize(dir: ResizeDirection) -> CursorIcon {
+        match dir {
+            ResizeDirection::North | ResizeDirection::South => CursorIcon::NsResize,
+            ResizeDirection::East | ResizeDirection::West => CursorIcon::EwResize,
+            ResizeDirection::NorthEast | ResizeDirection::SouthWest => CursorIcon::NeswResize,
+            ResizeDirection::NorthWest | ResizeDirection::SouthEast => CursorIcon::NwseResize,
+        }
+    }
+
+    fn update_decorationless_cursor(
+        &mut self,
+        surface_id: WlSurfaceId,
+        window_id: winit::window::WindowId,
+        window: &Window,
+        position_physical: PhysicalPosition<f64>,
+    ) {
+        if self.window_has_decorations(window_id) {
+            return;
+        }
+
+        let resize_dir = self.hit_test_decorationless_resize(window, position_physical);
+        let want_move_cursor = self.local_modifiers.alt_key() && resize_dir.is_none();
+
+        if let Some(dir) = resize_dir {
+            window.set_cursor(Cursor::from(Self::cursor_icon_for_resize(dir)));
+            self.window_cursor_overridden.insert(window_id);
+            return;
+        }
+
+        if want_move_cursor {
+            window.set_cursor(Cursor::from(CursorIcon::Move));
+            self.window_cursor_overridden.insert(window_id);
+            return;
+        }
+
+        if self.window_cursor_overridden.remove(&window_id) {
+            self.apply_cursor_for_surface(surface_id);
+        }
+    }
+
     fn ui_scale(&self) -> f64 {
         self.ui_scale_factor.max(0.1)
     }
@@ -1249,6 +1349,8 @@ impl App {
                 // Ensure we have a window for this surface if it is presented.
                 if is_presented && !self.windows.contains_key(&surface_id) {
                     let mut attrs = if let Some(_toplevel) = toplevel {
+                        let use_native_decorations = _toplevel.decoration_mode != Some(DecorationMode::Client);
+
                         #[cfg(not(target_os = "macos"))]
                         let title = _toplevel.title.clone().unwrap_or_else(|| "wprs".to_string());
 
@@ -1257,18 +1359,25 @@ impl App {
                         #[cfg(target_os = "macos")]
                         let title = String::new();
 
-                        let attrs = Window::default_attributes().with_title(title);
+                        let mut attrs = Window::default_attributes().with_title(title);
+
+                        if !use_native_decorations {
+                            attrs = attrs.with_decorations(false);
+                        }
 
                         #[cfg(target_os = "macos")]
                         let attrs = {
                             use winit::platform::macos::WindowAttributesExtMacOS as _;
 
-                            // Keep native decorations/buttons, but allow drawing into the titlebar
-                            // area (full-size content view).
-                            attrs
-                                .with_title_hidden(true)
-                                .with_titlebar_transparent(true)
-                                .with_fullsize_content_view(true)
+                            if use_native_decorations {
+                                // Keep native decorations/buttons, but avoid drawing behind the
+                                // titlebar: remote apps may render their own custom titlebar
+                                // inside the captured content, and drawing behind the titlebar
+                                // causes the traffic-light buttons to overlap remote UI.
+                                attrs.with_title_hidden(true)
+                            } else {
+                                attrs
+                            }
                         };
 
                         attrs
@@ -1324,10 +1433,21 @@ impl App {
                     let renderer =
                         WindowRenderer::new(&self.shared, window.clone()).location(loc!())?;
                     self.surface_by_window.insert(window.id(), surface_id);
+                    if let Some(toplevel) = toplevel {
+                        self.window_has_decorations.insert(
+                            window.id(),
+                            toplevel.decoration_mode != Some(DecorationMode::Client),
+                        );
+                    }
                     if let Ok(pos) = window.inner_position() {
                         self.last_window_inner_pos.insert(window.id(), pos);
                     }
                     self.windows.insert(surface_id, renderer);
+
+                    // Start with a visible cursor even before the server sends its first cursor
+                    // update; some compositors/apps only update the cursor after the first motion.
+                    self.apply_cursor_for_surface(surface_id);
+                    self.cursor_dirty = false;
 
                     if let Some(popup) = popup {
                         if let Some(pos) = self.compute_popup_position(popup) {
@@ -1496,6 +1616,9 @@ impl ApplicationHandler<UserEvent> for App {
                     }
                     self.windows.remove(&surface_id);
                     self.surface_by_window.remove(&window_id);
+                    self.window_has_decorations.remove(&window_id);
+                    self.window_cursor_overridden.remove(&window_id);
+                    self.last_window_cursor_pos_physical.remove(&window_id);
                     if self.focused_window == Some(window_id) {
                         self.focused_window = None;
                         self.set_keyboard_focus(None);
@@ -1524,6 +1647,7 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             },
             WindowEvent::ModifiersChanged(modifiers) => {
+                self.local_modifiers = modifiers.state();
                 self.send_modifiers(modifiers.state());
             },
             WindowEvent::KeyboardInput { event, .. } => {
@@ -1552,15 +1676,23 @@ impl ApplicationHandler<UserEvent> for App {
                 self.send_key(linux_keycode, state);
             },
             WindowEvent::CursorMoved { position, .. } => {
-                let Some(renderer) = self.windows.get(&surface_id) else {
+                let Some(window) = self
+                    .windows
+                    .get(&surface_id)
+                    .map(|renderer| renderer.window.clone())
+                else {
                     return;
                 };
-                let logical = position.to_logical::<f64>(renderer.window.scale_factor());
+
+                self.last_window_cursor_pos_physical.insert(window_id, position);
+                let logical = position.to_logical::<f64>(window.scale_factor());
                 let window_pos = crate::protocols::wprs::geometry::Point {
                     x: logical.x,
                     y: logical.y,
                 };
                 self.last_window_cursor_pos.insert(window_id, window_pos);
+
+                self.update_decorationless_cursor(surface_id, window_id, window.as_ref(), position);
 
                 let pos = self.to_remote_surface_coords(window_pos);
                 self.last_cursor_pos.insert(window_id, pos);
@@ -1603,6 +1735,73 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             },
             WindowEvent::MouseInput { state, button, .. } => {
+                let Some(renderer) = self.windows.get(&surface_id) else {
+                    return;
+                };
+
+                if !self.window_has_decorations(window_id) {
+                    // Match winit's `custom_decorations` example: right click shows the system
+                    // window menu, if supported by the platform.
+                    if state == ElementState::Pressed && button == MouseButton::Right {
+                        // `show_window_menu` expects window-local coordinates, but the expected
+                        // unit (logical vs physical) differs across platforms.
+                        //
+                        // We already compute and store the cursor position in window logical
+                        // coordinates for mapping into remote surface coordinates; reuse that to
+                        // avoid HiDPI mismatches.
+                        let (logical_x, logical_y) = self
+                            .last_window_cursor_pos
+                            .get(&window_id)
+                            .map(|p| (p.x, p.y))
+                            .unwrap_or_else(|| {
+                                let size = renderer.window.inner_size();
+                                let scale = renderer.window.scale_factor();
+                                (
+                                    (f64::from(size.width) / scale) / 2.0,
+                                    (f64::from(size.height) / scale) / 2.0,
+                                )
+                            });
+
+                        #[cfg(target_os = "macos")]
+                        renderer
+                            .window
+                            .show_window_menu(LogicalPosition::new(logical_x, logical_y));
+
+                        #[cfg(not(target_os = "macos"))]
+                        renderer.window.show_window_menu(PhysicalPosition::new(
+                            logical_x * renderer.window.scale_factor(),
+                            logical_y * renderer.window.scale_factor(),
+                        ));
+                        return;
+                    }
+
+                    // Edge resize takes priority.
+                    if let Some(pos) = self.last_window_cursor_pos_physical.get(&window_id).copied()
+                    {
+                        if let Some(dir) =
+                            self.hit_test_decorationless_resize(renderer.window.as_ref(), pos)
+                        {
+                            if state == ElementState::Pressed {
+                                if let Err(err) = renderer.window.drag_resize_window(dir) {
+                                    debug!("drag_resize_window failed: {err:?}");
+                                }
+                            }
+                            return;
+                        }
+                    }
+
+                    // Avoid stealing clicks from remote UI; require Alt/Option to move.
+                    if state == ElementState::Pressed
+                        && button == MouseButton::Left
+                        && self.local_modifiers.alt_key()
+                    {
+                        if let Err(err) = renderer.window.drag_window() {
+                            debug!("drag_window failed: {err:?}");
+                        }
+                        return;
+                    }
+                }
+
                 let Some(button) = Self::linux_button_from_winit(button) else {
                     return;
                 };
@@ -1864,7 +2063,7 @@ pub fn run(
         queue: Arc::new(queue),
     };
 
-    let mut app = App {
+        let mut app = App {
         shared,
         serializer,
         decode_tx,
@@ -1888,6 +2087,10 @@ pub fn run(
         pressed_keycodes: HashSet::new(),
         last_window_cursor_pos: HashMap::new(),
         last_cursor_pos: HashMap::new(),
+        last_window_cursor_pos_physical: HashMap::new(),
+        local_modifiers: winit::keyboard::ModifiersState::default(),
+        window_has_decorations: HashMap::new(),
+        window_cursor_overridden: HashSet::new(),
         pointer_inside: HashSet::new(),
         pointer_surface: None,
 
@@ -1899,7 +2102,7 @@ pub fn run(
         cursor_frames: HashMap::new(),
         cursor_surface_clients: HashMap::new(),
 
-        current_cursor: None,
+        current_cursor: Some(Cursor::from(CursorIcon::Default)),
         warned_cursor_names: HashSet::new(),
         cursor_dirty: true,
     };
