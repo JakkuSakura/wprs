@@ -228,22 +228,27 @@ impl FramedSurface for XWaylandXdgToplevel {
         event: &PointerEvent,
     ) -> Result<Option<CursorIcon>> {
         let (x, y) = event.position;
-        let frame = &mut self.window_frame;
         let mut new_cursor = None;
         match event.kind {
             PointerEventKind::Enter { serial } => {
                 new_cursor = Some(
-                    frame
+                    self.window_frame
                         .click_point_moved(Duration::ZERO, &event.surface.id(), x, y)
                         .unwrap_or(CursorIcon::Default),
                 );
                 client_state.last_enter_serial = serial;
             },
             PointerEventKind::Leave { serial: _ } => {
-                frame.click_point_left();
+                self.window_frame.click_point_left();
+                new_cursor = Some(CursorIcon::Default);
             },
             PointerEventKind::Motion { time: _ } => {
-                new_cursor = frame.click_point_moved(Duration::ZERO, &event.surface.id(), x, y);
+                // `None` means "no special cursor" (default), not "no change".
+                new_cursor = Some(
+                    self.window_frame
+                        .click_point_moved(Duration::ZERO, &event.surface.id(), x, y)
+                        .unwrap_or(CursorIcon::Default),
+                );
             },
             PointerEventKind::Press { button, serial, .. }
             | PointerEventKind::Release { button, serial, .. } => {
@@ -255,12 +260,18 @@ impl FramedSurface for XWaylandXdgToplevel {
                     _ => return Ok(None),
                 };
 
-                if let Some(action) = frame.on_click(Duration::ZERO, click, pressed) {
+                if let Some(action) = self.window_frame.on_click(Duration::ZERO, click, pressed) {
                     debug!("button: {click:?}, kind: {kind:?}, action {action:?}");
 
                     self.frame_action(x11_surface, pointer, serial.into(), action, (x, y))
                         .location(loc!())?;
                 }
+
+                new_cursor = Some(
+                    self.window_frame
+                        .click_point_moved(Duration::ZERO, &event.surface.id(), x, y)
+                        .unwrap_or(CursorIcon::Default),
+                );
             },
             PointerEventKind::Axis { .. } => {},
         }
@@ -307,28 +318,37 @@ impl FramedSurface for XWaylandSubSurface {
         pointer: &WlPointer,
         event: &PointerEvent,
     ) -> Result<Option<CursorIcon>> {
-        let frame = self.frame.as_mut().unwrap();
         let mut new_cursor: Option<CursorIcon> = None;
 
         let (x, y) = event.position;
         match event.kind {
             PointerEventKind::Enter { serial } => {
                 new_cursor = Some(
-                    frame
+                    self.frame
+                        .as_mut()
+                        .unwrap()
                         .click_point_moved(Duration::ZERO, &event.surface.id(), x, y)
                         .unwrap_or(CursorIcon::Default),
                 );
                 client_state.last_enter_serial = serial;
             },
             PointerEventKind::Leave { serial: _ } => {
-                frame.click_point_left();
+                self.frame.as_mut().unwrap().click_point_left();
+                self.move_active = false;
+                new_cursor = Some(CursorIcon::Default);
             },
             PointerEventKind::Motion { time: _ } => {
-                new_cursor = frame.click_point_moved(Duration::ZERO, &event.surface.id(), x, y);
-
-                if self.move_active {
-                    new_cursor = Some(CursorIcon::Move);
-                }
+                let moved = self
+                    .frame
+                    .as_mut()
+                    .unwrap()
+                    .click_point_moved(Duration::ZERO, &event.surface.id(), x, y)
+                    .unwrap_or(CursorIcon::Default);
+                new_cursor = Some(if self.move_active {
+                    CursorIcon::Move
+                } else {
+                    moved
+                });
 
                 if self.move_active && !self.pending_frame_callback {
                     let (init_x, init_y) = self.move_pointer_location;
@@ -361,7 +381,12 @@ impl FramedSurface for XWaylandSubSurface {
                     _ => return Ok(None),
                 };
 
-                if let Some(action) = frame.on_click(Duration::ZERO, click, pressed) {
+                if let Some(action) =
+                    self.frame
+                        .as_mut()
+                        .unwrap()
+                        .on_click(Duration::ZERO, click, pressed)
+                {
                     debug!("button: {click:?}, kind: {kind:?}, action {action:?}");
 
                     self.frame_action(x11_surface, pointer, serial.into(), action, event.position)
@@ -369,6 +394,18 @@ impl FramedSurface for XWaylandSubSurface {
                 } else {
                     self.move_active = false;
                 }
+
+                let moved = self
+                    .frame
+                    .as_mut()
+                    .unwrap()
+                    .click_point_moved(Duration::ZERO, &event.surface.id(), x, y)
+                    .unwrap_or(CursorIcon::Default);
+                new_cursor = Some(if self.move_active {
+                    CursorIcon::Move
+                } else {
+                    moved
+                });
             },
             PointerEventKind::Axis { .. } => {},
         }
