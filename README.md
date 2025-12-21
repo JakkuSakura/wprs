@@ -21,7 +21,7 @@ Currently building wprs without AVX2 will lead to build failures.
 
 In practice:
 
-- For macOS/Windows development, build `wprsc` only.
+- For macOS/Windows development, build `wprsc` only. If you want to include "wayland" feature, you need to brew install `pkg-config` + `libxkbcommon`. 
 - For Linux deployment, build both `wprsc` and `wprsd`.
 
 ### Source

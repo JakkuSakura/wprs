@@ -1350,6 +1350,7 @@ impl core::Backend for WprsServerState {
     }
 }
 
+#[cfg(feature = "xwayland")]
 #[cfg(test)]
 mod tests {
     use super::configure_x11_surface_with_override_redirect_fallback;
