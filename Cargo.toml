@@ -189,6 +189,11 @@ smithay_all_linux = [
     "smithay_vulkan_support",
 ]
 
+# NOTE: The Linux DRM/libinput/libseat bundles above require system packages discoverable via
+# `pkg-config` (e.g. `libseat`, `libinput`, `libudev`, `libdrm`, `libgbm`, `EGL`).
+# If you see a build failure like "`libseat.pc` not found", install the corresponding -dev packages
+# (or avoid enabling the DRM/session features on that machine).
+
 # Enables exporting data to the Tracy profiler.
 # NOTE: opens a port on localhost.
 # NOTE: breaks client reconnection due to sigpipe handling.

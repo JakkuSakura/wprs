@@ -166,6 +166,10 @@ When no Wayland compositor is detected, `wprsc` will automatically fall back to
 this backend (it is enabled by default). You can override the selection with
 `--backend auto|wayland|winit-wgpu`.
 
+If you compile `wprsc` with one of the `smithay_*` feature bundles, the same
+bundle names are also accepted as `--backend` values (they currently alias to
+`winit-wgpu`). See `docs/SmithayFeatures.md`.
+
 ```bash
 cargo run --profile dev --bin wprsc
 ```

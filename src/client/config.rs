@@ -18,6 +18,40 @@ pub enum ClientBackend {
     Auto,
     Wayland,
     WinitWgpu,
+
+    // --- Smithay feature bundle aliases ---
+    //
+    // These variants exist so users can reference the same `smithay_*` feature
+    // bundle names from config/CLI. At the moment, wprsc does not have a
+    // Smithay-based presentation backend; these variants are treated as aliases
+    // to the existing `winit-wgpu` backend.
+    //
+    // Keeping them feature-gated ensures `--help` only shows values that were
+    // actually compiled into the binary.
+    #[cfg(feature = "smithay_winit_gl_wayland")]
+    SmithayWinitGlWayland,
+    #[cfg(feature = "smithay_winit_glow_wayland")]
+    SmithayWinitGlowWayland,
+    #[cfg(feature = "smithay_x11_gl_wayland")]
+    SmithayX11GlWayland,
+    #[cfg(feature = "smithay_x11_glow_wayland")]
+    SmithayX11GlowWayland,
+    #[cfg(feature = "smithay_drm_gbm_egl_gl_wayland")]
+    SmithayDrmGbmEglGlWayland,
+    #[cfg(feature = "smithay_drm_gbm_egl_glow_wayland")]
+    SmithayDrmGbmEglGlowWayland,
+    #[cfg(feature = "smithay_drm_pixman_wayland")]
+    SmithayDrmPixmanWayland,
+    #[cfg(feature = "smithay_drm_multi_gpu_wayland")]
+    SmithayDrmMultiGpuWayland,
+    #[cfg(feature = "smithay_xwayland")]
+    SmithayXwayland,
+    #[cfg(feature = "smithay_vulkan_support")]
+    SmithayVulkanSupport,
+    #[cfg(feature = "smithay_default_all")]
+    SmithayDefaultAll,
+    #[cfg(feature = "smithay_all_linux")]
+    SmithayAllLinux,
 }
 
 impl Default for ClientBackend {

@@ -20,11 +20,86 @@ pub trait ClientBackend {
     fn run(self: Box<Self>, serializer: Serializer<proto::Event, proto::Request>) -> Result<()>;
 }
 
+fn build_winit_wgpu_backend(config: ClientBackendConfig) -> Result<Box<dyn ClientBackend>> {
+    #[cfg(feature = "winit-wgpu-client")]
+    {
+        Ok(Box::new(
+            crate::client::backends::winit_wgpu::WinitWgpuClientBackend::new(config),
+        ))
+    }
+
+    #[cfg(not(feature = "winit-wgpu-client"))]
+    {
+        let _ = config;
+        bail!(
+            "winit-wgpu backend requested but not compiled in. Rebuild with `--features winit-wgpu-client`."
+        )
+    }
+}
+
+#[cfg(any(
+    feature = "smithay_winit_gl_wayland",
+    feature = "smithay_winit_glow_wayland",
+    feature = "smithay_x11_gl_wayland",
+    feature = "smithay_x11_glow_wayland",
+    feature = "smithay_drm_gbm_egl_gl_wayland",
+    feature = "smithay_drm_gbm_egl_glow_wayland",
+    feature = "smithay_drm_pixman_wayland",
+    feature = "smithay_drm_multi_gpu_wayland",
+    feature = "smithay_xwayland",
+    feature = "smithay_vulkan_support",
+    feature = "smithay_default_all",
+    feature = "smithay_all_linux",
+))]
+fn build_winit_wgpu_backend_aliased(
+    alias: config::ClientBackend,
+    config: ClientBackendConfig,
+) -> Result<Box<dyn ClientBackend>> {
+    info!("wprsc backend={alias:?} is currently an alias for backend=winit-wgpu");
+    build_winit_wgpu_backend(config)
+}
+
 pub fn build_client_backend(
     requested: config::ClientBackend,
     config: ClientBackendConfig,
 ) -> Result<Box<dyn ClientBackend>> {
     match requested {
+        #[cfg(feature = "smithay_winit_gl_wayland")]
+        config::ClientBackend::SmithayWinitGlWayland => {
+            build_winit_wgpu_backend_aliased(requested, config)
+        }
+        #[cfg(feature = "smithay_winit_glow_wayland")]
+        config::ClientBackend::SmithayWinitGlowWayland => {
+            build_winit_wgpu_backend_aliased(requested, config)
+        }
+        #[cfg(feature = "smithay_x11_gl_wayland")]
+        config::ClientBackend::SmithayX11GlWayland => build_winit_wgpu_backend_aliased(requested, config),
+        #[cfg(feature = "smithay_x11_glow_wayland")]
+        config::ClientBackend::SmithayX11GlowWayland => {
+            build_winit_wgpu_backend_aliased(requested, config)
+        }
+        #[cfg(feature = "smithay_drm_gbm_egl_gl_wayland")]
+        config::ClientBackend::SmithayDrmGbmEglGlWayland => {
+            build_winit_wgpu_backend_aliased(requested, config)
+        }
+        #[cfg(feature = "smithay_drm_gbm_egl_glow_wayland")]
+        config::ClientBackend::SmithayDrmGbmEglGlowWayland => {
+            build_winit_wgpu_backend_aliased(requested, config)
+        }
+        #[cfg(feature = "smithay_drm_pixman_wayland")]
+        config::ClientBackend::SmithayDrmPixmanWayland => build_winit_wgpu_backend_aliased(requested, config),
+        #[cfg(feature = "smithay_drm_multi_gpu_wayland")]
+        config::ClientBackend::SmithayDrmMultiGpuWayland => {
+            build_winit_wgpu_backend_aliased(requested, config)
+        }
+        #[cfg(feature = "smithay_xwayland")]
+        config::ClientBackend::SmithayXwayland => build_winit_wgpu_backend_aliased(requested, config),
+        #[cfg(feature = "smithay_vulkan_support")]
+        config::ClientBackend::SmithayVulkanSupport => build_winit_wgpu_backend_aliased(requested, config),
+        #[cfg(feature = "smithay_default_all")]
+        config::ClientBackend::SmithayDefaultAll => build_winit_wgpu_backend_aliased(requested, config),
+        #[cfg(feature = "smithay_all_linux")]
+        config::ClientBackend::SmithayAllLinux => build_winit_wgpu_backend_aliased(requested, config),
         config::ClientBackend::Wayland => {
             #[cfg(feature = "wayland-client")]
             {
@@ -43,20 +118,7 @@ pub fn build_client_backend(
             }
         },
         config::ClientBackend::WinitWgpu => {
-            #[cfg(feature = "winit-wgpu-client")]
-            {
-                Ok(Box::new(
-                    crate::client::backends::winit_wgpu::WinitWgpuClientBackend::new(config),
-                ))
-            }
-
-            #[cfg(not(feature = "winit-wgpu-client"))]
-            {
-                let _ = config;
-                bail!(
-                    "winit-wgpu backend requested but not compiled in. Rebuild with `--features winit-wgpu-client`."
-                )
-            }
+            build_winit_wgpu_backend(config)
         },
         config::ClientBackend::Auto => {
             #[cfg(feature = "wayland-client")]
@@ -81,9 +143,7 @@ pub fn build_client_backend(
 
             #[cfg(feature = "winit-wgpu-client")]
             {
-                Ok(Box::new(
-                    crate::client::backends::winit_wgpu::WinitWgpuClientBackend::new(config),
-                ))
+                build_winit_wgpu_backend(config)
             }
 
             #[cfg(not(feature = "winit-wgpu-client"))]
