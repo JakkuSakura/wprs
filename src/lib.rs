@@ -30,7 +30,7 @@ pub mod vec4u8;
 #[cfg(feature = "rdp")]
 pub use crate::protocols::rdp;
 
-#[cfg(all(feature = "wayland", feature = "wayland-client"))]
+#[cfg(all(feature = "xwayland", feature = "wayland-client"))]
 pub use crate::server::backends::x11::xwayland_xdg_shell;
 
 #[cfg(all(

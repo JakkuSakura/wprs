@@ -213,7 +213,7 @@ name = "wprsd"
 
 [[bin]]
 name = "xwayland-xdg-shell"
-required-features = ["wayland", "wayland-client"]
+required-features = ["xwayland", "wayland-client"]
 
 [[bin]]
 name = "wprsc"

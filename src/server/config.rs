@@ -371,7 +371,7 @@ impl WprsdArgs {
     }
 }
 
-#[cfg(all(feature = "wayland", feature = "wayland-client"))]
+#[cfg(all(feature = "xwayland", feature = "wayland-client"))]
 pub mod xwayland_xdg_shell {
     use super::*;
 
