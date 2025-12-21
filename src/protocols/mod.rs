@@ -4,3 +4,6 @@
 // without entangling their wire formats.
 
 pub mod wprs;
+
+#[cfg(feature = "rdp")]
+pub mod rdp;
