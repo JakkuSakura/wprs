@@ -1,0 +1,209 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 5192361..22bac5a 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -96,6 +96,9 @@ version = "1.5"
+ [dependencies.cfg-if]
+ version = "1"
+ 
++[dependencies.crypto-bigint]
++version = "0.7.0-rc.8"
++
+ [dependencies.crypto-mac]
+ version = "0.11"
+ 
+@@ -154,6 +157,10 @@ optional = true
+ [dependencies.rand]
+ version = "0.8"
+ 
++[dependencies.rand_core09]
++package = "rand_core"
++version = "0.9"
++
+ [dependencies.reqwest]
+ version = "0.12"
+ features = [
+diff --git a/src/kerberos/client/mod.rs b/src/kerberos/client/mod.rs
+index 1e369cf..abc8a17 100644
+--- a/src/kerberos/client/mod.rs
++++ b/src/kerberos/client/mod.rs
+@@ -169,7 +169,8 @@ pub async fn initialize_security_context<'a>(
+                             .as_ref()
+                             .ok_or_else(|| Error::new(ErrorKind::InternalError, "scard private key is missing"))?,
+                     );
+-                    client.dh_parameters = Some(generate_client_dh_parameters(&mut OsRng)?);
++                    let mut rng09 = rand_core09::OsRng;
++                    client.dh_parameters = Some(generate_client_dh_parameters(&mut rng09)?);
+ 
+                     AsReqPaDataOptions::SmartCard(Box::new(pk_init::GenerateAsPaDataOptions {
+                         p2p_cert: picky_asn1_der::from_bytes(&smart_card.certificate)?,
+@@ -179,8 +180,12 @@ pub async fn initialize_security_context<'a>(
+                             let mut sha1 = Sha1::new();
+                             sha1.update(data_to_sign);
+                             let hash = sha1.finalize().to_vec();
++                            use rsa::pkcs1::DecodeRsaPrivateKey;
++
+                             let private_key = PrivateKey::from_pem_str(&private_key_pem)?;
+-                            let rsa_private_key = RsaPrivateKey::try_from(&private_key)?;
++                            let pkcs1 = private_key.to_pkcs1()?;
++                            let rsa_private_key = RsaPrivateKey::from_pkcs1_der(&pkcs1)
++                                .map_err(|e| Error::new(ErrorKind::InternalError, e.to_string()))?;
+                             Ok(rsa_private_key.sign(Pkcs1v15Sign::new::<Sha1>(), &hash)?)
+                         }),
+                         with_pre_auth: false,
+diff --git a/src/lib.rs b/src/lib.rs
+index fbae2fa..06e31ab 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -2262,6 +2262,11 @@ impl From<picky_krb::crypto::KerberosCryptoError> for Error {
+                 ErrorKind::InvalidParameter,
+                 format!("unknown algorithm identifier: {:?}", identifier),
+             ),
++            KerberosCryptoError::RandError(_)
++            | KerberosCryptoError::TooSmallBuffer(_)
++            | KerberosCryptoError::ArrayTryFromSliceError(_) => {
++                Self::new(ErrorKind::InternalError, err.to_string())
++            }
+         }
+     }
+ }
+diff --git a/src/pk_init.rs b/src/pk_init.rs
+index 3d5188a..13b1eeb 100644
+--- a/src/pk_init.rs
++++ b/src/pk_init.rs
+@@ -115,7 +115,8 @@ pub fn generate_pa_datas_for_as_req(options: &GenerateAsPaDataOptions<'_>) -> Re
+ 
+     let kdc_req_body_sha1_hash = sha1.finalize().to_vec();
+ 
+-    let public_value = compute_public_key(&dh_parameters.private_key, &dh_parameters.modulus, &dh_parameters.base);
++    let public_value =
++        compute_public_key(&dh_parameters.private_key, &dh_parameters.modulus, &dh_parameters.base)?;
+ 
+     let auth_pack = AuthPack {
+         pk_authenticator: ExplicitContextTag0::from(PkAuthenticator {
+diff --git a/src/pku2u/cert_utils/validation.rs b/src/pku2u/cert_utils/validation.rs
+index f8e2bf6..eff7618 100644
+--- a/src/pku2u/cert_utils/validation.rs
++++ b/src/pku2u/cert_utils/validation.rs
+@@ -1,4 +1,4 @@
+-use num_bigint_dig::BigUint;
++use crypto_bigint::BoxedUint;
+ use picky::key::PublicKey as RsaPublicKey;
+ use picky_asn1_x509::signed_data::{CertificateChoices, SignedData};
+ use picky_asn1_x509::{Certificate, PublicKey};
+@@ -40,10 +40,10 @@ pub fn validate_server_p2p_certificate(signed_data: &SignedData) -> Result<RsaPu
+         }
+         .0;
+ 
+-        return Ok(RsaPublicKey::from_rsa_components(
+-            &BigUint::from_bytes_be(&public_key.modulus.0),
+-            &BigUint::from_bytes_be(&public_key.public_exponent.0),
+-        ));
++        let modulus = BoxedUint::from_be_slice_vartime(&public_key.modulus.0);
++        let exponent = BoxedUint::from_be_slice_vartime(&public_key.public_exponent.0);
++
++        return Ok(RsaPublicKey::from_rsa_components(&modulus, &exponent));
+     }
+ 
+     Err(Error::new(
+diff --git a/src/pku2u/generators.rs b/src/pku2u/generators.rs
+index 2d9209a..31d1b55 100644
+--- a/src/pku2u/generators.rs
++++ b/src/pku2u/generators.rs
+@@ -25,8 +25,8 @@ use picky_krb::gss_api::{
+ };
+ use picky_krb::negoex::RANDOM_ARRAY_SIZE;
+ use picky_krb::pkinit::{KrbFinished, Pku2uNegoBody, Pku2uNegoReq, Pku2uNegoReqMetadata};
+-use rand::rngs::OsRng;
+-use rand::Rng;
++use rand_core09::OsRng;
++use rand_core09::TryRngCore;
+ use time::OffsetDateTime;
+ 
+ use super::Pku2uConfig;
+@@ -146,13 +146,16 @@ pub fn get_default_parameters() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+ }
+ 
+ pub fn generate_server_dh_parameters(rng: &mut OsRng) -> Result<DhParameters> {
++    let mut nonce = [0u8; RANDOM_ARRAY_SIZE];
++    rng.try_fill_bytes(&mut nonce)
++        .map_err(|e| Error::new(ErrorKind::InternalError, format!("rng error: {e}")))?;
+     Ok(DhParameters {
+         base: Vec::new(),
+         modulus: Vec::new(),
+         q: Vec::new(),
+         private_key: Vec::new(),
+         other_public_key: None,
+-        server_nonce: Some(rng.gen::<[u8; RANDOM_ARRAY_SIZE]>()),
++        server_nonce: Some(nonce),
+         client_nonce: None,
+     })
+ }
+@@ -160,7 +163,11 @@ pub fn generate_server_dh_parameters(rng: &mut OsRng) -> Result<DhParameters> {
+ pub fn generate_client_dh_parameters(rng: &mut OsRng) -> Result<DhParameters> {
+     let (p, g, q) = get_default_parameters();
+ 
+-    let private_key = generate_private_key(&q, rng);
++    let private_key = generate_private_key(&q, rng)
++        .map_err(|e| Error::new(ErrorKind::InternalError, format!("rng error: {e}")))?;
++    let mut nonce = [0u8; RANDOM_ARRAY_SIZE];
++    rng.try_fill_bytes(&mut nonce)
++        .map_err(|e| Error::new(ErrorKind::InternalError, format!("rng error: {e}")))?;
+ 
+     Ok(DhParameters {
+         base: g,
+@@ -168,7 +175,7 @@ pub fn generate_client_dh_parameters(rng: &mut OsRng) -> Result<DhParameters> {
+         q,
+         private_key,
+         other_public_key: None,
+-        client_nonce: Some(rng.gen::<[u8; RANDOM_ARRAY_SIZE]>()),
++        client_nonce: Some(nonce),
+         server_nonce: None,
+     })
+ }
+diff --git a/src/pku2u/mod.rs b/src/pku2u/mod.rs
+index e20ea22..d3db8a2 100644
+--- a/src/pku2u/mod.rs
++++ b/src/pku2u/mod.rs
+@@ -29,6 +29,7 @@ use picky_krb::negoex::{NegoexMessage, RANDOM_ARRAY_SIZE};
+ use picky_krb::pkinit::PaPkAsRep;
+ use rand::rngs::OsRng;
+ use rand::Rng;
++use rand_core09::OsRng as OsRng09;
+ use uuid::Uuid;
+ pub use validate::validate_signed_data;
+ 
+@@ -129,6 +130,7 @@ pub struct Pku2u {
+ impl Pku2u {
+     pub fn new_server_from_config(config: Pku2uConfig) -> Result<Self> {
+         let mut rng = OsRng;
++        let mut rng09 = OsRng09;
+ 
+         Ok(Self {
+             mode: Pku2uMode::Server,
+@@ -143,7 +145,7 @@ impl Pku2u {
+             // Contains the nonce in the pkAuthenticator field in the request if the DH keys are NOT reused,
+             // 0 otherwise.
+             // generate dh parameters at the start in order to not waste time during authorization
+-            dh_parameters: generate_server_dh_parameters(&mut rng)?,
++            dh_parameters: generate_server_dh_parameters(&mut rng09)?,
+             negoex_messages: Vec::new(),
+             gss_api_messages: Vec::new(),
+             negoex_random: rng.gen::<[u8; RANDOM_ARRAY_SIZE]>(),
+@@ -152,6 +154,7 @@ impl Pku2u {
+ 
+     pub fn new_client_from_config(config: Pku2uConfig) -> Result<Self> {
+         let mut rng = OsRng;
++        let mut rng09 = OsRng09;
+ 
+         Ok(Self {
+             mode: Pku2uMode::Client,
+@@ -166,7 +169,7 @@ impl Pku2u {
+             // Contains the nonce in the pkAuthenticator field in the request if the DH keys are NOT reused,
+             // 0 otherwise.
+             // generate dh parameters at the start in order to not waste time during authorization
+-            dh_parameters: generate_client_dh_parameters(&mut rng)?,
++            dh_parameters: generate_client_dh_parameters(&mut rng09)?,
+             negoex_messages: Vec::new(),
+             gss_api_messages: Vec::new(),
+             negoex_random: rng.gen::<[u8; RANDOM_ARRAY_SIZE]>(),

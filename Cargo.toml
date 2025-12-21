@@ -117,8 +117,8 @@ name = "wprsc"
 name = "wprs-rdp-bridge"
 required-features = ["rdp"]
 
-[patch.crates-io]
-sspi = { path = "vendor/sspi" }
+#[patch.crates-io]
+#sspi = { path = "vendor/sspi" }
 
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports"] }

@@ -4320,13 +4320,14 @@ dependencies = [
 [[package]]
 name = "sspi"
 version = "0.16.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "523f6a99e26c1e6476a424d54bbda5354a01ee7f18b9d93dc48a8fd45ae8189b"
 dependencies = [
  "async-dnssd",
  "async-recursion",
  "bitflags 2.10.0",
  "byteorder",
  "cfg-if",
- "crypto-bigint",
  "crypto-mac",
  "futures",
  "hmac 0.12.1",
@@ -4343,7 +4344,6 @@ dependencies = [
  "picky-asn1-x509 0.14.6",
  "picky-krb",
  "rand 0.8.5",
- "rand_core 0.9.3",
  "rsa 0.9.9",
  "rustls",
  "serde",
