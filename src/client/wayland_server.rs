@@ -103,6 +103,7 @@ mod wayland_server_impl {
                 keyboard_mode: config.keyboard_mode,
                 xkb_keymap_file: config.xkb_keymap_file,
                 ui_scale_factor: config.ui_scale_factor,
+                min_output_scale_factor: config.min_output_scale_factor,
             },
         )
         .location(loc!())?;

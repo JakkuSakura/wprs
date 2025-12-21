@@ -12,6 +12,7 @@ pub struct ClientBackendConfig {
     pub keyboard_mode: config::KeyboardMode,
     pub xkb_keymap_file: Option<PathBuf>,
     pub ui_scale_factor: f64,
+    pub min_output_scale_factor: Option<i32>,
 }
 
 pub trait ClientBackend {

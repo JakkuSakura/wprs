@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use anyhow::ensure;
 use clap::Parser;
 use clap::ValueEnum;
 use serde_derive::Deserialize;
@@ -116,6 +117,15 @@ pub struct WprscConfig {
     #[serde(default = "default_one")]
     pub ui_scale_factor: f64,
 
+    /// Minimum output scale factor to report to the server (winit-wgpu backend only).
+    ///
+    /// This is an integer because the protocol uses Wayland-style integer scaling.
+    ///
+    /// On macOS, the default behavior is equivalent to `Some(2)` to avoid blurry
+    /// rendering on Retina displays if the server uses a low scale.
+    #[serde(default)]
+    pub min_output_scale_factor: Option<i32>,
+
     #[serde(skip_serializing, default)]
     pub forward_only: bool,
 }
@@ -141,6 +151,8 @@ impl Default for WprscConfig {
             xkb_keymap_file: None,
 
             ui_scale_factor: default_one(),
+
+            min_output_scale_factor: None,
 
             forward_only: false,
         }
@@ -202,6 +214,9 @@ pub struct WprscArgs {
 
     #[arg(long, value_name = "SCALE")]
     pub ui_scale_factor: Option<f64>,
+
+    #[arg(long, value_name = "SCALE")]
+    pub min_output_scale_factor: Option<i32>,
 
     #[arg(long, value_name = "BOOL", default_value_t = false, action = clap::ArgAction::Set)]
     pub forward_only: bool,
@@ -266,6 +281,14 @@ impl WprscArgs {
 
         if let Some(scale) = self.ui_scale_factor {
             cfg.ui_scale_factor = scale;
+        }
+
+        if let Some(scale) = self.min_output_scale_factor {
+            cfg.min_output_scale_factor = Some(scale);
+        }
+
+        if let Some(scale) = cfg.min_output_scale_factor {
+            ensure!(scale >= 1, "min_output_scale_factor must be >= 1");
         }
         if self.forward_only {
             cfg.forward_only = true;

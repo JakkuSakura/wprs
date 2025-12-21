@@ -327,6 +327,10 @@ wprs tracks scale using Wayland-style semantics:
 - `wprsd` sends a `DisplayConfig` message on connect (currently used by capture
   backends to advertise a best-effort DPI/scale).
 
+The `winit-wgpu` viewer backend periodically refreshes and re-sends local output
+information to the server (so scale changes from moving between monitors can be
+reflected without reconnecting).
+
 For the macOS fullscreen capture backend, wprsd detects the main display scale
 factor and reports it via both `DisplayConfig.scale_factor` and
 `SurfaceState.buffer_scale`.
@@ -338,6 +342,10 @@ Override knobs:
 - Client-side scaling (generic): set `ui_scale_factor = 1.25` in the `wprsc`
   config (or pass `--ui-scale-factor 1.25`) to scale window sizes for
   cross-platform clients.
+- Client output scale floor (winit-wgpu): set `min_output_scale_factor = Some(2)`
+  in the `wprsc` config (or pass `--min-output-scale-factor 2`) to clamp the
+  output scale reported to the server. On macOS, the default behavior is
+  equivalent to `2` to avoid blurry rendering on Retina displays.
 
 The helper binary model is the same as
 [xwayland-proxy-virtwl](https://github.com/talex5/wayland-proxy-virtwl#xwayland-support),

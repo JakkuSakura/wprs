@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::num::NonZeroU32;
 use std::sync::Arc;
+use std::time::Instant;
 use std::thread;
 
 use winit::application::ApplicationHandler;
@@ -75,6 +76,7 @@ pub struct WinitWgpuOptions {
     pub keyboard_mode: KeyboardMode,
     pub xkb_keymap_file: Option<std::path::PathBuf>,
     pub ui_scale_factor: f64,
+    pub min_output_scale_factor: i32,
 }
 
 #[derive(Debug)]
@@ -495,7 +497,11 @@ fn decode_filtered_to_padded_bgra(
     (padded_row_bytes as u32, padded)
 }
 
-fn output_info_from_monitor(id: u32, monitor: &winit::monitor::MonitorHandle) -> OutputInfo {
+fn output_info_from_monitor(
+    id: u32,
+    monitor: &winit::monitor::MonitorHandle,
+    min_output_scale_factor: i32,
+) -> OutputInfo {
     let name = monitor.name();
     let mut scale_factor = monitor.scale_factor().round() as i32;
     scale_factor = scale_factor.max(1);
@@ -507,7 +513,7 @@ fn output_info_from_monitor(id: u32, monitor: &winit::monitor::MonitorHandle) ->
     // We keep the logical size stable by scaling both the mode dimensions and the scale factor.
     #[cfg(target_os = "macos")]
     let (position, size, scale_factor) = {
-        let desired_scale = scale_factor.max(2);
+        let desired_scale = scale_factor.max(min_output_scale_factor);
         let multiplier = (desired_scale / scale_factor).max(1);
         (
             winit::dpi::PhysicalPosition::new(position.x * multiplier, position.y * multiplier),
@@ -553,6 +559,10 @@ struct App {
     surface_by_window: HashMap<winit::window::WindowId, WlSurfaceId>,
     outputs_sent: bool,
 
+    last_outputs_refresh: Instant,
+    last_outputs: Vec<OutputInfo>,
+    min_output_scale_factor: i32,
+
     server_display_config: Option<DisplayConfig>,
     surface_scale_factor: HashMap<WlSurfaceId, i32>,
 
@@ -588,6 +598,54 @@ struct App {
     current_cursor: Option<Cursor>,
     warned_cursor_names: HashSet<String>,
     cursor_dirty: bool,
+
+    warned_low_buffer_scale_on_hidpi: bool,
+}
+
+impl App {
+    fn refresh_outputs(&mut self, event_loop: &ActiveEventLoop, force: bool) {
+        let current: Vec<OutputInfo> = event_loop
+            .available_monitors()
+            .enumerate()
+            .map(|(idx, monitor)| {
+                output_info_from_monitor(idx as u32, &monitor, self.min_output_scale_factor)
+            })
+            .collect();
+
+        if !force && current == self.last_outputs {
+            return;
+        }
+
+        let shared_len = current.len().min(self.last_outputs.len());
+        for i in 0..shared_len {
+            if current[i] != self.last_outputs[i] {
+                self.serializer
+                    .writer()
+                    .send(SendType::Object(proto::Event::Output(OutputEvent::Update(
+                        current[i].clone(),
+                    ))));
+            }
+        }
+        if current.len() > self.last_outputs.len() {
+            for output in &current[self.last_outputs.len()..] {
+                self.serializer
+                    .writer()
+                    .send(SendType::Object(proto::Event::Output(OutputEvent::New(
+                        output.clone(),
+                    ))));
+            }
+        } else if self.last_outputs.len() > current.len() {
+            for output in &self.last_outputs[current.len()..] {
+                self.serializer
+                    .writer()
+                    .send(SendType::Object(proto::Event::Output(OutputEvent::Destroy(
+                        output.clone(),
+                    ))));
+            }
+        }
+
+        self.last_outputs = current;
+    }
 }
 
 impl App {
@@ -1400,6 +1458,24 @@ impl App {
                         let w = buf.metadata.width.max(1) as u32;
                         let h = buf.metadata.height.max(1) as u32;
                         let server_scale = state.buffer_scale.max(1) as f64;
+
+                        if !self.warned_low_buffer_scale_on_hidpi {
+                            let local_scale = event_loop
+                                .primary_monitor()
+                                .map(|m| m.scale_factor().round() as i32)
+                                .unwrap_or(1)
+                                .max(1);
+                            if local_scale >= 2 && server_scale < 2.0 {
+                                let server_suggested_scale =
+                                    self.server_display_config.as_ref().map(|cfg| cfg.scale_factor);
+                                warn!(
+                                    "HiDPI display detected (scale_factor={local_scale}) but server sent buffer_scale={} (server DisplayConfig.scale_factor={server_suggested_scale:?}); rendering may be blurry. If this is a capture backend, increase server DPI/scale (e.g. wprsd display_dpi). If this is an app-hosting backend, ensure output scale is being advertised correctly (winit-wgpu: min_output_scale_factor={}).",
+                                    state.buffer_scale.max(1),
+                                    self.min_output_scale_factor
+                                );
+                                self.warned_low_buffer_scale_on_hidpi = true;
+                            }
+                        }
                         let logical_w = (f64::from(w) / server_scale).max(1.0);
                         let logical_h = (f64::from(h) / server_scale).max(1.0);
                         // Client-side scaling knob: magnify/shrink the window in logical units.
@@ -1517,13 +1593,18 @@ impl ApplicationHandler<UserEvent> for App {
         self.outputs_sent = true;
 
         self.maybe_send_keymap();
-        for (idx, monitor) in event_loop.available_monitors().enumerate() {
-            self.serializer
-                .writer()
-                .send(SendType::Object(proto::Event::Output(OutputEvent::New(
-                    output_info_from_monitor(idx as u32, &monitor),
-                ))));
+
+        self.refresh_outputs(event_loop, true);
+        self.last_outputs_refresh = Instant::now();
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let interval = std::time::Duration::from_secs(2);
+        if self.last_outputs_refresh.elapsed() < interval {
+            return;
         }
+        self.last_outputs_refresh = Instant::now();
+        self.refresh_outputs(event_loop, false);
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
@@ -2063,6 +2144,10 @@ pub fn run(
         surface_by_window: HashMap::new(),
         outputs_sent: false,
 
+        last_outputs_refresh: Instant::now(),
+        last_outputs: Vec::new(),
+        min_output_scale_factor: options.min_output_scale_factor.max(1),
+
         server_display_config: None,
         surface_scale_factor: HashMap::new(),
 
@@ -2096,6 +2181,8 @@ pub fn run(
         current_cursor: Some(Cursor::from(CursorIcon::Default)),
         warned_cursor_names: HashSet::new(),
         cursor_dirty: true,
+
+        warned_low_buffer_scale_on_hidpi: false,
     };
 
     event_loop.run_app(&mut app)?;
@@ -2109,11 +2196,22 @@ pub struct WinitWgpuClientBackend {
 
 impl WinitWgpuClientBackend {
     pub fn new(config: crate::client::backend::ClientBackendConfig) -> Self {
+        #[cfg(target_os = "macos")]
+        let default_min_output_scale_factor = 2;
+
+        #[cfg(not(target_os = "macos"))]
+        let default_min_output_scale_factor = 1;
+
+        let min_output_scale_factor = config
+            .min_output_scale_factor
+            .unwrap_or(default_min_output_scale_factor)
+            .max(1);
         Self {
             options: WinitWgpuOptions {
                 keyboard_mode: config.keyboard_mode,
                 xkb_keymap_file: config.xkb_keymap_file,
                 ui_scale_factor: config.ui_scale_factor,
+                min_output_scale_factor,
             },
         }
     }
