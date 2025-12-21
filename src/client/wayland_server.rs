@@ -130,6 +130,7 @@ mod wayland_server_impl {
             let hello = transport::ClientHello {
                 supported_codecs: vec![
                     transport::TransportCodec::ShardedZstd { level: 1 },
+                    transport::TransportCodec::ShardedLz4,
                     transport::TransportCodec::ShardedRaw,
                 ],
                 supports_buffer_patches,

@@ -46,18 +46,70 @@ use crate::protocols::wprs::framing::Framed;
 // TODO: benchmark this and pick a value based on that.
 pub const MIN_SIZE_TO_COMPRESS: usize = 4096;
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum CompressorCodec {
+    Raw,
+    Zstd,
+    Lz4,
+}
+
 #[derive(Debug)]
 struct CompressorConfig {
     enabled: AtomicBool,
     level: AtomicI32,
+    codec: std::sync::atomic::AtomicU8,
+}
+
+fn codec_to_u8(codec: CompressorCodec) -> u8 {
+    match codec {
+        CompressorCodec::Raw => 0,
+        CompressorCodec::Zstd => 1,
+        CompressorCodec::Lz4 => 2,
+    }
+}
+
+fn codec_from_u8(v: u8) -> CompressorCodec {
+    match v {
+        0 => CompressorCodec::Raw,
+        1 => CompressorCodec::Zstd,
+        2 => CompressorCodec::Lz4,
+        _ => CompressorCodec::Zstd,
+    }
 }
 
 #[derive(Clone, Eq, PartialEq, Archive, Deserialize, Serialize)]
 pub struct CompressedShard {
     pub idx: usize,
     pub uncompressed_size: usize,
-    pub compression: bool,
+    pub codec: ShardCodec,
     pub data: Vec<u8>,
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Archive, Deserialize, Serialize)]
+pub enum ShardCodec {
+    Raw,
+    Zstd,
+    Lz4,
+}
+
+impl Framed for ShardCodec {
+    fn framed_write<W: Write>(&self, stream: &mut W) -> Result<()> {
+        let v: u8 = match self {
+            Self::Raw => 0,
+            Self::Zstd => 1,
+            Self::Lz4 => 2,
+        };
+        v.framed_write(stream)
+    }
+
+    fn framed_read<R: Read>(stream: &mut R) -> Result<Self> {
+        match u8::framed_read(stream).location(loc!())? {
+            0 => Ok(Self::Raw),
+            1 => Ok(Self::Zstd),
+            2 => Ok(Self::Lz4),
+            other => bail!("invalid shard codec {other}"),
+        }
+    }
 }
 
 impl CompressedShard {
@@ -74,7 +126,7 @@ impl fmt::Debug for CompressedShard {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CompressedShard")
             .field("idx", &self.idx)
-            .field("compression", &self.compression)
+            .field("codec", &self.codec)
             .field("data", &format_args!("Vec<u8>[{:?}]", &self.data.len()))
             .finish()
     }
@@ -86,7 +138,7 @@ impl Framed for CompressedShard {
         self.uncompressed_size
             .framed_write(stream)
             .location(loc!())?;
-        self.compression.framed_write(stream).location(loc!())?;
+        self.codec.framed_write(stream).location(loc!())?;
         self.data.framed_write(stream).location(loc!())?;
         Ok(())
     }
@@ -94,13 +146,13 @@ impl Framed for CompressedShard {
     fn framed_read<R: Read>(stream: &mut R) -> Result<Self> {
         let idx = usize::framed_read(stream).location(loc!())?;
         let uncompressed_size = usize::framed_read(stream).location(loc!())?;
-        let compression = bool::framed_read(stream).location(loc!())?;
+        let codec = ShardCodec::framed_read(stream).location(loc!())?;
         // TODO: this fails on client disconnection
         let data = Vec::<u8>::framed_read(stream).location(loc!())?;
         Ok(Self {
             idx,
             uncompressed_size,
-            compression,
+            codec,
             data,
         })
     }
@@ -245,6 +297,7 @@ fn spawn_compressor(
 
             let enabled = config.enabled.load(Ordering::Relaxed);
             let desired_level = config.level.load(Ordering::Relaxed);
+            let desired_codec = codec_from_u8(config.codec.load(Ordering::Relaxed));
             if enabled && desired_level != current_level {
                 if let Ok(mut new_compressor) = Compressor::new(desired_level) {
                     let _ = new_compressor.long_distance_matching(true);
@@ -258,11 +311,13 @@ fn spawn_compressor(
             //
             // This will allocate as much space as it needs, so compression
             // should never panic.
-            let compression = enabled && input.len() > MIN_SIZE_TO_COMPRESS;
-            let data = if compression {
-                compressor.compress(input).unwrap()
-            } else {
-                input.to_vec()
+            let can_compress = enabled && input.len() > MIN_SIZE_TO_COMPRESS;
+            let (codec, data) = match (desired_codec, can_compress) {
+                (CompressorCodec::Raw, _) | (_, false) => (ShardCodec::Raw, input.to_vec()),
+                (CompressorCodec::Zstd, true) => {
+                    (ShardCodec::Zstd, compressor.compress(input).unwrap())
+                },
+                (CompressorCodec::Lz4, true) => (ShardCodec::Lz4, lz4_flex::block::compress(input)),
             };
 
             // This will be an error when the ShardingDecompressor is dropped,
@@ -271,7 +326,7 @@ fn spawn_compressor(
             _ = output_tx.send(CompressedShard {
                 idx,
                 uncompressed_size: input.len(),
-                compression,
+                codec,
                 data,
             });
         }
@@ -294,6 +349,7 @@ impl ShardingCompressor {
         let config = Arc::new(CompressorConfig {
             enabled: AtomicBool::new(true),
             level: AtomicI32::new(compression_level),
+            codec: std::sync::atomic::AtomicU8::new(codec_to_u8(CompressorCodec::Zstd)),
         });
         for _ in 0..n_compressors.get() {
             spawn_compressor(
@@ -317,6 +373,12 @@ impl ShardingCompressor {
 
     pub fn set_compression_level(&self, level: i32) {
         self.config.level.store(level, Ordering::Relaxed);
+    }
+
+    pub fn set_codec(&self, codec: CompressorCodec) {
+        self.config
+            .codec
+            .store(codec_to_u8(codec), Ordering::Relaxed);
     }
 
     #[instrument(skip_all, level = "debug")]
@@ -383,15 +445,20 @@ pub fn spawn_decompressor(
         // dropped.
         for (input, mut output) in input_rx.iter() {
             let _span = debug_span!("decompressor").entered();
-            if input.compression {
-                // We made DivBufMut large enough, so this should never panic.
-                decompressor
-                    .decompress_to_buffer(&input.data, output.as_mut())
-                    .unwrap();
-            } else {
-                // The last output block will be larger than the data.
-                let output = &mut output[0..input.data.len()];
-                output.copy_from_slice(&input.data);
+            match input.codec {
+                ShardCodec::Raw => {
+                    let out = &mut output[0..input.data.len()];
+                    out.copy_from_slice(&input.data);
+                },
+                ShardCodec::Zstd => {
+                    decompressor
+                        .decompress_to_buffer(&input.data, output.as_mut())
+                        .unwrap();
+                },
+                ShardCodec::Lz4 => {
+                    let out = &mut output[0..input.uncompressed_size];
+                    lz4_flex::block::decompress_into(&input.data, out).unwrap();
+                },
             }
             drop(output); // release our handle
 

@@ -35,6 +35,7 @@ struct State<B> {
     compressor: ShardingCompressor,
     transport: TransportState,
     frames: std::collections::HashMap<crate::protocols::wprs::wayland::WlSurfaceId, FrameTracker>,
+    last_poll_sent_at: std::time::Instant,
 }
 
 #[derive(Debug, Clone)]
@@ -146,38 +147,67 @@ fn pick_transport_config(
     hello: &transport::ClientHello,
     stats: Option<&transport::TransportStats>,
 ) -> transport::TransportConfig {
-    let mut want_raw = hello.preferences.prefer_low_cpu || hello.preferences.prefer_low_latency;
-    if let Some(rtt) = stats.map(|s| s.rtt_ms) {
-        if let Some(max_rtt) = hello.preferences.max_rtt_ms {
-            if rtt > max_rtt {
-                want_raw = true;
-            }
-        }
-    }
-    if let Some(kbps) = hello.preferences.target_bitrate_kbps {
-        if kbps < 20_000 {
-            want_raw = false;
-        }
-    }
+    let prefs = &hello.preferences;
+    let rtt_ms = stats.map(|s| s.rtt_ms).unwrap_or_default();
 
-    let mut codec = TransportCodec::ShardedZstd { level: 1 };
-    if want_raw {
-        codec = TransportCodec::ShardedRaw;
-    } else if !hello
+    let bandwidth_hint_kbps = stats
+        .map(|s| s.rx_kbps)
+        .filter(|v| *v > 0)
+        .or(prefs.target_bitrate_kbps);
+
+    let latency_pressure = prefs.max_rtt_ms.is_some_and(|max| rtt_ms > max)
+        || prefs.latency_weight.saturating_sub(prefs.bandwidth_weight) >= 20;
+    let cpu_pressure = prefs.cpu_weight.saturating_sub(prefs.bandwidth_weight) >= 20;
+    let bandwidth_pressure = prefs.bandwidth_weight.saturating_sub(prefs.cpu_weight) >= 10;
+
+    let supports_zstd = hello
         .supported_codecs
         .iter()
-        .any(|c| matches!(c, TransportCodec::ShardedZstd { .. }))
-    {
-        codec = TransportCodec::ShardedRaw;
-    }
+        .any(|c| matches!(c, TransportCodec::ShardedZstd { .. }));
+    let supports_lz4 = hello
+        .supported_codecs
+        .iter()
+        .any(|c| matches!(c, TransportCodec::ShardedLz4));
+    let supports_raw = hello
+        .supported_codecs
+        .iter()
+        .any(|c| matches!(c, TransportCodec::ShardedRaw));
+
+    // Pick codec.
+    let codec = match bandwidth_hint_kbps {
+        Some(kbps) if kbps <= 8_000 && supports_zstd => {
+            // Tight bandwidth: spend CPU to reduce bytes.
+            TransportCodec::ShardedZstd { level: 6 }
+        },
+        Some(kbps) if kbps <= 20_000 && supports_zstd => TransportCodec::ShardedZstd { level: 3 },
+        Some(kbps) if kbps >= 120_000 && cpu_pressure && supports_raw => TransportCodec::ShardedRaw,
+        _ if (cpu_pressure || latency_pressure) && supports_lz4 => TransportCodec::ShardedLz4,
+        _ if supports_zstd => TransportCodec::ShardedZstd { level: 1 },
+        _ if supports_lz4 => TransportCodec::ShardedLz4,
+        _ => TransportCodec::ShardedRaw,
+    };
+
+    // Pick patching policy.
+    let patches_enabled = hello.supports_buffer_patches
+        && (bandwidth_pressure || (bandwidth_hint_kbps.is_some_and(|v| v <= 30_000)))
+        && !cpu_pressure;
+
+    // Cap FPS when latency is high or bandwidth is low.
+    let max_fps = match bandwidth_hint_kbps {
+        Some(kbps) if kbps <= 8_000 => Some(10),
+        Some(kbps) if kbps <= 20_000 => Some(20),
+        _ if latency_pressure && rtt_ms >= 150 => Some(30),
+        _ => None,
+    };
 
     transport::TransportConfig {
         codec,
         buffer_patches: transport::BufferPatchConfig {
-            enabled: hello.supports_buffer_patches,
+            enabled: patches_enabled,
             tile_px: 64,
-            full_frame_threshold: 0.6,
+            full_frame_threshold: if patches_enabled { 0.5 } else { 0.6 },
         },
+        max_fps,
     }
 }
 
@@ -356,10 +386,24 @@ fn apply_transport_event<B: PollingBackend>(
             if desired != state.transport.config {
                 state.transport.config = desired.clone();
                 match desired.codec {
-                    TransportCodec::ShardedRaw => state.compressor.set_compression_enabled(false),
+                    TransportCodec::ShardedRaw => {
+                        state.compressor.set_compression_enabled(false);
+                        state
+                            .compressor
+                            .set_codec(crate::sharding_compression::CompressorCodec::Raw);
+                    },
                     TransportCodec::ShardedZstd { level } => {
                         state.compressor.set_compression_enabled(true);
                         state.compressor.set_compression_level(level);
+                        state
+                            .compressor
+                            .set_codec(crate::sharding_compression::CompressorCodec::Zstd);
+                    },
+                    TransportCodec::ShardedLz4 => {
+                        state.compressor.set_compression_enabled(true);
+                        state
+                            .compressor
+                            .set_codec(crate::sharding_compression::CompressorCodec::Lz4);
                     },
                 }
                 state
@@ -389,11 +433,23 @@ fn apply_transport_event<B: PollingBackend>(
                     state.transport.config = desired.clone();
                     match desired.codec {
                         TransportCodec::ShardedRaw => {
-                            state.compressor.set_compression_enabled(false)
+                            state.compressor.set_compression_enabled(false);
+                            state
+                                .compressor
+                                .set_codec(crate::sharding_compression::CompressorCodec::Raw);
                         },
                         TransportCodec::ShardedZstd { level } => {
                             state.compressor.set_compression_enabled(true);
                             state.compressor.set_compression_level(level);
+                            state
+                                .compressor
+                                .set_codec(crate::sharding_compression::CompressorCodec::Zstd);
+                        },
+                        TransportCodec::ShardedLz4 => {
+                            state.compressor.set_compression_enabled(true);
+                            state
+                                .compressor
+                                .set_codec(crate::sharding_compression::CompressorCodec::Lz4);
                         },
                     }
                     state
@@ -429,6 +485,7 @@ pub fn run<B: PollingBackend>(
         compressor: ShardingCompressor::new(NonZeroUsize::new(16).unwrap(), 1).location(loc!())?,
         transport: TransportState::default(),
         frames: std::collections::HashMap::new(),
+        last_poll_sent_at: std::time::Instant::now(),
     };
 
     let reader = state
@@ -469,6 +526,16 @@ pub fn run<B: PollingBackend>(
             if !state.serializer.other_end_connected() {
                 return TimeoutAction::ToDuration(tick_interval);
             }
+
+            if let Some(max_fps) = state.transport.config.max_fps {
+                let max_fps = max_fps.max(1);
+                let min_interval = Duration::from_secs_f64(1.0 / (max_fps as f64));
+                if state.last_poll_sent_at.elapsed() < min_interval {
+                    return TimeoutAction::ToDuration(tick_interval);
+                }
+            }
+
+            state.last_poll_sent_at = std::time::Instant::now();
 
             match state.backend.poll() {
                 Ok(observations) => {

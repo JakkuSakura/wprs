@@ -105,6 +105,7 @@ This repo has an experimental transport negotiation path for polling/capture-sty
 This is currently used to toggle between:
 
 - `ShardedZstd { level }` (current default)
+- `ShardedLz4` (CPU-light)
 - `ShardedRaw` (no compression)
 
 The server side uses best-effort RTT/bitrate hints and client CPU/GPU capability hints.

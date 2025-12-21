@@ -28,10 +28,14 @@ pub struct TransportPreferences {
     pub target_bitrate_kbps: Option<u32>,
     /// Optional max RTT hint, in milliseconds.
     pub max_rtt_ms: Option<u32>,
-    /// Prefer lower CPU usage over bandwidth.
-    pub prefer_low_cpu: bool,
-    /// Prefer lower latency over bandwidth.
-    pub prefer_low_latency: bool,
+
+    /// Relative preference weights (0..=100).
+    ///
+    /// These are hints used by the transport policy when trade-offs are needed.
+    pub latency_weight: u8,
+    pub bandwidth_weight: u8,
+    pub cpu_weight: u8,
+    pub clarity_weight: u8,
 }
 
 /// Client-reported GPU / acceleration capabilities.
@@ -67,8 +71,10 @@ impl Default for TransportPreferences {
         Self {
             target_bitrate_kbps: None,
             max_rtt_ms: None,
-            prefer_low_cpu: false,
-            prefer_low_latency: false,
+            latency_weight: 25,
+            bandwidth_weight: 25,
+            cpu_weight: 25,
+            clarity_weight: 25,
         }
     }
 }
@@ -81,6 +87,8 @@ pub enum TransportCodec {
     ShardedZstd { level: i32 },
     /// Frame payloads are sharded but never compressed (bandwidth-heavy, CPU-light).
     ShardedRaw,
+    /// Frame payloads are sharded and LZ4-compressed (low CPU, moderate compression).
+    ShardedLz4,
 }
 
 impl Default for TransportCodec {
@@ -112,6 +120,8 @@ impl Default for BufferPatchConfig {
 pub struct TransportConfig {
     pub codec: TransportCodec,
     pub buffer_patches: BufferPatchConfig,
+    /// Optional server-side frame rate cap.
+    pub max_fps: Option<u32>,
 }
 
 impl Default for TransportConfig {
@@ -119,6 +129,7 @@ impl Default for TransportConfig {
         Self {
             codec: TransportCodec::default(),
             buffer_patches: BufferPatchConfig::default(),
+            max_fps: None,
         }
     }
 }
@@ -135,7 +146,11 @@ pub struct ClientHello {
 impl Default for ClientHello {
     fn default() -> Self {
         Self {
-            supported_codecs: vec![TransportCodec::default(), TransportCodec::ShardedRaw],
+            supported_codecs: vec![
+                TransportCodec::default(),
+                TransportCodec::ShardedLz4,
+                TransportCodec::ShardedRaw,
+            ],
             supports_buffer_patches: false,
             cpu: CpuFeatures::default(),
             gpu: GpuFeatures::default(),
@@ -162,6 +177,11 @@ pub struct Pong {
 pub struct TransportStats {
     /// Best-effort round-trip time observed by the client.
     pub rtt_ms: u32,
+
+    /// Best-effort transport goodput as observed by the client.
+    pub rx_kbps: u32,
+    pub tx_kbps: u32,
+
     /// Best-effort mean decode time per frame (milliseconds).
     pub decode_ms: u32,
 }

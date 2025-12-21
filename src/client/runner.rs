@@ -92,6 +92,7 @@ fn run_viewer(config: WprscConfig) -> Result<()> {
         let hello = transport::ClientHello {
             supported_codecs: vec![
                 transport::TransportCodec::ShardedZstd { level: 1 },
+                transport::TransportCodec::ShardedLz4,
                 transport::TransportCodec::ShardedRaw,
             ],
             supports_buffer_patches,

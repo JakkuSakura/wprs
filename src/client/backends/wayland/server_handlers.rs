@@ -607,8 +607,9 @@ impl WprsClientState {
         match req {
             transport::TransportRequest::Config(cfg) => {
                 info!(
-                    "server transport config: codec={:?} patches_enabled={} tile_px={} full_frame_threshold={}",
+                    "server transport config: codec={:?} max_fps={:?} patches_enabled={} tile_px={} full_frame_threshold={}",
                     cfg.codec,
+                    cfg.max_fps,
                     cfg.buffer_patches.enabled,
                     cfg.buffer_patches.tile_px,
                     cfg.buffer_patches.full_frame_threshold

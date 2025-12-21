@@ -647,6 +647,10 @@ struct App {
     server_transport_config: Option<transport::TransportConfig>,
     ping_seq: u64,
     inflight_ping: Option<(u64, std::time::Instant)>,
+
+    last_rtt_ms: u32,
+    bw_window_started: std::time::Instant,
+    rx_bytes_in_window: u64,
 }
 
 impl App {
@@ -1364,6 +1368,7 @@ impl App {
     ) -> Result<()> {
         match msg {
             RecvType::RawBuffer(buf) => {
+                self.rx_bytes_in_window = self.rx_bytes_in_window.saturating_add(buf.len() as u64);
                 self.buffer_cache = Some(UncompressedBufferData(buf.into()));
                 Ok(())
             },
@@ -1395,8 +1400,9 @@ impl App {
         match req {
             transport::TransportRequest::Config(cfg) => {
                 info!(
-                    "server transport config: codec={:?} patches_enabled={} tile_px={} full_frame_threshold={}",
+                    "server transport config: codec={:?} max_fps={:?} patches_enabled={} tile_px={} full_frame_threshold={}",
                     cfg.codec,
+                    cfg.max_fps,
                     cfg.buffer_patches.enabled,
                     cfg.buffer_patches.tile_px,
                     cfg.buffer_patches.full_frame_threshold
@@ -1406,15 +1412,8 @@ impl App {
             transport::TransportRequest::Pong(pong) => {
                 if let Some((seq, started)) = self.inflight_ping.take() {
                     if seq == pong.seq {
-                        let rtt_ms = started.elapsed().as_millis().min(u128::from(u32::MAX)) as u32;
-                        self.serializer
-                            .writer()
-                            .send(SendType::Object(proto::Event::Transport(
-                                transport::TransportEvent::Stats(transport::TransportStats {
-                                    rtt_ms,
-                                    decode_ms: 0,
-                                }),
-                            )));
+                        self.last_rtt_ms =
+                            started.elapsed().as_millis().min(u128::from(u32::MAX)) as u32;
                     }
                 }
             },
@@ -1790,6 +1789,25 @@ impl ApplicationHandler<UserEvent> for App {
                 );
             },
             UserEvent::PingTick => {
+                let elapsed = self.bw_window_started.elapsed();
+                if elapsed.as_millis() > 0 {
+                    let rx_kbps =
+                        ((self.rx_bytes_in_window as f64) * 8.0 / 1000.0) / elapsed.as_secs_f64();
+                    self.bw_window_started = std::time::Instant::now();
+                    self.rx_bytes_in_window = 0;
+
+                    self.serializer
+                        .writer()
+                        .send(SendType::Object(proto::Event::Transport(
+                            transport::TransportEvent::Stats(transport::TransportStats {
+                                rtt_ms: self.last_rtt_ms,
+                                rx_kbps: rx_kbps.round().max(0.0) as u32,
+                                tx_kbps: 0,
+                                decode_ms: 0,
+                            }),
+                        )));
+                }
+
                 // Only keep one in-flight ping at a time.
                 if self.inflight_ping.is_none() {
                     self.ping_seq = self.ping_seq.wrapping_add(1);
@@ -2362,6 +2380,10 @@ pub fn run(
         server_transport_config: None,
         ping_seq: 0,
         inflight_ping: None,
+
+        last_rtt_ms: 0,
+        bw_window_started: std::time::Instant::now(),
+        rx_bytes_in_window: 0,
     };
 
     event_loop.run_app(&mut app)?;
