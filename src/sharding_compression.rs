@@ -19,10 +19,8 @@ use std::io::Read;
 use std::io::Write;
 use std::mem;
 use std::num::NonZeroUsize;
-use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
-use std::sync::atomic::{AtomicBool, AtomicI32};
 use std::thread;
 
 use crossbeam_channel::Receiver;
@@ -46,70 +44,12 @@ use crate::protocols::wprs::framing::Framed;
 // TODO: benchmark this and pick a value based on that.
 pub const MIN_SIZE_TO_COMPRESS: usize = 4096;
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub enum CompressorCodec {
-    Raw,
-    Zstd,
-    Lz4,
-}
-
-#[derive(Debug)]
-struct CompressorConfig {
-    enabled: AtomicBool,
-    level: AtomicI32,
-    codec: std::sync::atomic::AtomicU8,
-}
-
-fn codec_to_u8(codec: CompressorCodec) -> u8 {
-    match codec {
-        CompressorCodec::Raw => 0,
-        CompressorCodec::Zstd => 1,
-        CompressorCodec::Lz4 => 2,
-    }
-}
-
-fn codec_from_u8(v: u8) -> CompressorCodec {
-    match v {
-        0 => CompressorCodec::Raw,
-        1 => CompressorCodec::Zstd,
-        2 => CompressorCodec::Lz4,
-        _ => CompressorCodec::Zstd,
-    }
-}
-
 #[derive(Clone, Eq, PartialEq, Archive, Deserialize, Serialize)]
 pub struct CompressedShard {
     pub idx: usize,
     pub uncompressed_size: usize,
-    pub codec: ShardCodec,
+    pub compression: bool,
     pub data: Vec<u8>,
-}
-
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Archive, Deserialize, Serialize)]
-pub enum ShardCodec {
-    Raw,
-    Zstd,
-    Lz4,
-}
-
-impl Framed for ShardCodec {
-    fn framed_write<W: Write>(&self, stream: &mut W) -> Result<()> {
-        let v: u8 = match self {
-            Self::Raw => 0,
-            Self::Zstd => 1,
-            Self::Lz4 => 2,
-        };
-        v.framed_write(stream)
-    }
-
-    fn framed_read<R: Read>(stream: &mut R) -> Result<Self> {
-        match u8::framed_read(stream).location(loc!())? {
-            0 => Ok(Self::Raw),
-            1 => Ok(Self::Zstd),
-            2 => Ok(Self::Lz4),
-            other => bail!("invalid shard codec {other}"),
-        }
-    }
 }
 
 impl CompressedShard {
@@ -126,7 +66,7 @@ impl fmt::Debug for CompressedShard {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CompressedShard")
             .field("idx", &self.idx)
-            .field("codec", &self.codec)
+            .field("compression", &self.compression)
             .field("data", &format_args!("Vec<u8>[{:?}]", &self.data.len()))
             .finish()
     }
@@ -138,7 +78,7 @@ impl Framed for CompressedShard {
         self.uncompressed_size
             .framed_write(stream)
             .location(loc!())?;
-        self.codec.framed_write(stream).location(loc!())?;
+        self.compression.framed_write(stream).location(loc!())?;
         self.data.framed_write(stream).location(loc!())?;
         Ok(())
     }
@@ -146,13 +86,13 @@ impl Framed for CompressedShard {
     fn framed_read<R: Read>(stream: &mut R) -> Result<Self> {
         let idx = usize::framed_read(stream).location(loc!())?;
         let uncompressed_size = usize::framed_read(stream).location(loc!())?;
-        let codec = ShardCodec::framed_read(stream).location(loc!())?;
+        let compression = bool::framed_read(stream).location(loc!())?;
         // TODO: this fails on client disconnection
         let data = Vec::<u8>::framed_read(stream).location(loc!())?;
         Ok(Self {
             idx,
             uncompressed_size,
-            codec,
+            compression,
             data,
         })
     }
@@ -281,12 +221,11 @@ impl Framed for CompressedShards {
 }
 
 fn spawn_compressor(
-    config: Arc<CompressorConfig>,
+    compression_level: i32,
     input_rx: Receiver<(usize, Box<dyn AsRef<[u8]> + Send + Sync + 'static>)>,
     output_tx: Sender<CompressedShard>,
 ) -> Result<()> {
-    let mut current_level = config.level.load(Ordering::Relaxed);
-    let mut compressor = Compressor::new(current_level).location(loc!())?;
+    let mut compressor = Compressor::new(compression_level).location(loc!())?;
     compressor.long_distance_matching(true).location(loc!())?;
     thread::spawn(move || {
         // The iterator (and, consequently, the thread) will terminate when all
@@ -294,30 +233,17 @@ fn spawn_compressor(
         // dropped.
         for (idx, input) in input_rx {
             let input = (*input).as_ref();
-
-            let enabled = config.enabled.load(Ordering::Relaxed);
-            let desired_level = config.level.load(Ordering::Relaxed);
-            let desired_codec = codec_from_u8(config.codec.load(Ordering::Relaxed));
-            if enabled && desired_level != current_level {
-                if let Ok(mut new_compressor) = Compressor::new(desired_level) {
-                    let _ = new_compressor.long_distance_matching(true);
-                    compressor = new_compressor;
-                    current_level = desired_level;
-                }
-            }
             // We could pre-allocate a buffer at the end of the loop, while
             // waiting for the next input, and use compress_to_buffer, but that
             // doesn't result in a significant speedup here.
             //
             // This will allocate as much space as it needs, so compression
             // should never panic.
-            let can_compress = enabled && input.len() > MIN_SIZE_TO_COMPRESS;
-            let (codec, data) = match (desired_codec, can_compress) {
-                (CompressorCodec::Raw, _) | (_, false) => (ShardCodec::Raw, input.to_vec()),
-                (CompressorCodec::Zstd, true) => {
-                    (ShardCodec::Zstd, compressor.compress(input).unwrap())
-                },
-                (CompressorCodec::Lz4, true) => (ShardCodec::Lz4, lz4_flex::block::compress(input)),
+            let compression = input.len() > MIN_SIZE_TO_COMPRESS;
+            let data = if compression {
+                compressor.compress(input).unwrap()
+            } else {
+                input.to_vec()
             };
 
             // This will be an error when the ShardingDecompressor is dropped,
@@ -326,7 +252,7 @@ fn spawn_compressor(
             _ = output_tx.send(CompressedShard {
                 idx,
                 uncompressed_size: input.len(),
-                codec,
+                compression,
                 data,
             });
         }
@@ -337,7 +263,6 @@ fn spawn_compressor(
 pub struct ShardingCompressor {
     compressor_input: Sender<(usize, Box<dyn AsRef<[u8]> + Send + Sync + 'static>)>,
     compressor_output: Receiver<CompressedShard>,
-    config: Arc<CompressorConfig>,
 }
 
 impl ShardingCompressor {
@@ -346,14 +271,9 @@ impl ShardingCompressor {
         // know n_shards when compress is called, not now.
         let (compressor_input_tx, compressor_input_rx) = crossbeam_channel::unbounded();
         let (compressor_output_tx, compressor_output_rx) = crossbeam_channel::unbounded();
-        let config = Arc::new(CompressorConfig {
-            enabled: AtomicBool::new(true),
-            level: AtomicI32::new(compression_level),
-            codec: std::sync::atomic::AtomicU8::new(codec_to_u8(CompressorCodec::Zstd)),
-        });
         for _ in 0..n_compressors.get() {
             spawn_compressor(
-                Arc::clone(&config),
+                compression_level,
                 compressor_input_rx.clone(),
                 compressor_output_tx.clone(),
             )
@@ -363,22 +283,7 @@ impl ShardingCompressor {
         Ok(Self {
             compressor_input: compressor_input_tx,
             compressor_output: compressor_output_rx,
-            config,
         })
-    }
-
-    pub fn set_compression_enabled(&self, enabled: bool) {
-        self.config.enabled.store(enabled, Ordering::Relaxed);
-    }
-
-    pub fn set_compression_level(&self, level: i32) {
-        self.config.level.store(level, Ordering::Relaxed);
-    }
-
-    pub fn set_codec(&self, codec: CompressorCodec) {
-        self.config
-            .codec
-            .store(codec_to_u8(codec), Ordering::Relaxed);
     }
 
     #[instrument(skip_all, level = "debug")]
@@ -445,20 +350,15 @@ pub fn spawn_decompressor(
         // dropped.
         for (input, mut output) in input_rx.iter() {
             let _span = debug_span!("decompressor").entered();
-            match input.codec {
-                ShardCodec::Raw => {
-                    let out = &mut output[0..input.data.len()];
-                    out.copy_from_slice(&input.data);
-                },
-                ShardCodec::Zstd => {
-                    decompressor
-                        .decompress_to_buffer(&input.data, output.as_mut())
-                        .unwrap();
-                },
-                ShardCodec::Lz4 => {
-                    let out = &mut output[0..input.uncompressed_size];
-                    lz4_flex::block::decompress_into(&input.data, out).unwrap();
-                },
+            if input.compression {
+                // We made DivBufMut large enough, so this should never panic.
+                decompressor
+                    .decompress_to_buffer(&input.data, output.as_mut())
+                    .unwrap();
+            } else {
+                // The last output block will be larger than the data.
+                let output = &mut output[0..input.data.len()];
+                output.copy_from_slice(&input.data);
             }
             drop(output); // release our handle
 

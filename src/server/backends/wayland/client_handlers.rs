@@ -91,7 +91,6 @@ use crate::protocols::wprs::RecvType;
 use crate::protocols::wprs::Request;
 use crate::protocols::wprs::SendType;
 use crate::protocols::wprs::core;
-use crate::protocols::wprs::transport;
 use crate::protocols::wprs::wayland::DataDestinationEvent;
 use crate::protocols::wprs::wayland::DataEvent;
 use crate::protocols::wprs::wayland::DataRequest;
@@ -125,7 +124,7 @@ fn configure_x11_surface_with_override_redirect_fallback(
         Err(X11SurfaceError::UnsupportedForOverrideRedirect) => {
             synthetic_configure().log_and_ignore(loc);
             Ok(())
-        },
+        }
         Err(err) => Err(err).location(loc),
     }
 }
@@ -145,7 +144,7 @@ impl WprsServerState {
             Some(object_id) => object_id.clone(),
             None => {
                 return Err(UnknownSurfaceErr::ObjectId(*surface_id));
-            },
+            }
         };
         let Ok(client) = self.dh.get_client(object_id.clone()) else {
             return Err(UnknownSurfaceErr::Client(object_id));
@@ -214,23 +213,23 @@ impl WprsServerState {
                             "Ignoring pointer gesture event for unknown object {:?}",
                             surface_id
                         )
-                    },
+                    }
                     UnknownSurfaceErr::Client(object_id) => {
                         anyhow!(
                             "Ignoring pointer gesture event for unknown client {:?}",
                             object_id
                         )
-                    },
+                    }
                     UnknownSurfaceErr::Surface(client) => {
                         anyhow!(
                             "Ignoring pointer gesture event for unknown surface {:?}",
                             client
                         )
-                    },
+                    }
                 };
                 warn!("{msg:?}");
                 return Ok(());
-            },
+            }
         };
 
         let time = self.start_time.elapsed().as_millis() as u32;
@@ -259,7 +258,7 @@ impl WprsServerState {
                         fingers,
                     },
                 );
-            },
+            }
             PointerGestureEvent::SwipeUpdate { delta, .. } => {
                 pointer.gesture_swipe_update(
                     self,
@@ -268,7 +267,7 @@ impl WprsServerState {
                         delta: delta.into(),
                     },
                 );
-            },
+            }
             PointerGestureEvent::SwipeEnd {
                 serial, cancelled, ..
             } => {
@@ -281,7 +280,7 @@ impl WprsServerState {
                         cancelled,
                     },
                 );
-            },
+            }
 
             PointerGestureEvent::HoldBegin {
                 serial, fingers, ..
@@ -295,7 +294,7 @@ impl WprsServerState {
                         fingers,
                     },
                 );
-            },
+            }
             PointerGestureEvent::HoldEnd {
                 serial, cancelled, ..
             } => {
@@ -308,7 +307,7 @@ impl WprsServerState {
                         cancelled,
                     },
                 );
-            },
+            }
 
             PointerGestureEvent::PinchBegin {
                 serial, fingers, ..
@@ -322,7 +321,7 @@ impl WprsServerState {
                         fingers,
                     },
                 );
-            },
+            }
             PointerGestureEvent::PinchUpdate {
                 delta,
                 scale,
@@ -338,7 +337,7 @@ impl WprsServerState {
                         rotation,
                     },
                 );
-            },
+            }
             PointerGestureEvent::PinchEnd {
                 serial, cancelled, ..
             } => {
@@ -351,7 +350,7 @@ impl WprsServerState {
                         cancelled,
                     },
                 );
-            },
+            }
         }
 
         Ok(())
@@ -367,13 +366,13 @@ impl WprsServerState {
                 .map_err(|err| match err {
                     UnknownSurfaceErr::ObjectId(surface_id) => {
                         anyhow!("Ignoring pointer event for unknown object {:?}", surface_id)
-                    },
+                    }
                     UnknownSurfaceErr::Client(object_id) => {
                         anyhow!("Ignoring pointer event for unknown client {:?}", object_id)
-                    },
+                    }
                     UnknownSurfaceErr::Surface(client) => {
                         anyhow!("Ignoring pointer event for unknown surface {:?}", client)
-                    },
+                    }
                 })
                 .warn(loc!());
 
@@ -382,7 +381,7 @@ impl WprsServerState {
                 Err(_) => {
                     // We do not want to propogate this error since we already warned about it.
                     continue;
-                },
+                }
             };
 
             let time = self.start_time.elapsed().as_millis() as u32;
@@ -400,7 +399,7 @@ impl WprsServerState {
                             time,
                         },
                     );
-                },
+                }
                 PointerEventKind::Leave { serial } => {
                     debug!("pointer left");
 
@@ -433,7 +432,7 @@ impl WprsServerState {
                             time,
                         },
                     );
-                },
+                }
                 PointerEventKind::Motion => {
                     debug!("pointer moved to {:?}", event.position);
                     pointer.motion(
@@ -445,7 +444,7 @@ impl WprsServerState {
                             time,
                         },
                     );
-                },
+                }
                 PointerEventKind::Press { serial, button } => {
                     debug!("button {:x} pressed at {:?}", button, event.position);
                     let serial = self.serial_map.insert(serial);
@@ -473,7 +472,7 @@ impl WprsServerState {
                         },
                     );
                     self.pressed_buttons.insert(button);
-                },
+                }
                 PointerEventKind::Release { serial, button } => {
                     debug!("button {:x} released at {:?}", button, event.position);
                     let serial = self.serial_map.insert(serial);
@@ -498,7 +497,7 @@ impl WprsServerState {
                         },
                     );
                     self.pressed_buttons.remove(&button);
-                },
+                }
                 PointerEventKind::Axis {
                     horizontal,
                     vertical,
@@ -534,7 +533,7 @@ impl WprsServerState {
                         axis_frame = axis_frame.stop(Axis::Vertical);
                     }
                     pointer.axis(self, axis_frame);
-                },
+                }
             }
         }
         pointer.frame(self);
@@ -580,7 +579,7 @@ impl WprsServerState {
                     filter,
                 );
                 self.pressed_keys.insert(keycode);
-            },
+            }
             KeyState::Released => {
                 keyboard.input::<(), _>(
                     self,
@@ -591,7 +590,7 @@ impl WprsServerState {
                     filter,
                 );
                 self.pressed_keys.remove(&keycode);
-            },
+            }
             KeyState::Repeated => {
                 // Map repeated to released + pressed
                 // Smithay 0.7 keystates don't support repetition
@@ -611,7 +610,7 @@ impl WprsServerState {
                     time,
                     filter,
                 );
-            },
+            }
         }
 
         Ok(())
@@ -645,7 +644,7 @@ impl WprsServerState {
                             KeyState::Pressed,
                             SERIAL_COUNTER.next_serial(),
                         )
-                        .location(loc!())?;
+                            .location(loc!())?;
                     } else {
                         delayed_keycodes.push(keycode);
                     }
@@ -666,10 +665,10 @@ impl WprsServerState {
                         ),
                         UnknownSurfaceErr::Client(object_id) => {
                             anyhow!("Ignoring keyboard event for unknown client {:?}", object_id)
-                        },
+                        }
                         UnknownSurfaceErr::Surface(client) => {
                             anyhow!("Ignoring keyboard event for unknown surface {:?}", client)
-                        },
+                        }
                     })
                     .warn(loc!())?;
 
@@ -677,7 +676,7 @@ impl WprsServerState {
                 keyboard.set_focus(self, Some(surface), serial);
                 data_device::set_data_device_focus(&self.dh, &self.seat, Some(client.clone()));
                 primary_selection::set_primary_focus(&self.dh, &self.seat, Some(client));
-            },
+            }
             KeyboardEvent::Leave { serial } => {
                 let serial = self.serial_map.insert(serial);
                 keyboard.set_focus(self, None, serial);
@@ -688,25 +687,25 @@ impl WprsServerState {
                     self.set_key_state(keycode, KeyState::Released, SERIAL_COUNTER.next_serial())
                         .location(loc!())?;
                 }
-            },
+            }
             KeyboardEvent::Key(KeyInner {
-                serial,
-                raw_code,
-                state: istate,
-            }) => {
+                                   serial,
+                                   raw_code,
+                                   state: istate,
+                               }) => {
                 let serial = self.serial_map.insert(serial);
 
                 self.set_key_state(raw_code, istate, serial)
                     .location(loc!())?;
-            },
+            }
             KeyboardEvent::RepeatInfo(info) => match info {
                 RepeatInfo::Repeat { rate, delay } => {
                     keyboard.change_repeat_info(
                         i32::try_from(u32::from(rate)).location(loc!())?,
                         i32::try_from(delay).location(loc!())?,
                     );
-                },
-                RepeatInfo::Disable => {},
+                }
+                RepeatInfo::Disable => {}
             },
             KeyboardEvent::Keymap(keymap) => keyboard
                 .set_keymap_from_string(self, keymap)
@@ -739,16 +738,16 @@ impl WprsServerState {
                             KeyState::Pressed,
                             SERIAL_COUNTER.next_serial(),
                         )
-                        .location(loc!())?;
+                            .location(loc!())?;
                         self.set_key_state(
                             keycode,
                             KeyState::Released,
                             SERIAL_COUNTER.next_serial(),
                         )
-                        .location(loc!())?;
+                            .location(loc!())?;
                     }
                 }
-            },
+            }
         }
 
         Ok(())
@@ -822,7 +821,7 @@ impl WprsServerState {
         match &toplevel {
             ToplevelEvent::Configure(configure) => {
                 self.handle_toplevel_configure(configure).location(loc!())?;
-            },
+            }
             ToplevelEvent::Close(close) => {
                 let surfaces = self.xdg_shell_state.toplevel_surfaces();
                 if let Some(surface) = surfaces.iter().find(|surface| {
@@ -836,12 +835,14 @@ impl WprsServerState {
 
                 #[cfg(feature = "xwayland")]
                 {
-                    if let Some(x11_surface) = self.x11_surface_for_wl_surface_id(&close.surface_id)
+                    if let Some(x11_surface) =
+                        self.x11_surface_for_wl_surface_id(&close.surface_id)
+
                     {
                         x11_surface.close().location(loc!())?;
                     }
                 }
-            },
+            }
         }
         Ok(())
     }
@@ -880,7 +881,7 @@ impl WprsServerState {
         match &popup {
             PopupEvent::Configure(configure) => {
                 self.handle_popup_configure(configure).location(loc!())?;
-            },
+            }
         }
         Ok(())
     }
@@ -908,23 +909,23 @@ impl WprsServerState {
                 });
 
                 compositor_utils::update_output(local_output, output);
-            },
+            }
             OutputEvent::Update(output) => {
                 let (local_output, _) = match self.outputs.entry(output.id) {
                     Entry::Occupied(entry) => entry.into_mut(),
                     Entry::Vacant(_) => {
                         warn!("update to unknown display {:?}", output.id);
                         return Ok(());
-                    },
+                    }
                 };
 
                 compositor_utils::update_output(local_output, output);
-            },
+            }
             OutputEvent::Destroy(output) => {
                 if let Some((_, (_, global_id))) = self.outputs.remove_entry(&output.id) {
                     self.dh.remove_global::<Self>(global_id);
                 }
-            },
+            }
         };
 
         Ok(())
@@ -955,7 +956,7 @@ impl WprsServerState {
             DisplayConfig::default(),
             surfaces,
         )
-        .location(loc!())?
+            .location(loc!())?
         {
             self.serializer.writer().send(msg);
         }
@@ -968,16 +969,16 @@ impl WprsServerState {
     fn handle_data_event(&mut self, data_event: DataEvent) -> Result<()> {
         match data_event {
             DataEvent::SourceEvent(DataSourceEvent::DnDMimeTypeAcceptedByDestination(
-                mime_type,
-            )) => {
+                                       mime_type,
+                                   )) => {
                 if let Some(source) = &self.dnd_source {
                     source.target(mime_type);
                 }
-            },
+            }
             DataEvent::SourceEvent(DataSourceEvent::MimeTypeSendRequestedByDestination(
-                source,
-                mime,
-            )) => {
+                                       source,
+                                       mime,
+                                   )) => {
                 let (recv_fd, send_fd) = {
                     #[cfg(any(
                         target_os = "linux",
@@ -1042,23 +1043,23 @@ impl WprsServerState {
                         data_device::request_data_device_client_selection(
                             &self.seat, mime, send_fd,
                         )
-                        .location(loc!())?;
-                    },
+                            .location(loc!())?;
+                    }
                     DataSource::Primary => {
                         primary_selection::request_primary_client_selection(
                             &self.seat, mime, send_fd,
                         )
-                        .location(loc!())?;
-                    },
+                            .location(loc!())?;
+                    }
                     DataSource::DnD => {
                         // TODO: unwrap is wrong, need to check for none at the top
                         self.dnd_source
                             .as_ref()
                             .location(loc!())?
                             .send(mime, send_fd.as_fd());
-                    },
+                    }
                 }
-            },
+            }
             DataEvent::SourceEvent(DataSourceEvent::DnDActionSelected(action)) => {
                 if let Some(source) = &self.dnd_source {
                     source.action(
@@ -1068,12 +1069,12 @@ impl WprsServerState {
                             .location(loc!())?,
                     );
                 }
-            },
+            }
             DataEvent::SourceEvent(DataSourceEvent::DnDDropPerformed) => {
                 if let Some(source) = &self.dnd_source {
                     source.dnd_drop_performed();
                 }
-            },
+            }
             DataEvent::SourceEvent(
                 DataSourceEvent::DnDFinished | DataSourceEvent::DnDCancelled,
             ) => {
@@ -1109,14 +1110,14 @@ impl WprsServerState {
                         );
                     }
                 }
-            },
+            }
             // TODO: remove? after taking another pass at data device code.
             // DestinationEvent(DnDActionsOfferedBySource(_)) => {
             //     // handled by start_dnd
             // },
             DataEvent::DestinationEvent(DataDestinationEvent::DnDActionSelected(_action)) => {
                 // TODO: remove? after taking another pass at data device code.
-            },
+            }
             DataEvent::DestinationEvent(DataDestinationEvent::DnDEnter(drag_enter)) => {
                 let (_, _, surface) = self
                     .object_client_surface_from_id(&drag_enter.surface)
@@ -1127,10 +1128,10 @@ impl WprsServerState {
                         ),
                         UnknownSurfaceErr::Client(object_id) => {
                             anyhow!("Ignoring DnDEnter event for unknown client {:?}", object_id)
-                        },
+                        }
                         UnknownSurfaceErr::Surface(client) => {
                             anyhow!("Ignoring DnDEnter event for unknown surface {:?}", client)
-                        },
+                        }
                     })
                     .warn(loc!())?;
 
@@ -1162,7 +1163,7 @@ impl WprsServerState {
                             .location(loc!())?,
                     },
                 );
-            },
+            }
             DataEvent::DestinationEvent(DataDestinationEvent::DnDLeave) => {
                 let pointer = self.seat.get_pointer().location(loc!())?;
                 debug!("drag leave");
@@ -1177,7 +1178,7 @@ impl WprsServerState {
                         },
                     );
                 }
-            },
+            }
             DataEvent::DestinationEvent(DataDestinationEvent::DnDMotion(drag_motion)) => {
                 let pointer = self.seat.get_pointer().location(loc!())?;
                 debug!("drag moved to {:?}", drag_motion);
@@ -1195,7 +1196,7 @@ impl WprsServerState {
                         },
                     );
                 }
-            },
+            }
             DataEvent::DestinationEvent(DataDestinationEvent::DnDDrop) => {
                 let pointer = self.seat.get_pointer().location(loc!())?;
                 debug!("drag dropped");
@@ -1211,7 +1212,7 @@ impl WprsServerState {
                         state: ButtonState::Released,
                     },
                 );
-            },
+            }
             DataEvent::DestinationEvent(DataDestinationEvent::SelectionSet(source, metadata)) => {
                 match source {
                     DataSource::Selection => data_device::set_data_device_selection(
@@ -1226,9 +1227,9 @@ impl WprsServerState {
                         metadata.mime_types,
                         (),
                     ),
-                    DataSource::DnD => {},
+                    DataSource::DnD => {}
                 };
-            },
+            }
             DataEvent::TransferData(source, data) => {
                 let fd = match source {
                     DataSource::Selection => self.selection_pipe.take().location(loc!())?,
@@ -1243,7 +1244,7 @@ impl WprsServerState {
                 thread::spawn(move || {
                     f.write_all(&data.0).log_and_ignore(loc!());
                 });
-            },
+            }
         }
 
         Ok(())
@@ -1265,14 +1266,14 @@ impl WprsServerState {
                         surface_event.payload,
                         object_id
                     )
-                },
+                }
                 UnknownSurfaceErr::Surface(client) => {
                     anyhow!(
                         "Ignoring {:?} event for unknown surface {:?}",
                         surface_event.payload,
                         client
                     )
-                },
+                }
             })
             .warn(loc!())?;
 
@@ -1297,7 +1298,7 @@ impl WprsServerState {
 
                     surface_state.output_ids = new_ids.iter().cloned().collect();
                 });
-            },
+            }
         }
 
         Ok(())
@@ -1310,7 +1311,7 @@ impl WprsServerState {
             RecvType::Object(other) => core::dispatch_event(self, other),
             RecvType::RawBuffer(_) => unreachable!(),
         }
-        .log_and_ignore(loc!());
+            .log_and_ignore(loc!());
         // TODO: maybe send errors back to the client.
     }
 }
@@ -1346,26 +1347,6 @@ impl core::Backend for WprsServerState {
 
     fn on_surface_event(&mut self, event: SurfaceEvent) -> Result<()> {
         self.handle_surface_event(event)
-    }
-
-    fn on_transport_event(&mut self, event: transport::TransportEvent) -> Result<()> {
-        match event {
-            transport::TransportEvent::Ping(ping) => {
-                self.serializer
-                    .writer()
-                    .send(SendType::Object(Request::Transport(
-                        transport::TransportRequest::Pong(transport::Pong {
-                            seq: ping.seq,
-                            sent_at_ms: ping.sent_at_ms,
-                        }),
-                    )));
-                Ok(())
-            },
-            transport::TransportEvent::ClientHello(_) | transport::TransportEvent::Stats(_) => {
-                // Negotiation/adaptation for the Smithay backend is TODO.
-                Ok(())
-            },
-        }
     }
 }
 

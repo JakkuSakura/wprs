@@ -619,7 +619,6 @@ mod endpoint_tests {
 
 pub mod framing;
 pub mod geometry;
-pub mod transport;
 pub mod tuple;
 pub mod wayland;
 pub mod xdg_shell;
@@ -694,13 +693,11 @@ pub enum Request {
     ClientDisconnected(ClientId),
     Capabilities(Capabilities),
     DisplayConfig(DisplayConfig),
-    Transport(transport::TransportRequest),
 }
 
 #[derive(Debug, Clone, PartialEq, Archive, Deserialize, Serialize)]
 pub enum Event {
     WprsClientConnect,
-    Transport(transport::TransportEvent),
     Output(wayland::OutputEvent),
     PointerFrame(Vec<wayland::PointerEvent>),
     PointerGesture(wayland::PointerGestureEvent),

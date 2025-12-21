@@ -137,7 +137,6 @@ impl MockSurface {
                 // Filled in by the core loop.
                 data: BufferData::External,
             })),
-            buffer_update: None,
             role: Some(Role::XdgToplevel(XdgToplevelState {
                 id: XdgToplevelId(1),
                 parent: None,

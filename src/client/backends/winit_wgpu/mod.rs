@@ -16,20 +16,17 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::num::NonZeroU32;
 use std::sync::Arc;
-use std::time::Instant;
 use std::thread;
+use std::time::Instant;
 
 use winit::application::ApplicationHandler;
+use winit::cursor::{Cursor, CursorIcon, CustomCursorSource};
 use winit::dpi::LogicalSize;
 use winit::dpi::PhysicalPosition;
 use winit::dpi::PhysicalSize;
-use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
+use winit::event::{ButtonSource, ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
-use winit::window::Cursor;
-use winit::window::CursorIcon;
-use winit::window::ResizeDirection;
-use winit::window::Window;
-use winit::window::WindowLevel;
+use winit::window::{ResizeDirection, Window, WindowAttributes, WindowId, WindowLevel};
 
 use calloop::EventLoop as CalloopEventLoop;
 use calloop::channel::Event as CalloopChannelEvent;
@@ -49,7 +46,6 @@ use crate::protocols::wprs::Request;
 use crate::protocols::wprs::SendType;
 use crate::protocols::wprs::Serializer;
 use crate::protocols::wprs::geometry::{Point, Size};
-use crate::protocols::wprs::transport;
 use crate::protocols::wprs::wayland::ClientSurface;
 use crate::protocols::wprs::wayland::PointerGestureEvent;
 use crate::protocols::wprs::wayland::{
@@ -81,19 +77,11 @@ pub struct WinitWgpuOptions {
 }
 
 #[derive(Debug)]
-pub enum UserEvent {
-    ServerMessage(RecvType<Request>),
-    DecodedFrame(DecodedFrame),
-    PingTick,
-}
-
-#[derive(Debug)]
 pub struct DecodedFrame {
     pub surface_id: WlSurfaceId,
     pub metadata: crate::protocols::wprs::wayland::BufferMetadata,
     pub padded_row_bytes: u32,
     pub data: Vec<u8>,
-    pub origin: Option<(u32, u32)>,
 }
 
 #[derive(Debug)]
@@ -101,7 +89,6 @@ struct DecodeJob {
     surface_id: WlSurfaceId,
     metadata: crate::protocols::wprs::wayland::BufferMetadata,
     filtered: crate::vec4u8::Vec4u8s,
-    origin: Option<(u32, u32)>,
 }
 
 #[derive(Clone)]
@@ -113,7 +100,7 @@ struct WgpuShared {
 }
 
 struct WindowRenderer {
-    window: Arc<Window>,
+    window: Arc<dyn Window>,
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
     pipeline: wgpu::RenderPipeline,
@@ -135,7 +122,7 @@ struct WindowRenderer {
 const DECORATIONLESS_RESIZE_BORDER_LOGICAL: f64 = 8.0;
 
 impl WindowRenderer {
-    fn new(shared: &WgpuShared, window: Arc<Window>) -> Result<Self> {
+    fn new(shared: &WgpuShared, window: Arc<dyn Window>) -> Result<Self> {
         let surface = shared
             .instance
             .create_surface(window.clone())
@@ -148,7 +135,7 @@ impl WindowRenderer {
             .copied()
             .find(|f| f.is_srgb())
             .unwrap_or(caps.formats[0]);
-        let size = window.inner_size();
+        let size = window.surface_size();
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
@@ -397,48 +384,6 @@ impl WindowRenderer {
         );
     }
 
-    fn update_texture_region_from_padded_bgra(
-        &mut self,
-        shared: &WgpuShared,
-        origin: (u32, u32),
-        metadata: &crate::protocols::wprs::wayland::BufferMetadata,
-        padded_row_bytes: u32,
-        padded_data: &[u8],
-    ) {
-        let Some(texture) = self.texture.as_ref() else {
-            return;
-        };
-        let width = metadata.width.max(0) as u32;
-        let height = metadata.height.max(0) as u32;
-        if width == 0 || height == 0 {
-            return;
-        }
-
-        shared.queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d {
-                    x: origin.0,
-                    y: origin.1,
-                    z: 0,
-                },
-                aspect: wgpu::TextureAspect::All,
-            },
-            padded_data,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(padded_row_bytes),
-                rows_per_image: Some(height),
-            },
-            wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-        );
-    }
-
     fn render(&mut self, shared: &WgpuShared) -> Result<()> {
         debug_assert_eq!(self.bind_group.is_some(), self.texture.is_some());
         debug_assert_eq!(self.bind_group.is_some(), self.texture_size.is_some());
@@ -547,12 +492,17 @@ fn output_info_from_monitor(
     monitor: &winit::monitor::MonitorHandle,
     min_output_scale_factor: i32,
 ) -> OutputInfo {
-    let name = monitor.name();
+    let name = monitor.name().map(|name| name.into_owned());
     let mut scale_factor = monitor.scale_factor().round() as i32;
     scale_factor = scale_factor.max(1);
 
-    let position = monitor.position();
-    let size = monitor.size();
+    let position = monitor
+        .position()
+        .unwrap_or_else(|| winit::dpi::PhysicalPosition::new(0, 0));
+    let size = monitor
+        .current_video_mode()
+        .map(|mode| mode.size())
+        .unwrap_or_else(|| winit::dpi::PhysicalSize::new(0, 0));
 
     #[cfg(not(target_os = "macos"))]
     let _ = min_output_scale_factor;
@@ -602,9 +552,11 @@ struct App {
     shared: WgpuShared,
     serializer: Serializer<proto::Event, Request>,
     decode_tx: std::sync::mpsc::Sender<DecodeJob>,
+    server_rx: std::sync::mpsc::Receiver<RecvType<Request>>,
+    decoded_frame_rx: std::sync::mpsc::Receiver<DecodedFrame>,
     buffer_cache: Option<UncompressedBufferData>,
     windows: HashMap<WlSurfaceId, WindowRenderer>,
-    surface_by_window: HashMap<winit::window::WindowId, WlSurfaceId>,
+    surface_by_window: HashMap<WindowId, WlSurfaceId>,
     outputs_sent: bool,
 
     last_outputs_refresh: Instant,
@@ -620,21 +572,20 @@ struct App {
     ui_scale_factor: f64,
 
     serial_counter: u32,
-    focused_window: Option<winit::window::WindowId>,
+    focused_window: Option<WindowId>,
     focused_surface: Option<WlSurfaceId>,
     surfaces_with_frame: HashSet<WlSurfaceId>,
     pressed_keycodes: HashSet<u32>,
-    last_window_cursor_pos:
-        HashMap<winit::window::WindowId, crate::protocols::wprs::geometry::Point<f64>>,
-    last_cursor_pos: HashMap<winit::window::WindowId, crate::protocols::wprs::geometry::Point<f64>>,
-    last_window_cursor_pos_physical: HashMap<winit::window::WindowId, PhysicalPosition<f64>>,
+    last_window_cursor_pos: HashMap<WindowId, crate::protocols::wprs::geometry::Point<f64>>,
+    last_cursor_pos: HashMap<WindowId, crate::protocols::wprs::geometry::Point<f64>>,
+    last_window_cursor_pos_physical: HashMap<WindowId, PhysicalPosition<f64>>,
     local_modifiers: winit::keyboard::ModifiersState,
-    window_has_decorations: HashMap<winit::window::WindowId, bool>,
-    window_cursor_overridden: HashSet<winit::window::WindowId>,
-    pointer_inside: HashSet<winit::window::WindowId>,
+    window_has_decorations: HashMap<WindowId, bool>,
+    window_cursor_overridden: HashSet<WindowId>,
+    pointer_inside: HashSet<WindowId>,
     pointer_surface: Option<WlSurfaceId>,
 
-    last_window_inner_pos: HashMap<winit::window::WindowId, PhysicalPosition<i32>>,
+    last_window_surface_pos: HashMap<WindowId, PhysicalPosition<i32>>,
 
     pinch_state: HashMap<WlSurfaceId, PinchGestureState>,
 
@@ -646,18 +597,12 @@ struct App {
     current_cursor: Option<Cursor>,
     warned_cursor_names: HashSet<String>,
     cursor_dirty: bool,
-    warned_low_buffer_scale_on_hidpi: bool,
-    server_transport_config: Option<transport::TransportConfig>,
-    ping_seq: u64,
-    inflight_ping: Option<(u64, std::time::Instant)>,
 
-    last_rtt_ms: u32,
-    bw_window_started: std::time::Instant,
-    rx_bytes_in_window: u64,
+    warned_low_buffer_scale_on_hidpi: bool,
 }
 
 impl App {
-    fn refresh_outputs(&mut self, event_loop: &ActiveEventLoop, force: bool) {
+    fn refresh_outputs(&mut self, event_loop: &dyn ActiveEventLoop, force: bool) {
         let current: Vec<OutputInfo> = event_loop
             .available_monitors()
             .enumerate()
@@ -692,9 +637,9 @@ impl App {
             for output in &self.last_outputs[current.len()..] {
                 self.serializer
                     .writer()
-                    .send(SendType::Object(proto::Event::Output(OutputEvent::Destroy(
-                        output.clone(),
-                    ))));
+                    .send(SendType::Object(proto::Event::Output(
+                        OutputEvent::Destroy(output.clone()),
+                    )));
             }
         }
 
@@ -703,23 +648,78 @@ impl App {
 }
 
 impl App {
-    fn window_has_decorations(&self, window_id: winit::window::WindowId) -> bool {
+    fn window_has_decorations(&self, window_id: WindowId) -> bool {
         self.window_has_decorations
             .get(&window_id)
             .copied()
             .unwrap_or(true)
     }
 
-    fn decorationless_resize_border_px(&self, window: &Window) -> f64 {
+    fn window_surface_pos_in_desktop(window: &dyn Window) -> Option<PhysicalPosition<i32>> {
+        let outer = window.outer_position().ok()?;
+        let surface = window.surface_position();
+        Some(PhysicalPosition::new(
+            outer.x.saturating_add(surface.x),
+            outer.y.saturating_add(surface.y),
+        ))
+    }
+
+    fn decorationless_titlebar_height_px(&self, window: &dyn Window) -> f64 {
+        const TITLEBAR_HEIGHT_LOGICAL: f64 = 36.0;
+        (TITLEBAR_HEIGHT_LOGICAL * window.scale_factor()).max(1.0)
+    }
+
+    fn should_drag_decorationless_window(
+        &self,
+        window: &dyn Window,
+        position: PhysicalPosition<f64>,
+    ) -> bool {
+        let y = position.y;
+        if y < 0.0 || y >= self.decorationless_titlebar_height_px(window) {
+            return false;
+        }
+
+        // Heuristic: avoid stealing clicks near the edges, where most client-side titlebars place
+        // caption buttons.
+        const RESERVED_EDGE_LOGICAL: f64 = 160.0;
+        let reserved = (RESERVED_EDGE_LOGICAL * window.scale_factor()).max(0.0);
+        let width = window.surface_size().width as f64;
+        position.x >= reserved && position.x <= (width - reserved)
+    }
+
+    fn update_pointer_position_for_window(
+        &mut self,
+        window_id: WindowId,
+        surface_id: WlSurfaceId,
+        window: &dyn Window,
+        position: PhysicalPosition<f64>,
+    ) -> Point<f64> {
+        self.last_window_cursor_pos_physical
+            .insert(window_id, position);
+        let window_pos = coords::winit::physical_to_window_logical(window, position);
+        self.last_window_cursor_pos.insert(window_id, window_pos);
+
+        self.update_decorationless_cursor(surface_id, window_id, window, position);
+
+        let remote_pos = coords::winit::window_logical_to_remote_logical(
+            UiScaleFactor(self.ui_scale_factor),
+            window_pos,
+        );
+        self.last_cursor_pos.insert(window_id, remote_pos);
+        self.pointer_surface = Some(surface_id);
+        remote_pos
+    }
+
+    fn decorationless_resize_border_px(&self, window: &dyn Window) -> f64 {
         (DECORATIONLESS_RESIZE_BORDER_LOGICAL * window.scale_factor()).max(1.0)
     }
 
     fn hit_test_decorationless_resize(
         &self,
-        window: &Window,
+        window: &dyn Window,
         position: PhysicalPosition<f64>,
     ) -> Option<ResizeDirection> {
-        let size = window.inner_size();
+        let size = window.surface_size();
         let width = size.width as f64;
         let height = size.height as f64;
         if width <= 0.0 || height <= 0.0 {
@@ -760,8 +760,8 @@ impl App {
     fn update_decorationless_cursor(
         &mut self,
         surface_id: WlSurfaceId,
-        window_id: winit::window::WindowId,
-        window: &Window,
+        window_id: WindowId,
+        window: &dyn Window,
         position_physical: PhysicalPosition<f64>,
     ) {
         if self.window_has_decorations(window_id) {
@@ -803,22 +803,6 @@ impl App {
             surface_id,
             metadata,
             filtered,
-            origin: None,
-        });
-    }
-
-    fn schedule_decode_patch(
-        &self,
-        surface_id: WlSurfaceId,
-        origin: (u32, u32),
-        metadata: crate::protocols::wprs::wayland::BufferMetadata,
-        filtered: crate::vec4u8::Vec4u8s,
-    ) {
-        let _ = self.decode_tx.send(DecodeJob {
-            surface_id,
-            metadata,
-            filtered,
-            origin: Some(origin),
         });
     }
 
@@ -870,11 +854,10 @@ impl App {
         let parent_renderer = self.windows.get(&popup.parent_surface_id)?;
         let parent_window_id = parent_renderer.window.id();
         let parent_pos = self
-            .last_window_inner_pos
+            .last_window_surface_pos
             .get(&parent_window_id)
             .copied()
-            .or_else(|| parent_renderer.window.inner_position().ok())
-            .or_else(|| parent_renderer.window.outer_position().ok())?;
+            .or_else(|| Self::window_surface_pos_in_desktop(parent_renderer.window.as_ref()))?;
 
         // The positioner is expressed in the parent's surface coordinate space.
         // Map it into a global coordinate space using the parent's outer position.
@@ -910,7 +893,7 @@ impl App {
         let Some(pos) = self.compute_popup_position(popup) else {
             return;
         };
-        renderer.window.set_outer_position(pos);
+        renderer.window.set_outer_position(pos.into());
     }
 
     fn update_popups_for_parent(&self, parent_surface_id: WlSurfaceId) {
@@ -931,9 +914,7 @@ impl App {
         target
     }
 
-    fn cursor_icon_from_wayland_name(name: &str) -> Option<winit::window::CursorIcon> {
-        use winit::window::CursorIcon;
-
+    fn cursor_icon_from_wayland_name(name: &str) -> Option<CursorIcon> {
         // Prefer parsing the standard cursor-icon names (lower kebab case).
         let lowered = name.to_ascii_lowercase();
         if let Ok(icon) = lowered.parse::<CursorIcon>() {
@@ -979,7 +960,7 @@ impl App {
 
     fn handle_cursor_image(
         &mut self,
-        event_loop: &ActiveEventLoop,
+        event_loop: &dyn ActiveEventLoop,
         cursor: crate::protocols::wprs::wayland::CursorImage,
     ) {
         let serial = cursor.serial;
@@ -999,7 +980,7 @@ impl App {
                 if icon.is_none() && self.warned_cursor_names.insert(name.clone()) {
                     warn!("unhandled cursor icon name {name:?}; falling back to default");
                 }
-                let icon = icon.unwrap_or(winit::window::CursorIcon::Default);
+                let icon = icon.unwrap_or(CursorIcon::Default);
                 debug!(
                     "cursor named: serial={} name={name:?} icon={icon:?}",
                     serial
@@ -1033,7 +1014,7 @@ impl App {
                 let hotspot_y =
                     (i32::from(hotspot_y) * buffer_scale).clamp(0, frame.height as i32) as u16;
 
-                let source = match winit::window::CustomCursor::from_rgba(
+                let source = match CustomCursorSource::from_rgba(
                     frame.rgba.clone(),
                     frame.width,
                     frame.height,
@@ -1048,7 +1029,12 @@ impl App {
                         return;
                     },
                 };
-                let custom = event_loop.create_custom_cursor(source);
+                let Ok(custom) = event_loop.create_custom_cursor(source) else {
+                    debug!(
+                        "cursor surface: failed to upload custom cursor: serial={serial} cursor_surface={key:?}"
+                    );
+                    return;
+                };
                 debug!(
                     "cursor surface: serial={serial} cursor_surface={key:?} size=({}x{}) hotspot=({hotspot_x},{hotspot_y})",
                     frame.width, frame.height
@@ -1146,10 +1132,7 @@ impl App {
         self.serial_counter
     }
 
-    fn cursor_pos_for(
-        &self,
-        window_id: winit::window::WindowId,
-    ) -> crate::protocols::wprs::geometry::Point<f64> {
+    fn cursor_pos_for(&self, window_id: WindowId) -> crate::protocols::wprs::geometry::Point<f64> {
         self.last_cursor_pos
             .get(&window_id)
             .copied()
@@ -1217,7 +1200,7 @@ impl App {
                         shift: modifiers.shift_key(),
                         // winit doesn't expose lock states in ModifiersState.
                         caps_lock: false,
-                        logo: modifiers.super_key(),
+                        logo: modifiers.meta_key(),
                         num_lock: false,
                     },
                     layout_index: 0,
@@ -1244,14 +1227,7 @@ impl App {
 
     fn linux_button_from_winit(button: MouseButton) -> Option<u32> {
         // linux/input-event-codes.h
-        match button {
-            MouseButton::Left => Some(272),
-            MouseButton::Right => Some(273),
-            MouseButton::Middle => Some(274),
-            MouseButton::Back => Some(275),
-            MouseButton::Forward => Some(276),
-            MouseButton::Other(_) => None,
-        }
+        Some(272 + button as u32)
     }
 
     fn linux_keycode_from_winit(code: winit::keyboard::KeyCode) -> Option<u32> {
@@ -1358,28 +1334,23 @@ impl App {
             KeyCode::PageDown => 109,
             KeyCode::Insert => 110,
             KeyCode::Delete => 111,
-            KeyCode::SuperLeft => 125,
-            KeyCode::SuperRight => 126,
+            KeyCode::MetaLeft => 125,
+            KeyCode::MetaRight => 126,
             _ => return None,
         })
     }
 
     fn handle_server_message(
         &mut self,
-        event_loop: &ActiveEventLoop,
+        event_loop: &dyn ActiveEventLoop,
         msg: RecvType<Request>,
     ) -> Result<()> {
         match msg {
             RecvType::RawBuffer(buf) => {
-                self.rx_bytes_in_window = self.rx_bytes_in_window.saturating_add(buf.len() as u64);
                 self.buffer_cache = Some(UncompressedBufferData(buf.into()));
                 Ok(())
             },
             RecvType::Object(Request::Surface(surface)) => self.handle_surface(event_loop, surface),
-            RecvType::Object(Request::Transport(req)) => {
-                self.handle_transport(req);
-                Ok(())
-            },
             RecvType::Object(Request::DisplayConfig(cfg)) => {
                 if self.server_display_config.is_none() {
                     info!(
@@ -1399,35 +1370,11 @@ impl App {
         }
     }
 
-    fn handle_transport(&mut self, req: transport::TransportRequest) {
-        match req {
-            transport::TransportRequest::Config(cfg) => {
-                info!(
-                    "server transport config: codec={:?} max_fps={:?} patches_enabled={} tile_px={} full_frame_threshold={}",
-                    cfg.codec,
-                    cfg.max_fps,
-                    cfg.buffer_patches.enabled,
-                    cfg.buffer_patches.tile_px,
-                    cfg.buffer_patches.full_frame_threshold
-                );
-                self.server_transport_config = Some(cfg);
-            },
-            transport::TransportRequest::Pong(pong) => {
-                if let Some((seq, started)) = self.inflight_ping.take() {
-                    if seq == pong.seq {
-                        self.last_rtt_ms =
-                            started.elapsed().as_millis().min(u128::from(u32::MAX)) as u32;
-                    }
-                }
-            },
-        }
-    }
-
     fn send_configure_for_surface(&mut self, surface_id: WlSurfaceId) {
         let Some(renderer) = self.windows.get(&surface_id) else {
             return;
         };
-        let size = renderer.window.inner_size();
+        let size = renderer.window.surface_size();
         let logical: winit::dpi::LogicalSize<f64> = size.to_logical(renderer.window.scale_factor());
         // Window sizes are in local logical points, but the server expects surface logical points.
         // When `ui_scale_factor` is set, we scale the view (local window size) without resizing the
@@ -1454,7 +1401,7 @@ impl App {
 
     fn handle_surface(
         &mut self,
-        event_loop: &ActiveEventLoop,
+        event_loop: &dyn ActiveEventLoop,
         surface: SurfaceRequest,
     ) -> Result<()> {
         let surface_id = surface.surface;
@@ -1503,51 +1450,27 @@ impl App {
                 if is_presented && !self.windows.contains_key(&surface_id) {
                     let mut attrs = if let Some(_toplevel) = toplevel {
                         // Remote apps (e.g. KDE/Qt) may render their own client-side titlebars.
-                        // On macOS, the native traffic-light buttons can overlap that remote UI.
-                        // Prefer going fully borderless on macOS and rely on the decorationless
-                        // move/resize handling.
-                        #[cfg(target_os = "macos")]
-                        let use_native_decorations = false;
-
-                        #[cfg(not(target_os = "macos"))]
+                        // Prefer borderless windows for CSD apps to avoid double titlebars.
                         let use_native_decorations =
                             _toplevel.decoration_mode != Some(DecorationMode::Client);
 
-                        #[cfg(not(target_os = "macos"))]
-                        let title = _toplevel
-                            .title
-                            .clone()
-                            .unwrap_or_else(|| "wprs".to_string());
+                        let title = if cfg!(target_os = "macos") && !use_native_decorations {
+                            String::new()
+                        } else {
+                            _toplevel
+                                .title
+                                .clone()
+                                .unwrap_or_else(|| "wprs".to_string())
+                        };
 
-                        // On macOS we draw a custom titlebar and keep the native title hidden, so
-                        // avoid setting a non-empty native title string.
-                        #[cfg(target_os = "macos")]
-                        let title = String::new();
-
-                        let mut attrs = Window::default_attributes().with_title(title);
+                        let mut attrs = WindowAttributes::default().with_title(title);
 
                         if !use_native_decorations {
                             attrs = attrs.with_decorations(false);
                         }
-
-                        #[cfg(target_os = "macos")]
-                        let attrs = {
-                            use winit::platform::macos::WindowAttributesExtMacOS as _;
-
-                            if use_native_decorations {
-                                // Keep native decorations/buttons, but avoid drawing behind the
-                                // titlebar: remote apps may render their own custom titlebar
-                                // inside the captured content, and drawing behind the titlebar
-                                // causes the traffic-light buttons to overlap remote UI.
-                                attrs.with_title_hidden(true)
-                            } else {
-                                attrs
-                            }
-                        };
-
                         attrs
                     } else {
-                        Window::default_attributes()
+                        WindowAttributes::default()
                             .with_decorations(false)
                             .with_resizable(false)
                             .with_window_level(WindowLevel::AlwaysOnTop)
@@ -1568,8 +1491,10 @@ impl App {
                                 .unwrap_or(1)
                                 .max(1);
                             if local_scale >= 2 && server_scale < 2.0 {
-                                let server_suggested_scale =
-                                    self.server_display_config.as_ref().map(|cfg| cfg.scale_factor);
+                                let server_suggested_scale = self
+                                    .server_display_config
+                                    .as_ref()
+                                    .map(|cfg| cfg.scale_factor);
                                 warn!(
                                     "HiDPI display detected (scale_factor={local_scale}) but server sent buffer_scale={} (server DisplayConfig.scale_factor={server_suggested_scale:?}); rendering may be blurry. If this is a capture backend, increase server DPI/scale (e.g. wprsd display_dpi). If this is an app-hosting backend, ensure output scale is being advertised correctly (winit-wgpu: min_output_scale_factor={}).",
                                     state.buffer_scale.max(1),
@@ -1581,7 +1506,7 @@ impl App {
                         let logical_w = (f64::from(w) / server_scale).max(1.0);
                         let logical_h = (f64::from(h) / server_scale).max(1.0);
                         // Client-side scaling knob: magnify/shrink the window in logical units.
-                        attrs = attrs.with_inner_size(LogicalSize::new(
+                        attrs = attrs.with_surface_size(LogicalSize::new(
                             logical_w * self.ui_scale(),
                             logical_h * self.ui_scale(),
                         ));
@@ -1597,7 +1522,7 @@ impl App {
                             self.ui_scale_factor
                         );
                     } else if let Some(popup) = popup {
-                        attrs = attrs.with_inner_size(LogicalSize::new(
+                        attrs = attrs.with_surface_size(LogicalSize::new(
                             (popup.positioner.width.max(1) as f64) * self.ui_scale(),
                             (popup.positioner.height.max(1) as f64) * self.ui_scale(),
                         ));
@@ -1612,7 +1537,8 @@ impl App {
                         );
                     }
 
-                    let window = Arc::new(event_loop.create_window(attrs).location(loc!())?);
+                    let window: Arc<dyn Window> =
+                        event_loop.create_window(attrs).location(loc!())?.into();
                     let renderer =
                         WindowRenderer::new(&self.shared, window.clone()).location(loc!())?;
                     self.surface_by_window.insert(window.id(), surface_id);
@@ -1622,8 +1548,8 @@ impl App {
                             toplevel.decoration_mode != Some(DecorationMode::Client),
                         );
                     }
-                    if let Ok(pos) = window.inner_position() {
-                        self.last_window_inner_pos.insert(window.id(), pos);
+                    if let Some(pos) = Self::window_surface_pos_in_desktop(window.as_ref()) {
+                        self.last_window_surface_pos.insert(window.id(), pos);
                     }
                     self.windows.insert(surface_id, renderer);
 
@@ -1634,7 +1560,7 @@ impl App {
 
                     if let Some(popup) = popup {
                         if let Some(pos) = self.compute_popup_position(popup) {
-                            window.set_outer_position(pos);
+                            window.set_outer_position(pos.into());
                         }
                     }
 
@@ -1651,8 +1577,6 @@ impl App {
 
                 // Apply buffer if present.
                 if let Some(BufferAssignment::New(mut buf)) = state.buffer.take() {
-                    let buffer_update = state.buffer_update.clone();
-
                     if buf.data.is_external() {
                         if let Some(cache) = self.buffer_cache.take() {
                             buf.data = BufferData::Uncompressed(cache);
@@ -1679,40 +1603,6 @@ impl App {
                             return Ok(());
                         },
                     };
-
-                    if let Some(crate::protocols::wprs::wayland::BufferUpdate::Patch {
-                        x,
-                        y,
-                        width,
-                        height,
-                        stride,
-                    }) = buffer_update
-                    {
-                        let patches_enabled = self
-                            .server_transport_config
-                            .as_ref()
-                            .map(|c| c.buffer_patches.enabled)
-                            .unwrap_or(false);
-                        if patches_enabled && self.surfaces_with_frame.contains(&surface_id) {
-                            if x >= 0 && y >= 0 {
-                                let patch_metadata =
-                                    crate::protocols::wprs::wayland::BufferMetadata {
-                                        width,
-                                        height,
-                                        stride,
-                                        format: buf.metadata.format,
-                                    };
-                                self.schedule_decode_patch(
-                                    surface_id,
-                                    (x as u32, y as u32),
-                                    patch_metadata,
-                                    filtered,
-                                );
-                                return Ok(());
-                            }
-                        }
-                    }
-
                     // Unfiltering can be expensive on non-SIMD platforms; do it
                     // off the winit/UI thread to keep the window responsive.
                     self.schedule_decode(surface_id, buf.metadata, filtered);
@@ -1723,20 +1613,19 @@ impl App {
     }
 }
 
-impl ApplicationHandler<UserEvent> for App {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+impl ApplicationHandler for App {
+    fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
         if self.outputs_sent {
             return;
         }
         self.outputs_sent = true;
 
         self.maybe_send_keymap();
-
         self.refresh_outputs(event_loop, true);
         self.last_outputs_refresh = Instant::now();
     }
 
-    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+    fn about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
         let interval = std::time::Duration::from_secs(2);
         if self.last_outputs_refresh.elapsed() < interval {
             return;
@@ -1745,98 +1634,62 @@ impl ApplicationHandler<UserEvent> for App {
         self.refresh_outputs(event_loop, false);
     }
 
-    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
-        match event {
-            UserEvent::ServerMessage(msg) => {
-                self.handle_server_message(event_loop, msg)
-                    .log_and_ignore(loc!());
-            },
-            UserEvent::DecodedFrame(frame) => {
-                if let Some(renderer) = self.windows.get_mut(&frame.surface_id) {
-                    if let Some(origin) = frame.origin {
-                        renderer.update_texture_region_from_padded_bgra(
-                            &self.shared,
-                            origin,
-                            &frame.metadata,
-                            frame.padded_row_bytes,
-                            &frame.data,
-                        );
-                    } else {
+    fn proxy_wake_up(&mut self, event_loop: &dyn ActiveEventLoop) {
+        loop {
+            match self.server_rx.try_recv() {
+                Ok(msg) => {
+                    self.handle_server_message(event_loop, msg)
+                        .log_and_ignore(loc!());
+                },
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+            }
+        }
+
+        loop {
+            match self.decoded_frame_rx.try_recv() {
+                Ok(frame) => {
+                    if let Some(renderer) = self.windows.get_mut(&frame.surface_id) {
                         renderer.update_texture_from_padded_bgra(
                             &self.shared,
                             &frame.metadata,
                             frame.padded_row_bytes,
                             &frame.data,
                         );
+                        renderer.window.request_redraw();
+                        self.surfaces_with_frame.insert(frame.surface_id);
+                        continue;
                     }
-                    renderer.window.request_redraw();
-                    self.surfaces_with_frame.insert(frame.surface_id);
-                    return;
-                }
 
-                let Some(client) = self.cursor_surface_clients.get(&frame.surface_id).copied()
-                else {
-                    return;
-                };
-                let Some(cursor_frame) =
-                    Self::bgra_padded_to_rgba(&frame.metadata, frame.padded_row_bytes, &frame.data)
-                else {
-                    return;
-                };
-                self.cursor_frames.insert(
-                    ClientSurfaceKey {
-                        client,
-                        surface: frame.surface_id,
-                    },
-                    cursor_frame,
-                );
-            },
-            UserEvent::PingTick => {
-                let elapsed = self.bw_window_started.elapsed();
-                if elapsed.as_millis() > 0 {
-                    let rx_kbps =
-                        ((self.rx_bytes_in_window as f64) * 8.0 / 1000.0) / elapsed.as_secs_f64();
-                    self.bw_window_started = std::time::Instant::now();
-                    self.rx_bytes_in_window = 0;
-
-                    self.serializer
-                        .writer()
-                        .send(SendType::Object(proto::Event::Transport(
-                            transport::TransportEvent::Stats(transport::TransportStats {
-                                rtt_ms: self.last_rtt_ms,
-                                rx_kbps: rx_kbps.round().max(0.0) as u32,
-                                tx_kbps: 0,
-                                decode_ms: 0,
-                            }),
-                        )));
-                }
-
-                // Only keep one in-flight ping at a time.
-                if self.inflight_ping.is_none() {
-                    self.ping_seq = self.ping_seq.wrapping_add(1);
-                    let seq = self.ping_seq;
-                    self.inflight_ping = Some((seq, std::time::Instant::now()));
-                    let now_ms = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_millis() as u64;
-                    self.serializer
-                        .writer()
-                        .send(SendType::Object(proto::Event::Transport(
-                            transport::TransportEvent::Ping(transport::Ping {
-                                seq,
-                                sent_at_ms: now_ms,
-                            }),
-                        )));
-                }
-            },
+                    let Some(client) = self.cursor_surface_clients.get(&frame.surface_id).copied()
+                    else {
+                        continue;
+                    };
+                    let Some(cursor_frame) = Self::bgra_padded_to_rgba(
+                        &frame.metadata,
+                        frame.padded_row_bytes,
+                        &frame.data,
+                    ) else {
+                        continue;
+                    };
+                    self.cursor_frames.insert(
+                        ClientSurfaceKey {
+                            client,
+                            surface: frame.surface_id,
+                        },
+                        cursor_frame,
+                    );
+                },
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+            }
         }
     }
 
     fn window_event(
         &mut self,
-        _event_loop: &ActiveEventLoop,
-        window_id: winit::window::WindowId,
+        _event_loop: &dyn ActiveEventLoop,
+        window_id: WindowId,
         event: WindowEvent,
     ) {
         let surface_id = self.surface_by_window.get(&window_id).copied();
@@ -1847,7 +1700,7 @@ impl ApplicationHandler<UserEvent> for App {
 
         if let Some(renderer) = self.windows.get_mut(&surface_id) {
             match &event {
-                WindowEvent::Resized(size) => {
+                WindowEvent::SurfaceResized(size) => {
                     renderer.resize(&self.shared, *size);
                     info!("window resized: surface={surface_id:?} size={size:?}");
                     if !self.popup_state_by_surface.contains_key(&surface_id) {
@@ -1857,7 +1710,7 @@ impl ApplicationHandler<UserEvent> for App {
                 },
                 WindowEvent::ScaleFactorChanged { .. } => {
                     info!("window scale factor changed: surface={surface_id:?}");
-                    let size = renderer.window.inner_size();
+                    let size = renderer.window.surface_size();
                     renderer.resize(&self.shared, size);
                     if !self.popup_state_by_surface.contains_key(&surface_id) {
                         self.send_configure_for_surface(surface_id);
@@ -1865,8 +1718,9 @@ impl ApplicationHandler<UserEvent> for App {
                     self.update_popups_for_parent(surface_id);
                 },
                 WindowEvent::Moved(_) => {
-                    if let Ok(pos) = renderer.window.inner_position() {
-                        self.last_window_inner_pos.insert(window_id, pos);
+                    if let Some(pos) = Self::window_surface_pos_in_desktop(renderer.window.as_ref())
+                    {
+                        self.last_window_surface_pos.insert(window_id, pos);
                     }
                     if let Ok(pos) = renderer.window.outer_position() {
                         info!("window moved: surface={surface_id:?} outer_pos={pos:?}");
@@ -1948,7 +1802,7 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 self.send_key(linux_keycode, state);
             },
-            WindowEvent::CursorMoved { position, .. } => {
+            WindowEvent::PointerMoved { position, .. } => {
                 let Some(window) = self
                     .windows
                     .get(&surface_id)
@@ -1957,8 +1811,10 @@ impl ApplicationHandler<UserEvent> for App {
                     return;
                 };
 
-                self.last_window_cursor_pos_physical.insert(window_id, position);
-                let window_pos = coords::winit::physical_to_window_logical(window.as_ref(), position);
+                self.last_window_cursor_pos_physical
+                    .insert(window_id, position);
+                let window_pos =
+                    coords::winit::physical_to_window_logical(window.as_ref(), position);
                 self.last_window_cursor_pos.insert(window_id, window_pos);
 
                 self.update_decorationless_cursor(surface_id, window_id, window.as_ref(), position);
@@ -1970,8 +1826,6 @@ impl ApplicationHandler<UserEvent> for App {
                 self.last_cursor_pos.insert(window_id, pos);
                 self.pointer_surface = Some(surface_id);
 
-                // Ensure the server has pointer focus before motion/press; otherwise smithay will
-                // drop motion and clicks land at (0,0).
                 if self.pointer_inside.insert(window_id) {
                     let serial = self.next_serial();
                     self.send_pointer_event(surface_id, pos, PointerEventKind::Enter { serial });
@@ -1983,12 +1837,23 @@ impl ApplicationHandler<UserEvent> for App {
                     self.cursor_dirty = false;
                 }
             },
-            WindowEvent::CursorEntered { .. } => {
-                self.pointer_surface = Some(surface_id);
+            WindowEvent::PointerEntered { position, .. } => {
+                let Some(window) = self
+                    .windows
+                    .get(&surface_id)
+                    .map(|renderer| renderer.window.clone())
+                else {
+                    return;
+                };
+                let pos = self.update_pointer_position_for_window(
+                    window_id,
+                    surface_id,
+                    window.as_ref(),
+                    position,
+                );
 
                 if self.pointer_inside.insert(window_id) {
                     let serial = self.next_serial();
-                    let pos = self.cursor_pos_for(window_id);
                     self.send_pointer_event(surface_id, pos, PointerEventKind::Enter { serial });
                 }
 
@@ -1997,7 +1862,22 @@ impl ApplicationHandler<UserEvent> for App {
                     self.cursor_dirty = false;
                 }
             },
-            WindowEvent::CursorLeft { .. } => {
+            WindowEvent::PointerLeft { position, .. } => {
+                if let Some(position) = position {
+                    let Some(window) = self
+                        .windows
+                        .get(&surface_id)
+                        .map(|renderer| renderer.window.clone())
+                    else {
+                        return;
+                    };
+                    self.update_pointer_position_for_window(
+                        window_id,
+                        surface_id,
+                        window.as_ref(),
+                        position,
+                    );
+                }
                 let pos = self.cursor_pos_for(window_id);
                 let serial = self.next_serial();
                 self.send_pointer_event(surface_id, pos, PointerEventKind::Leave { serial });
@@ -2006,65 +1886,65 @@ impl ApplicationHandler<UserEvent> for App {
                     self.pointer_surface = None;
                 }
             },
-            WindowEvent::MouseInput { state, button, .. } => {
-                let Some(renderer) = self.windows.get(&surface_id) else {
+            WindowEvent::PointerButton {
+                state,
+                button,
+                position,
+                ..
+            } => {
+                let Some(window) = self
+                    .windows
+                    .get(&surface_id)
+                    .map(|renderer| renderer.window.clone())
+                else {
                     return;
                 };
 
-                if !self.window_has_decorations(window_id) {
-                    // Match winit's `custom_decorations` example: right click shows the system
-                    // window menu, if supported by the platform.
-                    if state == ElementState::Pressed && button == MouseButton::Right {
-                        // winit's Wayland implementation expects coordinates in *window-local
-                        // logical* space (it converts incoming `Position` to logical internally).
-                        //
-                        // `MouseInput` doesn't include a position, so we use the last seen cursor
-                        // location.
-                        let Some(cursor_physical) =
-                            self.last_window_cursor_pos_physical.get(&window_id).copied()
-                        else {
-                            return;
-                        };
+                let pos = self.update_pointer_position_for_window(
+                    window_id,
+                    surface_id,
+                    window.as_ref(),
+                    position,
+                );
 
-                        let menu_pos = coords::winit::window_menu_position(
-                            renderer.window.as_ref(),
-                            cursor_physical,
-                        );
-                        renderer.window.show_window_menu(menu_pos);
+                if !self.window_has_decorations(window_id) {
+                    if state == ElementState::Pressed
+                        && matches!(button, ButtonSource::Mouse(MouseButton::Right))
+                    {
+                        window.show_window_menu(position.into());
                         return;
                     }
 
-                    // Edge resize takes priority.
-                    if let Some(pos) = self.last_window_cursor_pos_physical.get(&window_id).copied()
+                    if state == ElementState::Pressed
+                        && matches!(button, ButtonSource::Mouse(MouseButton::Left))
                     {
                         if let Some(dir) =
-                            self.hit_test_decorationless_resize(renderer.window.as_ref(), pos)
+                            self.hit_test_decorationless_resize(window.as_ref(), position)
                         {
-                            if state == ElementState::Pressed {
-                                if let Err(err) = renderer.window.drag_resize_window(dir) {
-                                    debug!("drag_resize_window failed: {err:?}");
-                                }
+                            if let Err(err) = window.drag_resize_window(dir) {
+                                debug!("drag_resize_window failed: {err:?}");
+                            }
+                            return;
+                        }
+
+                        if self.local_modifiers.alt_key()
+                            || self.should_drag_decorationless_window(window.as_ref(), position)
+                        {
+                            if let Err(err) = window.drag_window() {
+                                debug!("drag_window failed: {err:?}");
                             }
                             return;
                         }
                     }
-
-                    // Avoid stealing clicks from remote UI; require Alt/Option to move.
-                    if state == ElementState::Pressed
-                        && button == MouseButton::Left
-                        && self.local_modifiers.alt_key()
-                    {
-                        if let Err(err) = renderer.window.drag_window() {
-                            debug!("drag_window failed: {err:?}");
-                        }
-                        return;
-                    }
                 }
 
-                let Some(button) = Self::linux_button_from_winit(button) else {
+                let Some(mouse_button) = button.mouse_button() else {
                     return;
                 };
-                let pos = self.cursor_pos_for(window_id);
+                let Some(button) = Self::linux_button_from_winit(mouse_button) else {
+                    return;
+                };
+
                 if self.pointer_inside.insert(window_id) {
                     let serial = self.next_serial();
                     self.send_pointer_event(surface_id, pos, PointerEventKind::Enter { serial });
@@ -2250,39 +2130,35 @@ pub fn run(
     mut serializer: Serializer<proto::Event, Request>,
     options: WinitWgpuOptions,
 ) -> Result<()> {
-    let event_loop = EventLoop::<UserEvent>::with_user_event().build()?;
+    let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Wait);
     let proxy = event_loop.create_proxy();
 
     let (decode_tx, decode_rx) = std::sync::mpsc::channel::<DecodeJob>();
+    let (decoded_frame_tx, decoded_frame_rx) = std::sync::mpsc::channel::<DecodedFrame>();
     {
         let proxy = proxy.clone();
         thread::spawn(move || {
             while let Ok(job) = decode_rx.recv() {
                 let (padded_row_bytes, padded) =
                     decode_filtered_to_padded_bgra(&job.metadata, &job.filtered);
-                let _ = proxy.send_event(UserEvent::DecodedFrame(DecodedFrame {
-                    surface_id: job.surface_id,
-                    metadata: job.metadata,
-                    padded_row_bytes,
-                    data: padded,
-                    origin: job.origin,
-                }));
+                if decoded_frame_tx
+                    .send(DecodedFrame {
+                        surface_id: job.surface_id,
+                        metadata: job.metadata,
+                        padded_row_bytes,
+                        data: padded,
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+                proxy.wake_up();
             }
         });
     }
 
-    {
-        let proxy = proxy.clone();
-        thread::spawn(move || {
-            loop {
-                std::thread::sleep(std::time::Duration::from_secs(1));
-                let _ = proxy.send_event(UserEvent::PingTick);
-            }
-        });
-    }
-
-    // Forward serializer messages to the winit event loop.
+    let (server_tx, server_rx) = std::sync::mpsc::channel::<RecvType<Request>>();
     let reader = serializer.reader().location(loc!())?;
     let proxy_for_reader = proxy.clone();
     thread::spawn(move || {
@@ -2291,14 +2167,13 @@ pub fn run(
             .handle()
             .insert_source(reader, move |event, _metadata, _state| {
                 if let CalloopChannelEvent::Msg(msg) = event {
-                    proxy_for_reader
-                        .send_event(UserEvent::ServerMessage(msg))
-                        .ok();
+                    let _ = server_tx.send(msg);
+                    proxy_for_reader.wake_up();
                 }
             })
             .expect("insert serializer reader");
 
-        loop_.run(None, &mut (), |_| {}).ok();
+        let _ = loop_.run(None, &mut (), |_| {});
     });
 
     // Init shared wgpu context.
@@ -2333,10 +2208,12 @@ pub fn run(
         queue: Arc::new(queue),
     };
 
-        let mut app = App {
+    let app = App {
         shared,
         serializer,
         decode_tx,
+        server_rx,
+        decoded_frame_rx,
         buffer_cache: None,
         windows: HashMap::new(),
         surface_by_window: HashMap::new(),
@@ -2368,7 +2245,7 @@ pub fn run(
         pointer_inside: HashSet::new(),
         pointer_surface: None,
 
-        last_window_inner_pos: HashMap::new(),
+        last_window_surface_pos: HashMap::new(),
         pinch_state: HashMap::new(),
 
         popup_state_by_surface: HashMap::new(),
@@ -2379,17 +2256,11 @@ pub fn run(
         current_cursor: Some(Cursor::from(CursorIcon::Default)),
         warned_cursor_names: HashSet::new(),
         cursor_dirty: true,
-        warned_low_buffer_scale_on_hidpi: false,
-        server_transport_config: None,
-        ping_seq: 0,
-        inflight_ping: None,
 
-        last_rtt_ms: 0,
-        bw_window_started: std::time::Instant::now(),
-        rx_bytes_in_window: 0,
+        warned_low_buffer_scale_on_hidpi: false,
     };
 
-    event_loop.run_app(&mut app)?;
+    event_loop.run_app(app)?;
     Ok(())
 }
 
