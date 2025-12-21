@@ -89,6 +89,93 @@ server = ["wayland"]
 # Build and enable the Wayland client backend for `wprsc` (SCTK-based).
 wayland-client = ["dep:smithay", "dep:smithay-client-toolkit"]
 
+# --- Smithay feature bundles (for review/selection) ---
+#
+# These are convenience feature sets that map to upstream `smithay/*` features.
+# Smithay uses "backend" to mean the compositor platform integration (drm/x11/winit/...) and
+# "renderer" to mean how pixels are produced (GL/pixman/multi).
+#
+# Notes:
+# - Most of these are Linux-oriented. Enabling DRM/GBM/libinput/udev/libseat on non-Linux targets
+#   will likely fail to build.
+# - `backend_winit` is a nested compositor backend; it is typically used for dev/testing and still
+#   requires GL/EGL plumbing in Smithay.
+
+# Minimal smithay compositor plumbing (Wayland server protocol + desktop helpers).
+smithay_wayland_frontend = ["dep:smithay", "smithay/wayland_frontend", "smithay/desktop"]
+
+# Nested compositor inside a winit window (dev-friendly).
+smithay_winit_gl_wayland = [
+    "smithay_wayland_frontend",
+    "smithay/backend_winit",
+    "smithay/renderer_gl",
+]
+
+smithay_winit_glow_wayland = [
+    "smithay_wayland_frontend",
+    "smithay/backend_winit",
+    "smithay/renderer_glow",
+]
+
+# Nested compositor inside an X11 window.
+smithay_x11_gl_wayland = [
+    "smithay_wayland_frontend",
+    "smithay/backend_x11",
+    "smithay/renderer_gl",
+]
+
+smithay_x11_glow_wayland = [
+    "smithay_wayland_frontend",
+    "smithay/backend_x11",
+    "smithay/renderer_glow",
+]
+
+# Linux DRM/KMS compositor bundles.
+smithay_drm_gbm_egl_gl_wayland = [
+    "smithay_wayland_frontend",
+    "smithay/backend_drm",
+    "smithay/backend_gbm",
+    "smithay/backend_egl",
+    "smithay/backend_libinput",
+    "smithay/backend_udev",
+    "smithay/backend_session_libseat",
+    "smithay/renderer_gl",
+]
+
+smithay_drm_gbm_egl_glow_wayland = [
+    "smithay_wayland_frontend",
+    "smithay/backend_drm",
+    "smithay/backend_gbm",
+    "smithay/backend_egl",
+    "smithay/backend_libinput",
+    "smithay/backend_udev",
+    "smithay/backend_session_libseat",
+    "smithay/renderer_glow",
+]
+
+smithay_drm_pixman_wayland = [
+    "smithay_wayland_frontend",
+    "smithay/backend_drm",
+    "smithay/backend_libinput",
+    "smithay/backend_udev",
+    "smithay/backend_session_libseat",
+    "smithay/renderer_pixman",
+]
+
+smithay_drm_multi_gpu_wayland = [
+    "smithay_drm_gbm_egl_gl_wayland",
+    "smithay/renderer_multi",
+]
+
+# XWayland integration (Linux; requires `wayland_frontend`).
+smithay_xwayland = ["smithay_wayland_frontend", "smithay/xwayland"]
+
+# Vulkan plumbing in Smithay (not a drop-in wgpu renderer).
+smithay_vulkan_support = ["dep:smithay", "smithay/backend_vulkan"]
+
+# Enables Smithay's full default feature set (heavy; mostly Linux).
+smithay_default_all = ["dep:smithay", "smithay/default"]
+
 # Enables exporting data to the Tracy profiler.
 # NOTE: opens a port on localhost.
 # NOTE: breaks client reconnection due to sigpipe handling.
