@@ -97,13 +97,13 @@ pub fn dispatch_event<B: Backend>(backend: &mut B, event: Event) -> Result<()> {
         Event::WprsClientConnect => {
             bail!("WprsClientConnect must be handled by the transport adapter")
         },
+        Event::Transport(event) => backend.on_transport_event(event).location(loc!())?,
         Event::Toplevel(event) => backend.on_toplevel_event(event).location(loc!())?,
         Event::Popup(event) => backend.on_popup_event(event).location(loc!())?,
         Event::KeyboardEvent(event) => backend.on_keyboard_event(event).location(loc!())?,
         Event::PointerFrame(events) => backend.on_pointer_frame(events).location(loc!())?,
         Event::PointerGesture(event) => backend.on_pointer_gesture(event).location(loc!())?,
         Event::Output(event) => backend.on_output_event(event).location(loc!())?,
-        Event::Transport(event) => backend.on_transport_event(event).location(loc!())?,
         Event::Data(event) => backend.on_data_event(event).location(loc!())?,
         Event::Surface(event) => backend.on_surface_event(event).location(loc!())?,
     }

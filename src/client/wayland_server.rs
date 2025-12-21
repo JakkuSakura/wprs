@@ -144,6 +144,7 @@ mod wayland_server_impl {
                     transport::TransportEvent::ClientHello(hello),
                 )));
         }
+
         backend.run(serializer).location(loc!())
     }
 }

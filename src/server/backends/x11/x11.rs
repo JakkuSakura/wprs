@@ -266,6 +266,7 @@ impl X11FullscreenBackend {
                 },
                 data: BufferData::External,
             })),
+            buffer_update: None,
             role: Some(Role::XdgToplevel(XdgToplevelState {
                 id: XdgToplevelId(1),
                 parent: None,
