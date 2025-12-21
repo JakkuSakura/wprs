@@ -17,6 +17,7 @@ use crate::protocols::wprs::DisplayConfig;
 use crate::protocols::wprs::Event;
 use crate::protocols::wprs::Request;
 use crate::protocols::wprs::SendType;
+use crate::protocols::wprs::transport::TransportEvent;
 use crate::protocols::wprs::wayland::DataEvent;
 use crate::protocols::wprs::wayland::KeyboardEvent;
 use crate::protocols::wprs::wayland::OutputEvent;
@@ -81,6 +82,10 @@ pub trait Backend {
     fn on_output_event(&mut self, event: OutputEvent) -> Result<()>;
     fn on_data_event(&mut self, event: DataEvent) -> Result<()>;
     fn on_surface_event(&mut self, event: SurfaceEvent) -> Result<()>;
+
+    fn on_transport_event(&mut self, _event: TransportEvent) -> Result<()> {
+        Ok(())
+    }
 }
 
 /// Dispatches a protocol `Event` (originating from the client) into backend hooks.
@@ -98,6 +103,7 @@ pub fn dispatch_event<B: Backend>(backend: &mut B, event: Event) -> Result<()> {
         Event::PointerFrame(events) => backend.on_pointer_frame(events).location(loc!())?,
         Event::PointerGesture(event) => backend.on_pointer_gesture(event).location(loc!())?,
         Event::Output(event) => backend.on_output_event(event).location(loc!())?,
+        Event::Transport(event) => backend.on_transport_event(event).location(loc!())?,
         Event::Data(event) => backend.on_data_event(event).location(loc!())?,
         Event::Surface(event) => backend.on_surface_event(event).location(loc!())?,
     }

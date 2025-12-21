@@ -93,3 +93,18 @@ Some Smithay backends are gated by system libraries discoverable via `pkg-config
 Exact package names depend on your distro.
 
 If you see build errors like `libseat-sys` failing with `libseat.pc not found`, it means the development package is missing (or `PKG_CONFIG_PATH` is not configured).
+
+## Transport adaptation (WIP)
+
+This repo has an experimental transport negotiation path for polling/capture-style backends:
+
+- Client sends `Event::Transport(TransportEvent::ClientHello(...))`.
+- Server may respond with `Request::Transport(TransportRequest::Config(...))` to adjust compression.
+- `winit-wgpu` can also receive dirty-region patches (sub-rect updates) when enabled.
+
+This is currently used to toggle between:
+
+- `ShardedZstd { level }` (current default)
+- `ShardedRaw` (no compression)
+
+The server side uses best-effort RTT/bitrate hints and client CPU/GPU capability hints.

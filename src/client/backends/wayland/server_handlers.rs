@@ -38,6 +38,7 @@ use crate::protocols::wprs::Event;
 use crate::protocols::wprs::RecvType;
 use crate::protocols::wprs::Request;
 use crate::protocols::wprs::SendType;
+use crate::protocols::wprs::transport;
 use crate::protocols::wprs::tuple::Tuple2;
 use crate::protocols::wprs::wayland;
 use crate::protocols::wprs::wayland::ClientSurface;
@@ -68,6 +69,13 @@ impl WprsClientState {
         surface_id: WlSurfaceId,
         mut surface_state: SurfaceState,
     ) -> Result<()> {
+        if surface_state.buffer_update.is_some() {
+            warn!(
+                "received buffer patch update in Wayland client backend; ignoring surface commit for {surface_id:?}"
+            );
+            return Ok(());
+        }
+
         let client = self.remote_display.client(&client_id);
         let surfaces = &mut client.surfaces;
 
@@ -595,9 +603,26 @@ impl WprsClientState {
         Ok(())
     }
 
+    fn handle_transport(&mut self, req: transport::TransportRequest) -> Result<()> {
+        match req {
+            transport::TransportRequest::Config(cfg) => {
+                info!(
+                    "server transport config: codec={:?} patches_enabled={} tile_px={} full_frame_threshold={}",
+                    cfg.codec,
+                    cfg.buffer_patches.enabled,
+                    cfg.buffer_patches.tile_px,
+                    cfg.buffer_patches.full_frame_threshold
+                );
+                Ok(())
+            },
+            transport::TransportRequest::Pong(_) => Ok(()),
+        }
+    }
+
     #[instrument(skip(self), level = "debug")]
     pub fn handle_request(&mut self, request: RecvType<Request>) {
         match request {
+            RecvType::Object(Request::Transport(req)) => self.handle_transport(req),
             RecvType::Object(Request::Surface(surface)) => self.handle_surface(surface),
             RecvType::Object(Request::Toplevel(toplevel)) => self.handle_toplevel(toplevel),
             RecvType::Object(Request::Popup(popup)) => self.handle_popup(popup),

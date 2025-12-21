@@ -31,6 +31,7 @@ mod wayland_server_impl {
     use crate::prelude::*;
     use crate::protocols::wprs as proto;
     use crate::protocols::wprs::Serializer;
+    use crate::protocols::wprs::transport;
     use crate::server::backends::wayland::backend::WaylandSmithayBackend;
     use crate::server::backends::wayland::backend::WaylandSmithayBackendConfig;
     use crate::server::config::XwaylandMode;
@@ -112,6 +113,36 @@ mod wayland_server_impl {
             "wprsc presenting wayland-server via backend: {}",
             backend.name()
         );
+
+        // Allow the presentation backend to tell the embedded server how to tune compression.
+        {
+            let supports_buffer_patches = backend.name() == "winit-wgpu";
+            let cpu = transport::CpuFeatures {
+                #[cfg(all(target_arch = "x86_64"))]
+                avx2: std::arch::is_x86_feature_detected!("avx2"),
+                #[cfg(not(target_arch = "x86_64"))]
+                avx2: false,
+                #[cfg(all(target_arch = "aarch64"))]
+                neon: std::arch::is_aarch64_feature_detected!("neon"),
+                #[cfg(not(target_arch = "aarch64"))]
+                neon: false,
+            };
+            let hello = transport::ClientHello {
+                supported_codecs: vec![
+                    transport::TransportCodec::ShardedZstd { level: 1 },
+                    transport::TransportCodec::ShardedRaw,
+                ],
+                supports_buffer_patches,
+                cpu,
+                gpu: transport::GpuFeatures::default(),
+                preferences: transport::TransportPreferences::default(),
+            };
+            serializer
+                .writer()
+                .send(proto::SendType::Object(proto::Event::Transport(
+                    transport::TransportEvent::ClientHello(hello),
+                )));
+        }
         backend.run(serializer).location(loc!())
     }
 }

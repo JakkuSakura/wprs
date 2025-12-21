@@ -83,6 +83,7 @@ impl MacosWindowBackend {
                 metadata,
                 data: BufferData::External,
             })),
+            buffer_update: None,
             role: Some(wayland::Role::XdgToplevel(toplevel)),
             buffer_scale: self.display_config.scale_factor,
             buffer_transform: None,

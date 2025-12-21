@@ -19,8 +19,10 @@ use std::io::Read;
 use std::io::Write;
 use std::mem;
 use std::num::NonZeroUsize;
+use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, AtomicI32};
 use std::thread;
 
 use crossbeam_channel::Receiver;
@@ -43,6 +45,12 @@ use crate::protocols::wprs::framing::Framed;
 
 // TODO: benchmark this and pick a value based on that.
 pub const MIN_SIZE_TO_COMPRESS: usize = 4096;
+
+#[derive(Debug)]
+struct CompressorConfig {
+    enabled: AtomicBool,
+    level: AtomicI32,
+}
 
 #[derive(Clone, Eq, PartialEq, Archive, Deserialize, Serialize)]
 pub struct CompressedShard {
@@ -221,11 +229,12 @@ impl Framed for CompressedShards {
 }
 
 fn spawn_compressor(
-    compression_level: i32,
+    config: Arc<CompressorConfig>,
     input_rx: Receiver<(usize, Box<dyn AsRef<[u8]> + Send + Sync + 'static>)>,
     output_tx: Sender<CompressedShard>,
 ) -> Result<()> {
-    let mut compressor = Compressor::new(compression_level).location(loc!())?;
+    let mut current_level = config.level.load(Ordering::Relaxed);
+    let mut compressor = Compressor::new(current_level).location(loc!())?;
     compressor.long_distance_matching(true).location(loc!())?;
     thread::spawn(move || {
         // The iterator (and, consequently, the thread) will terminate when all
@@ -233,13 +242,23 @@ fn spawn_compressor(
         // dropped.
         for (idx, input) in input_rx {
             let input = (*input).as_ref();
+
+            let enabled = config.enabled.load(Ordering::Relaxed);
+            let desired_level = config.level.load(Ordering::Relaxed);
+            if enabled && desired_level != current_level {
+                if let Ok(mut new_compressor) = Compressor::new(desired_level) {
+                    let _ = new_compressor.long_distance_matching(true);
+                    compressor = new_compressor;
+                    current_level = desired_level;
+                }
+            }
             // We could pre-allocate a buffer at the end of the loop, while
             // waiting for the next input, and use compress_to_buffer, but that
             // doesn't result in a significant speedup here.
             //
             // This will allocate as much space as it needs, so compression
             // should never panic.
-            let compression = input.len() > MIN_SIZE_TO_COMPRESS;
+            let compression = enabled && input.len() > MIN_SIZE_TO_COMPRESS;
             let data = if compression {
                 compressor.compress(input).unwrap()
             } else {
@@ -263,6 +282,7 @@ fn spawn_compressor(
 pub struct ShardingCompressor {
     compressor_input: Sender<(usize, Box<dyn AsRef<[u8]> + Send + Sync + 'static>)>,
     compressor_output: Receiver<CompressedShard>,
+    config: Arc<CompressorConfig>,
 }
 
 impl ShardingCompressor {
@@ -271,9 +291,13 @@ impl ShardingCompressor {
         // know n_shards when compress is called, not now.
         let (compressor_input_tx, compressor_input_rx) = crossbeam_channel::unbounded();
         let (compressor_output_tx, compressor_output_rx) = crossbeam_channel::unbounded();
+        let config = Arc::new(CompressorConfig {
+            enabled: AtomicBool::new(true),
+            level: AtomicI32::new(compression_level),
+        });
         for _ in 0..n_compressors.get() {
             spawn_compressor(
-                compression_level,
+                Arc::clone(&config),
                 compressor_input_rx.clone(),
                 compressor_output_tx.clone(),
             )
@@ -283,7 +307,16 @@ impl ShardingCompressor {
         Ok(Self {
             compressor_input: compressor_input_tx,
             compressor_output: compressor_output_rx,
+            config,
         })
+    }
+
+    pub fn set_compression_enabled(&self, enabled: bool) {
+        self.config.enabled.store(enabled, Ordering::Relaxed);
+    }
+
+    pub fn set_compression_level(&self, level: i32) {
+        self.config.level.store(level, Ordering::Relaxed);
     }
 
     #[instrument(skip_all, level = "debug")]

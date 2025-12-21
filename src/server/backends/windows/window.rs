@@ -81,6 +81,7 @@ impl WindowsWindowBackend {
                 metadata,
                 data: BufferData::External,
             })),
+            buffer_update: None,
             role: Some(wayland::Role::XdgToplevel(toplevel)),
             buffer_scale: 1,
             buffer_transform: None,

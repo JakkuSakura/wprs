@@ -794,6 +794,10 @@ pub struct SurfaceState {
     pub client: ClientId,
     pub id: WlSurfaceId,
     pub buffer: Option<BufferAssignment>,
+    /// How to interpret the externalized buffer payload (if any).
+    ///
+    /// When `None`, the external buffer payload represents a full-frame update.
+    pub buffer_update: Option<BufferUpdate>,
     pub role: Option<Role>,
     // TODO: include buffer_delta, transform from SurfaceAttributes
     pub buffer_scale: i32,
@@ -810,6 +814,18 @@ pub struct SurfaceState {
     pub xdg_surface_state: Option<xdg_shell::XdgSurfaceState>,
 }
 
+#[derive(Debug, Clone, Eq, PartialEq, Archive, Deserialize, Serialize)]
+pub enum BufferUpdate {
+    /// The external buffer payload describes a sub-rectangle update.
+    Patch {
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        stride: i32,
+    },
+}
+
 impl SurfaceState {
     #[cfg(feature = "wayland")]
     pub fn new(surface: &WlSurface, buffer: Option<BufferAssignment>) -> Result<Self> {
@@ -817,6 +833,7 @@ impl SurfaceState {
             client: ClientId::new(&surface.client().location(loc!())?),
             id: WlSurfaceId::new(surface),
             buffer,
+            buffer_update: None,
             role: None,
             buffer_scale: 1,
             buffer_transform: None,
@@ -889,6 +906,7 @@ impl SurfaceState {
     pub fn clone_without_buffer(&self) -> Self {
         let mut clone = self.clone();
         clone.buffer = None;
+        clone.buffer_update = None;
         clone
     }
 

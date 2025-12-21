@@ -8,6 +8,7 @@ use crate::client::config::WprscRole;
 use crate::prelude::*;
 use crate::protocols::wprs as proto;
 use crate::protocols::wprs::Serializer;
+use crate::protocols::wprs::transport;
 
 pub fn run_wprsc(config: WprscConfig) -> Result<()> {
     match config.role {
@@ -74,5 +75,36 @@ fn run_viewer(config: WprscConfig) -> Result<()> {
     .location(loc!())?;
 
     info!("wprsc using backend: {}", backend.name());
+
+    // Send a best-effort transport hello so the server can tune compression.
+    {
+        let supports_buffer_patches = backend.name() == "winit-wgpu";
+        let cpu = transport::CpuFeatures {
+            #[cfg(all(target_arch = "x86_64"))]
+            avx2: std::arch::is_x86_feature_detected!("avx2"),
+            #[cfg(not(target_arch = "x86_64"))]
+            avx2: false,
+            #[cfg(all(target_arch = "aarch64"))]
+            neon: std::arch::is_aarch64_feature_detected!("neon"),
+            #[cfg(not(target_arch = "aarch64"))]
+            neon: false,
+        };
+        let hello = transport::ClientHello {
+            supported_codecs: vec![
+                transport::TransportCodec::ShardedZstd { level: 1 },
+                transport::TransportCodec::ShardedRaw,
+            ],
+            supports_buffer_patches,
+            cpu,
+            gpu: transport::GpuFeatures::default(),
+            preferences: transport::TransportPreferences::default(),
+        };
+        serializer
+            .writer()
+            .send(proto::SendType::Object(proto::Event::Transport(
+                transport::TransportEvent::ClientHello(hello),
+            )));
+    }
+
     backend.run(serializer).location(loc!())
 }

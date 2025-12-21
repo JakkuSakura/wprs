@@ -100,6 +100,7 @@ mod tests {
             client: ClientId(1),
             id: WlSurfaceId(2),
             buffer,
+            buffer_update: None,
             role: None,
             buffer_scale: 1,
             buffer_transform: None,

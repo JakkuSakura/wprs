@@ -49,6 +49,7 @@ use crate::protocols::wprs::Request;
 use crate::protocols::wprs::SendType;
 use crate::protocols::wprs::Serializer;
 use crate::protocols::wprs::geometry::{Point, Size};
+use crate::protocols::wprs::transport;
 use crate::protocols::wprs::wayland::ClientSurface;
 use crate::protocols::wprs::wayland::PointerGestureEvent;
 use crate::protocols::wprs::wayland::{
@@ -83,6 +84,7 @@ pub struct WinitWgpuOptions {
 pub enum UserEvent {
     ServerMessage(RecvType<Request>),
     DecodedFrame(DecodedFrame),
+    PingTick,
 }
 
 #[derive(Debug)]
@@ -91,6 +93,7 @@ pub struct DecodedFrame {
     pub metadata: crate::protocols::wprs::wayland::BufferMetadata,
     pub padded_row_bytes: u32,
     pub data: Vec<u8>,
+    pub origin: Option<(u32, u32)>,
 }
 
 #[derive(Debug)]
@@ -98,6 +101,7 @@ struct DecodeJob {
     surface_id: WlSurfaceId,
     metadata: crate::protocols::wprs::wayland::BufferMetadata,
     filtered: crate::vec4u8::Vec4u8s,
+    origin: Option<(u32, u32)>,
 }
 
 #[derive(Clone)]
@@ -131,7 +135,6 @@ struct WindowRenderer {
 const DECORATIONLESS_RESIZE_BORDER_LOGICAL: f64 = 8.0;
 
 impl WindowRenderer {
-
     fn new(shared: &WgpuShared, window: Arc<Window>) -> Result<Self> {
         let surface = shared
             .instance
@@ -394,6 +397,48 @@ impl WindowRenderer {
         );
     }
 
+    fn update_texture_region_from_padded_bgra(
+        &mut self,
+        shared: &WgpuShared,
+        origin: (u32, u32),
+        metadata: &crate::protocols::wprs::wayland::BufferMetadata,
+        padded_row_bytes: u32,
+        padded_data: &[u8],
+    ) {
+        let Some(texture) = self.texture.as_ref() else {
+            return;
+        };
+        let width = metadata.width.max(0) as u32;
+        let height = metadata.height.max(0) as u32;
+        if width == 0 || height == 0 {
+            return;
+        }
+
+        shared.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    x: origin.0,
+                    y: origin.1,
+                    z: 0,
+                },
+                aspect: wgpu::TextureAspect::All,
+            },
+            padded_data,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(padded_row_bytes),
+                rows_per_image: Some(height),
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+
     fn render(&mut self, shared: &WgpuShared) -> Result<()> {
         debug_assert_eq!(self.bind_group.is_some(), self.texture.is_some());
         debug_assert_eq!(self.bind_group.is_some(), self.texture_size.is_some());
@@ -598,8 +643,10 @@ struct App {
     current_cursor: Option<Cursor>,
     warned_cursor_names: HashSet<String>,
     cursor_dirty: bool,
-
     warned_low_buffer_scale_on_hidpi: bool,
+    server_transport_config: Option<transport::TransportConfig>,
+    ping_seq: u64,
+    inflight_ping: Option<(u64, std::time::Instant)>,
 }
 
 impl App {
@@ -749,6 +796,22 @@ impl App {
             surface_id,
             metadata,
             filtered,
+            origin: None,
+        });
+    }
+
+    fn schedule_decode_patch(
+        &self,
+        surface_id: WlSurfaceId,
+        origin: (u32, u32),
+        metadata: crate::protocols::wprs::wayland::BufferMetadata,
+        filtered: crate::vec4u8::Vec4u8s,
+    ) {
+        let _ = self.decode_tx.send(DecodeJob {
+            surface_id,
+            metadata,
+            filtered,
+            origin: Some(origin),
         });
     }
 
@@ -1305,6 +1368,10 @@ impl App {
                 Ok(())
             },
             RecvType::Object(Request::Surface(surface)) => self.handle_surface(event_loop, surface),
+            RecvType::Object(Request::Transport(req)) => {
+                self.handle_transport(req);
+                Ok(())
+            },
             RecvType::Object(Request::DisplayConfig(cfg)) => {
                 if self.server_display_config.is_none() {
                     info!(
@@ -1321,6 +1388,36 @@ impl App {
             },
             // Not yet handled in this backend.
             _ => Ok(()),
+        }
+    }
+
+    fn handle_transport(&mut self, req: transport::TransportRequest) {
+        match req {
+            transport::TransportRequest::Config(cfg) => {
+                info!(
+                    "server transport config: codec={:?} patches_enabled={} tile_px={} full_frame_threshold={}",
+                    cfg.codec,
+                    cfg.buffer_patches.enabled,
+                    cfg.buffer_patches.tile_px,
+                    cfg.buffer_patches.full_frame_threshold
+                );
+                self.server_transport_config = Some(cfg);
+            },
+            transport::TransportRequest::Pong(pong) => {
+                if let Some((seq, started)) = self.inflight_ping.take() {
+                    if seq == pong.seq {
+                        let rtt_ms = started.elapsed().as_millis().min(u128::from(u32::MAX)) as u32;
+                        self.serializer
+                            .writer()
+                            .send(SendType::Object(proto::Event::Transport(
+                                transport::TransportEvent::Stats(transport::TransportStats {
+                                    rtt_ms,
+                                    decode_ms: 0,
+                                }),
+                            )));
+                    }
+                }
+            },
         }
     }
 
@@ -1415,7 +1512,10 @@ impl App {
                             _toplevel.decoration_mode != Some(DecorationMode::Client);
 
                         #[cfg(not(target_os = "macos"))]
-                        let title = _toplevel.title.clone().unwrap_or_else(|| "wprs".to_string());
+                        let title = _toplevel
+                            .title
+                            .clone()
+                            .unwrap_or_else(|| "wprs".to_string());
 
                         // On macOS we draw a custom titlebar and keep the native title hidden, so
                         // avoid setting a non-empty native title string.
@@ -1549,6 +1649,8 @@ impl App {
 
                 // Apply buffer if present.
                 if let Some(BufferAssignment::New(mut buf)) = state.buffer.take() {
+                    let buffer_update = state.buffer_update.clone();
+
                     if buf.data.is_external() {
                         if let Some(cache) = self.buffer_cache.take() {
                             buf.data = BufferData::Uncompressed(cache);
@@ -1575,6 +1677,40 @@ impl App {
                             return Ok(());
                         },
                     };
+
+                    if let Some(crate::protocols::wprs::wayland::BufferUpdate::Patch {
+                        x,
+                        y,
+                        width,
+                        height,
+                        stride,
+                    }) = buffer_update
+                    {
+                        let patches_enabled = self
+                            .server_transport_config
+                            .as_ref()
+                            .map(|c| c.buffer_patches.enabled)
+                            .unwrap_or(false);
+                        if patches_enabled && self.surfaces_with_frame.contains(&surface_id) {
+                            if x >= 0 && y >= 0 {
+                                let patch_metadata =
+                                    crate::protocols::wprs::wayland::BufferMetadata {
+                                        width,
+                                        height,
+                                        stride,
+                                        format: buf.metadata.format,
+                                    };
+                                self.schedule_decode_patch(
+                                    surface_id,
+                                    (x as u32, y as u32),
+                                    patch_metadata,
+                                    filtered,
+                                );
+                                return Ok(());
+                            }
+                        }
+                    }
+
                     // Unfiltering can be expensive on non-SIMD platforms; do it
                     // off the winit/UI thread to keep the window responsive.
                     self.schedule_decode(surface_id, buf.metadata, filtered);
@@ -1615,12 +1751,22 @@ impl ApplicationHandler<UserEvent> for App {
             },
             UserEvent::DecodedFrame(frame) => {
                 if let Some(renderer) = self.windows.get_mut(&frame.surface_id) {
-                    renderer.update_texture_from_padded_bgra(
-                        &self.shared,
-                        &frame.metadata,
-                        frame.padded_row_bytes,
-                        &frame.data,
-                    );
+                    if let Some(origin) = frame.origin {
+                        renderer.update_texture_region_from_padded_bgra(
+                            &self.shared,
+                            origin,
+                            &frame.metadata,
+                            frame.padded_row_bytes,
+                            &frame.data,
+                        );
+                    } else {
+                        renderer.update_texture_from_padded_bgra(
+                            &self.shared,
+                            &frame.metadata,
+                            frame.padded_row_bytes,
+                            &frame.data,
+                        );
+                    }
                     renderer.window.request_redraw();
                     self.surfaces_with_frame.insert(frame.surface_id);
                     return;
@@ -1642,6 +1788,26 @@ impl ApplicationHandler<UserEvent> for App {
                     },
                     cursor_frame,
                 );
+            },
+            UserEvent::PingTick => {
+                // Only keep one in-flight ping at a time.
+                if self.inflight_ping.is_none() {
+                    self.ping_seq = self.ping_seq.wrapping_add(1);
+                    let seq = self.ping_seq;
+                    self.inflight_ping = Some((seq, std::time::Instant::now()));
+                    let now_ms = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64;
+                    self.serializer
+                        .writer()
+                        .send(SendType::Object(proto::Event::Transport(
+                            transport::TransportEvent::Ping(transport::Ping {
+                                seq,
+                                sent_at_ms: now_ms,
+                            }),
+                        )));
+                }
             },
         }
     }
@@ -2079,7 +2245,18 @@ pub fn run(
                     metadata: job.metadata,
                     padded_row_bytes,
                     data: padded,
+                    origin: job.origin,
                 }));
+            }
+        });
+    }
+
+    {
+        let proxy = proxy.clone();
+        thread::spawn(move || {
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                let _ = proxy.send_event(UserEvent::PingTick);
             }
         });
     }
@@ -2181,8 +2358,10 @@ pub fn run(
         current_cursor: Some(Cursor::from(CursorIcon::Default)),
         warned_cursor_names: HashSet::new(),
         cursor_dirty: true,
-
         warned_low_buffer_scale_on_hidpi: false,
+        server_transport_config: None,
+        ping_seq: 0,
+        inflight_ping: None,
     };
 
     event_loop.run_app(&mut app)?;

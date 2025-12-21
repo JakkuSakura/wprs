@@ -62,6 +62,7 @@ impl MacosFullscreenBackend {
             client: ClientId(1),
             id: WlSurfaceId(1),
             buffer: None,
+            buffer_update: None,
             role: Some(wayland::Role::XdgToplevel(toplevel)),
             buffer_scale: display_config.scale_factor,
             buffer_transform: None,
