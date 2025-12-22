@@ -29,7 +29,11 @@ use super::subsurface;
 use super::subsurface::RemoteSubSurface;
 use crate::client::backends::wayland::xdg_shell::RemoteXdgPopup;
 use crate::client::backends::wayland::xdg_shell::RemoteXdgToplevel;
+#[cfg(feature = "video-h264")]
+use crate::buffer_pointer::BufferPointer;
 use crate::fallible_entry::FallibleEntryExt;
+#[cfg(feature = "video-h264")]
+use crate::filtering;
 use crate::prelude::*;
 use crate::protocols::wprs::Capabilities;
 use crate::protocols::wprs::ClientId;
@@ -599,7 +603,30 @@ impl WprsClientState {
 
     #[instrument(skip_all, level = "debug")]
     fn handle_buffer(&mut self, buffer: Vec<u8>) -> Result<()> {
-        self.buffer_cache = Some(UncompressedBufferData(buffer.into()));
+        match self.transport_config.codec {
+            #[cfg(feature = "video-h264")]
+            transport::TransportCodec::H264 => {
+                if self.h264_decoder.is_none() {
+                    self.h264_decoder = Some(crate::video::h264::H264Decoder::new().location(loc!())?);
+                }
+                let decoder = self.h264_decoder.as_mut().unwrap();
+                let decoded = decoder.decode(&buffer).location(loc!())?;
+                let Some(decoded) = decoded else {
+                    return Ok(());
+                };
+                let ptr = decoded.bgra.as_ptr();
+                let data = unsafe { BufferPointer::new(&ptr, decoded.bgra.len()) };
+                let filtered = filtering::filter_to_vec4u8s(data);
+                self.buffer_cache = Some(UncompressedBufferData(filtered));
+            }
+            #[cfg(not(feature = "video-h264"))]
+            transport::TransportCodec::H264 => {
+                warn!("received H264 buffer without video-h264 support");
+            }
+            _ => {
+                self.buffer_cache = Some(UncompressedBufferData(buffer.into()));
+            }
+        }
         Ok(())
     }
 
@@ -614,6 +641,7 @@ impl WprsClientState {
                     cfg.buffer_patches.tile_px,
                     cfg.buffer_patches.full_frame_threshold
                 );
+                self.transport_config = cfg;
                 Ok(())
             },
             transport::TransportRequest::Pong(_) => Ok(()),

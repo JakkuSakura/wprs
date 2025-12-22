@@ -138,8 +138,7 @@ and enable wprsd:
 
 ```bash
 loginctl enable-linger
-systemctl --user enable wprsd.service
-systemctl --user start wprsd.service
+systemctl --user enable --now wprsd.service
 ```
 
 On the local host:

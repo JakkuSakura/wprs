@@ -685,11 +685,16 @@ fn run_termwiz_embedded(cmd: &[OsString]) -> Result<()> {
         .writer()
         .send(SendType::Object(proto::Event::Transport(
             transport::TransportEvent::ClientHello(transport::ClientHello {
-                supported_codecs: vec![
-                    transport::TransportCodec::ShardedZstd { level: 1 },
-                    transport::TransportCodec::ShardedLz4,
-                    transport::TransportCodec::ShardedRaw,
-                ],
+                supported_codecs: {
+                    let mut codecs = vec![
+                        transport::TransportCodec::ShardedZstd { level: 1 },
+                        transport::TransportCodec::ShardedLz4,
+                        transport::TransportCodec::ShardedRaw,
+                    ];
+                    #[cfg(feature = "video-h264")]
+                    codecs.insert(0, transport::TransportCodec::H264);
+                    codecs
+                },
                 supports_buffer_patches: false,
                 cpu: transport::CpuFeatures::default(),
                 gpu: transport::GpuFeatures::default(),

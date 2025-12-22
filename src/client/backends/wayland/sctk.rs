@@ -64,6 +64,7 @@ use crate::protocols::wprs::Event;
 use crate::protocols::wprs::ObjectId;
 use crate::protocols::wprs::Request;
 use crate::protocols::wprs::Serializer;
+use crate::protocols::wprs::transport;
 use crate::protocols::wprs::geometry::Point;
 use crate::protocols::wprs::geometry::Rectangle;
 use crate::protocols::wprs::wayland::Buffer;
@@ -75,6 +76,8 @@ use crate::protocols::wprs::wayland::SubsurfacePosition;
 use crate::protocols::wprs::wayland::UncompressedBufferData;
 use crate::protocols::wprs::wayland::ViewportState;
 use crate::protocols::wprs::wayland::WlSurfaceId;
+#[cfg(feature = "video-h264")]
+use crate::video::h264::H264Decoder;
 use crate::utils::client::SeatObject;
 use crate::vec4u8::Vec4u8s;
 
@@ -157,6 +160,9 @@ pub struct WprsClientState {
     pub(super) title_prefix: String,
 
     pub(super) buffer_cache: Option<UncompressedBufferData>,
+    pub(super) transport_config: transport::TransportConfig,
+    #[cfg(feature = "video-h264")]
+    pub(super) h264_decoder: Option<H264Decoder>,
 }
 
 impl WprsClientState {
@@ -233,6 +239,9 @@ impl WprsClientState {
             active_hold_surface: None,
             title_prefix: options.title_prefix,
             buffer_cache: None,
+            transport_config: transport::TransportConfig::default(),
+            #[cfg(feature = "video-h264")]
+            h264_decoder: None,
         })
     }
 }

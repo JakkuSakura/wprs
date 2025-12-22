@@ -89,12 +89,15 @@ fn run_viewer(config: WprscConfig) -> Result<()> {
             #[cfg(not(target_arch = "aarch64"))]
             neon: false,
         };
+        let mut supported_codecs = vec![
+            transport::TransportCodec::ShardedZstd { level: 1 },
+            transport::TransportCodec::ShardedLz4,
+            transport::TransportCodec::ShardedRaw,
+        ];
+        #[cfg(feature = "video-h264")]
+        supported_codecs.insert(0, transport::TransportCodec::H264);
         let hello = transport::ClientHello {
-            supported_codecs: vec![
-                transport::TransportCodec::ShardedZstd { level: 1 },
-                transport::TransportCodec::ShardedLz4,
-                transport::TransportCodec::ShardedRaw,
-            ],
+            supported_codecs,
             supports_buffer_patches,
             cpu,
             gpu: transport::GpuFeatures::default(),

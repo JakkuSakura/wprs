@@ -107,5 +107,10 @@ This is currently used to toggle between:
 - `ShardedZstd { level }` (current default)
 - `ShardedLz4` (CPU-light)
 - `ShardedRaw` (no compression)
+- `H264` (feature-gated; requires `--features video-h264` and a system FFmpeg build)
 
 The server side uses best-effort RTT/bitrate hints and client CPU/GPU capability hints.
+
+When `H264` is selected, the polling backend encodes frames with FFmpeg and the
+client decodes them via FFmpeg. Hardware acceleration is best-effort and depends
+on the FFmpeg build and available drivers.

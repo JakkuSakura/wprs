@@ -26,6 +26,7 @@ pub mod server;
 pub mod sharding_compression;
 pub mod utils;
 pub mod vec4u8;
+pub mod video;
 
 #[cfg(feature = "rdp")]
 pub use crate::protocols::rdp;

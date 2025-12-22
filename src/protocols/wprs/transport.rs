@@ -89,6 +89,8 @@ pub enum TransportCodec {
     ShardedRaw,
     /// Frame payloads are sharded and LZ4-compressed (low CPU, moderate compression).
     ShardedLz4,
+    /// Frame payloads are H.264 bitstreams (requires the `video-h264` feature).
+    H264,
 }
 
 impl Default for TransportCodec {
@@ -198,4 +200,3 @@ pub enum TransportEvent {
     Ping(Ping),
     Stats(TransportStats),
 }
-

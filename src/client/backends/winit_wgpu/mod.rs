@@ -36,6 +36,8 @@ use crate::client::config::KeyboardMode;
 use crate::client::coords;
 use crate::client::coords::ServerBufferScale;
 use crate::client::coords::UiScaleFactor;
+#[cfg(feature = "video-h264")]
+use crate::buffer_pointer::BufferPointer;
 use crate::filtering;
 use crate::prelude::*;
 use crate::protocols::wprs as proto;
@@ -52,6 +54,7 @@ use crate::protocols::wprs::wayland::{
     AxisScroll, AxisSource, KeyInner, KeyState, KeyboardEvent, ModifierState, PointerEvent,
     PointerEventKind,
 };
+use crate::protocols::wprs::transport;
 use crate::protocols::wprs::wayland::{
     BufferAssignment, BufferData, Mode, OutputEvent, OutputInfo, Subpixel, SurfaceRequest,
     SurfaceRequestPayload, Transform, UncompressedBufferData, WlSurfaceId,
@@ -555,6 +558,9 @@ struct App {
     server_rx: std::sync::mpsc::Receiver<RecvType<Request>>,
     decoded_frame_rx: std::sync::mpsc::Receiver<DecodedFrame>,
     buffer_cache: Option<UncompressedBufferData>,
+    transport_config: transport::TransportConfig,
+    #[cfg(feature = "video-h264")]
+    h264_decoder: Option<crate::video::h264::H264Decoder>,
     windows: HashMap<WlSurfaceId, WindowRenderer>,
     surface_by_window: HashMap<WindowId, WlSurfaceId>,
     outputs_sent: bool,
@@ -1347,8 +1353,34 @@ impl App {
     ) -> Result<()> {
         match msg {
             RecvType::RawBuffer(buf) => {
-                self.buffer_cache = Some(UncompressedBufferData(buf.into()));
-                Ok(())
+                match self.transport_config.codec {
+                    #[cfg(feature = "video-h264")]
+                    transport::TransportCodec::H264 => {
+                        if self.h264_decoder.is_none() {
+                            self.h264_decoder =
+                                Some(crate::video::h264::H264Decoder::new().location(loc!())?);
+                        }
+                        let decoded =
+                            self.h264_decoder.as_mut().unwrap().decode(&buf).location(loc!())?;
+                        let Some(decoded) = decoded else {
+                            return Ok(());
+                        };
+                        let ptr = decoded.bgra.as_ptr();
+                        let data = unsafe { BufferPointer::new(&ptr, decoded.bgra.len()) };
+                        let filtered = filtering::filter_to_vec4u8s(data);
+                        self.buffer_cache = Some(UncompressedBufferData(filtered));
+                        Ok(())
+                    }
+                    #[cfg(not(feature = "video-h264"))]
+                    transport::TransportCodec::H264 => {
+                        warn!("received H264 buffer without video-h264 support");
+                        Ok(())
+                    }
+                    _ => {
+                        self.buffer_cache = Some(UncompressedBufferData(buf.into()));
+                        Ok(())
+                    }
+                }
             },
             RecvType::Object(Request::Surface(surface)) => self.handle_surface(event_loop, surface),
             RecvType::Object(Request::DisplayConfig(cfg)) => {
@@ -1361,6 +1393,11 @@ impl App {
                 self.server_display_config = Some(cfg);
                 Ok(())
             },
+            RecvType::Object(Request::Transport(transport::TransportRequest::Config(cfg))) => {
+                self.transport_config = cfg;
+                Ok(())
+            },
+            RecvType::Object(Request::Transport(transport::TransportRequest::Pong(_))) => Ok(()),
             RecvType::Object(Request::CursorImage(cursor)) => {
                 self.handle_cursor_image(event_loop, cursor);
                 Ok(())
@@ -2215,6 +2252,9 @@ pub fn run(
         server_rx,
         decoded_frame_rx,
         buffer_cache: None,
+        transport_config: transport::TransportConfig::default(),
+        #[cfg(feature = "video-h264")]
+        h264_decoder: None,
         windows: HashMap::new(),
         surface_by_window: HashMap::new(),
         outputs_sent: false,

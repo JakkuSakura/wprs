@@ -17,6 +17,7 @@ use crate::protocols::wprs::Request;
 use crate::protocols::wprs::SendType;
 use crate::protocols::wprs::Serializer;
 use crate::protocols::wprs::core::handshake;
+use crate::protocols::wprs::transport;
 use crate::protocols::wprs::wayland::BufferAssignment;
 use crate::protocols::wprs::wayland::BufferData;
 use crate::protocols::wprs::wayland::CompressedBufferData;
@@ -24,11 +25,65 @@ use crate::protocols::wprs::wayland::SurfaceRequestPayload;
 use crate::server::runtime::backend::BackendObservation;
 use crate::server::runtime::backend::PollingBackend;
 use crate::sharding_compression::ShardingCompressor;
+#[cfg(feature = "video-h264")]
+use crate::arc_slice::ArcSlice;
+
+#[cfg(feature = "video-h264")]
+use crate::video::h264::H264Encoder;
+
+#[cfg(feature = "video-h264")]
+struct H264EncodeState {
+    width: u32,
+    height: u32,
+    encoder: H264Encoder,
+}
 
 struct State<B> {
     backend: B,
     serializer: Serializer<Request, Event>,
     compressor: ShardingCompressor,
+    transport_config: transport::TransportConfig,
+    tick_fps: u32,
+    #[cfg(feature = "video-h264")]
+    h264: Option<H264EncodeState>,
+}
+
+fn select_transport_config(hello: &transport::ClientHello) -> transport::TransportConfig {
+    let mut codec = transport::TransportCodec::ShardedZstd { level: 1 };
+    if let Some(found) = hello
+        .supported_codecs
+        .iter()
+        .find(|c| matches!(c, transport::TransportCodec::ShardedZstd { .. }))
+    {
+        codec = *found;
+    } else if hello
+        .supported_codecs
+        .contains(&transport::TransportCodec::ShardedLz4)
+    {
+        codec = transport::TransportCodec::ShardedLz4;
+    } else if hello
+        .supported_codecs
+        .contains(&transport::TransportCodec::ShardedRaw)
+    {
+        codec = transport::TransportCodec::ShardedRaw;
+    }
+
+    #[cfg(feature = "video-h264")]
+    if hello
+        .supported_codecs
+        .contains(&transport::TransportCodec::H264)
+    {
+        codec = transport::TransportCodec::H264;
+    }
+
+    transport::TransportConfig {
+        codec,
+        buffer_patches: transport::BufferPatchConfig {
+            enabled: hello.supports_buffer_patches,
+            ..Default::default()
+        },
+        max_fps: None,
+    }
 }
 
 fn send_initial_snapshot<B: PollingBackend>(state: &mut State<B>) -> Result<()> {
@@ -75,7 +130,33 @@ fn apply_observation<B: PollingBackend>(
                 let bgra_ptr = bgra.as_ptr();
                 // SAFETY: `bgra_ptr` points to `bgra.len()` bytes for the duration of this call.
                 let data = unsafe { BufferPointer::new(&bgra_ptr, bgra.len()) };
-                let shards = filtering::filter_and_compress(data, &mut state.compressor);
+                let shards = match state.transport_config.codec {
+                    #[cfg(feature = "video-h264")]
+                    transport::TransportCodec::H264 => {
+                        let metadata = buf.metadata;
+                        let should_reinit = state
+                            .h264
+                            .as_ref()
+                            .map_or(true, |h264| h264.width != metadata.width || h264.height != metadata.height);
+                        if should_reinit {
+                            state.h264 = Some(H264EncodeState {
+                                width: metadata.width,
+                                height: metadata.height,
+                                encoder: H264Encoder::new(metadata.width, metadata.height, state.tick_fps)
+                                    .location(loc!())?,
+                            });
+                        }
+                        let h264 = state.h264.as_mut().unwrap();
+                        let encoded = h264
+                            .encoder
+                            .encode(&bgra, metadata.stride as usize)
+                            .location(loc!())?;
+                        state
+                            .compressor
+                            .compress(NonZeroUsize::new(1).unwrap(), ArcSlice::new(encoded))
+                    }
+                    _ => filtering::filter_and_compress(data, &mut state.compressor),
+                };
                 buf.data = BufferData::Compressed(CompressedBufferData(Arc::new(shards)));
             }
 
@@ -114,10 +195,15 @@ pub fn run<B: PollingBackend>(
     // NOTE: This runner is polling-based and intended for capture-style backends.
     let mut event_loop = CalloopEventLoop::<State<B>>::try_new().location(loc!())?;
 
+    let tick_fps = (1.0 / tick_interval.as_secs_f64()).round().max(1.0) as u32;
     let mut state = State {
         backend,
         serializer,
         compressor: ShardingCompressor::new(NonZeroUsize::new(16).unwrap(), 1).location(loc!())?,
+        transport_config: transport::TransportConfig::default(),
+        tick_fps,
+        #[cfg(feature = "video-h264")]
+        h264: None,
     };
 
     let reader = state
@@ -135,6 +221,20 @@ pub fn run<B: PollingBackend>(
                         state.serializer.set_other_end_connected(true);
                         send_initial_snapshot(state).log_and_ignore(loc!());
                     },
+                    RecvType::Object(Event::Transport(transport::TransportEvent::ClientHello(
+                        hello,
+                    ))) => {
+                        let config = select_transport_config(&hello);
+                        state.transport_config = config.clone();
+                        state
+                            .serializer
+                            .writer()
+                            .send(SendType::Object(Request::Transport(
+                                transport::TransportRequest::Config(config),
+                            )));
+                    },
+                    RecvType::Object(Event::Transport(transport::TransportEvent::Stats(_))) => {},
+                    RecvType::Object(Event::Transport(transport::TransportEvent::Ping(_))) => {},
                     RecvType::Object(other) => {
                         state
                             .backend

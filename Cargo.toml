@@ -69,6 +69,7 @@ ironrdp-tokio = { git = "https://github.com/Devolutions/IronRDP", branch = "mast
 base64 = "0.22.1"
 png = "0.17.16"
 termwiz = "0.23.3"
+ffmpeg-next = { version = "6.1", optional = true }
 
 [build-dependencies]
 merkle_hash = "3.8.0"
@@ -212,6 +213,7 @@ tracy-allocator = ["tracy"]
 
 # Enables a cross-platform client fallback that can run without a Wayland compositor.
 winit-wgpu-client = ["dep:winit", "dep:wgpu", "dep:pollster"]
+video-h264 = ["dep:ffmpeg-next"]
 
 # Enables RDP protocol translation (wprs-rdp-bridge and optional wprsd integration).
 rdp = ["dep:ironrdp-server", "dep:ironrdp-tokio", "dep:bytes", "dep:async-trait"]

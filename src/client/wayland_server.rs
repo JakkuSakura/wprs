@@ -128,11 +128,16 @@ mod wayland_server_impl {
                 neon: false,
             };
             let hello = transport::ClientHello {
-                supported_codecs: vec![
-                    transport::TransportCodec::ShardedZstd { level: 1 },
-                    transport::TransportCodec::ShardedLz4,
-                    transport::TransportCodec::ShardedRaw,
-                ],
+                supported_codecs: {
+                    let mut codecs = vec![
+                        transport::TransportCodec::ShardedZstd { level: 1 },
+                        transport::TransportCodec::ShardedLz4,
+                        transport::TransportCodec::ShardedRaw,
+                    ];
+                    #[cfg(feature = "video-h264")]
+                    codecs.insert(0, transport::TransportCodec::H264);
+                    codecs
+                },
                 supports_buffer_patches,
                 cpu,
                 gpu: transport::GpuFeatures::default(),
