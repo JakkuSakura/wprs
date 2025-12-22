@@ -126,6 +126,30 @@ separate forked package.
 
 ## Usage
 
+### macOS (local capture)
+
+On macOS, the native `wprsd` backends capture existing windows or the main display.
+The first time you run them you will likely need to grant:
+
+- Screen Recording permission (for capture)
+- Accessibility permission (for input injection)
+
+Example: spawn an app and capture only that app's windows (prints a WPRS endpoint):
+
+```bash
+wrun -- /Applications/Safari.app/Contents/MacOS/Safari
+```
+
+Internally, `wrun` sets the capture PID over the local `wctl` control socket; `wprsd` does not accept a PID via CLI flags.
+
+Then, in another terminal, connect the viewer using the printed endpoint:
+
+```bash
+wprsc --endpoint unix:///path/printed/by/wrun.sock
+```
+
+### Linux (remote host)
+
 On the remote host, put the `wprsd.service` file into place:
 
 ```bash

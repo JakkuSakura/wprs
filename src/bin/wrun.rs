@@ -12,7 +12,12 @@ use wprs::config;
 use wprs::prelude::*;
 use wprs::server::config::WprsdConfig;
 
-#[cfg(any(all(unix, feature = "wayland"), target_os = "macos"))]
+#[cfg(unix)]
+use wprs::protocols::wctl;
+#[cfg(unix)]
+use wprs::protocols::wctl::codec as wctl_codec;
+
+#[cfg(all(unix, feature = "wayland"))]
 use wprs::protocols::wprs::Serializer;
 
 #[cfg(all(unix, feature = "wayland"))]
@@ -102,6 +107,8 @@ struct Args {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct WrunEmbeddedInstance {
     socket: PathBuf,
+    #[serde(default = "default_embedded_control_socket")]
+    control_socket: PathBuf,
     wayland_display: String,
     xwayland_display: Option<u32>,
     wprsd_pid: Option<u32>,
@@ -118,6 +125,11 @@ fn wrun_state_dir() -> PathBuf {
 #[cfg(unix)]
 fn wrun_instance_state_file() -> PathBuf {
     wrun_state_dir().join("instance.ron")
+}
+
+#[cfg(unix)]
+fn default_embedded_control_socket() -> PathBuf {
+    wrun_state_dir().join("wprsd-ctrl.sock")
 }
 
 #[cfg(unix)]
@@ -186,14 +198,6 @@ fn apply_linux_env(cmd: &mut Command, cfg: &WprsdConfig, no_wayland: bool, no_x1
         no_wayland,
         no_x11,
     );
-}
-
-#[cfg(target_os = "macos")]
-fn default_wrun_socket_path() -> PathBuf {
-    let dir = std::env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::temp_dir().join(whoami::username()));
-    dir.join("wrun.sock")
 }
 
 #[cfg(not(unix))]
@@ -298,6 +302,7 @@ fn default_embedded_instance() -> WrunEmbeddedInstance {
     let dir = wrun_state_dir();
     WrunEmbeddedInstance {
         socket: dir.join("wprsd.sock"),
+        control_socket: dir.join("wprsd-ctrl.sock"),
         wayland_display: "wprs-wrun".to_string(),
         xwayland_display: Some(40_100),
         wprsd_pid: None,
@@ -335,6 +340,8 @@ fn spawn_embedded_wprsd(
         .arg("wayland")
         .arg("--socket")
         .arg(&state.socket)
+        .arg("--control-socket")
+        .arg(&state.control_socket)
         .arg("--wayland-display")
         .arg(&state.wayland_display)
         .arg("--stderr-log-level")
@@ -358,6 +365,7 @@ fn start_embedded_wprsd_persistent(state: &mut WrunEmbeddedInstance) -> Result<(
     state.wprsd_pid = Some(child.id());
     drop(child);
     wait_for_wprsd_socket(&state.socket).location(loc!())?;
+    wait_for_wprsd_socket(&state.control_socket).location(loc!())?;
     info!("wrun: embedded wprsd is ready");
     Ok(())
 }
@@ -540,81 +548,84 @@ fn main() -> Result<()> {
             bail!("--termwiz requires building with `--features wayland` on a Unix platform")
         }
     }
+
     #[cfg(target_os = "macos")]
     {
-        return run_macos_forward(args.socket, &args.cmd).location(loc!());
+        let code = run_macos_forward(args.socket, &args.cmd).location(loc!())?;
+        std::process::exit(code);
     }
 
-    let cfg = load_wprsd_config(args.config_file).location(loc!())?;
-
-    #[cfg(unix)]
+    #[cfg(not(target_os = "macos"))]
     {
-        if args.standalone {
-            ensure!(
-                args.compositor_mode != CompositorMode::External,
-                "--standalone is only supported with embedded/inherited modes"
-            );
+        let cfg = load_wprsd_config(args.config_file).location(loc!())?;
 
-            let unique = format!(
-                "wprs-wrun-standalone-{}-{}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_nanos()
-            );
-            let dir = wrun_state_dir().join(unique);
-            std::fs::create_dir_all(&dir).location(loc!())?;
-            let mut state = WrunEmbeddedInstance {
-                socket: dir.join("wprsd.sock"),
-                wayland_display: format!("wprs-wrun-standalone-{}", std::process::id()),
-                xwayland_display: Some(40_200 + (std::process::id() as u32 % 1000)),
-                wprsd_pid: None,
-            };
-            let log_file = dir.join("wprsd.log");
-            let mut wprsd = spawn_embedded_wprsd(&state, &log_file).location(loc!())?;
-            state.wprsd_pid = Some(wprsd.id());
-            wait_for_wprsd_socket(&state.socket).location(loc!())?;
+        #[cfg(unix)]
+        {
+            if args.standalone {
+                ensure!(
+                    args.compositor_mode != CompositorMode::External,
+                    "--standalone is only supported with embedded/inherited modes"
+                );
 
-            let status = run_wrapped_command_standalone(
-                &state.wayland_display,
-                state.xwayland_display,
+                let unique = format!(
+                    "wprs-wrun-standalone-{}-{}",
+                    std::process::id(),
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_nanos()
+                );
+                let dir = wrun_state_dir().join(unique);
+                std::fs::create_dir_all(&dir).location(loc!())?;
+                let mut state = WrunEmbeddedInstance {
+                    socket: dir.join("wprsd.sock"),
+                    control_socket: dir.join("wprsd-ctrl.sock"),
+                    wayland_display: format!("wprs-wrun-standalone-{}", std::process::id()),
+                    xwayland_display: Some(40_200 + (std::process::id() as u32 % 1000)),
+                    wprsd_pid: None,
+                };
+                let log_file = dir.join("wprsd.log");
+                let mut wprsd = spawn_embedded_wprsd(&state, &log_file).location(loc!())?;
+                state.wprsd_pid = Some(wprsd.id());
+                wait_for_wprsd_socket(&state.socket).location(loc!())?;
+                wait_for_wprsd_socket(&state.control_socket).location(loc!())?;
+
+                let status = run_wrapped_command_standalone(
+                    &state.wayland_display,
+                    state.xwayland_display,
+                    args.no_wayland,
+                    args.no_x11,
+                    &args.cmd,
+                )
+                .location(loc!())?;
+
+                let _ = wprsd.kill();
+                let _ = wprsd.wait();
+                std::process::exit(status.code().unwrap_or(1));
+            }
+
+            let (wayland_display, xwayland_display) =
+                resolve_compositor(args.compositor_mode, &cfg).location(loc!())?;
+            return run_wrapped_command_with_env(
+                &wayland_display,
+                xwayland_display,
                 args.no_wayland,
                 args.no_x11,
                 &args.cmd,
             )
-            .location(loc!())?;
-
-            let _ = wprsd.kill();
-            let _ = wprsd.wait();
-            std::process::exit(status.code().unwrap_or(1));
+            .location(loc!());
         }
 
-        let (wayland_display, xwayland_display) =
-            resolve_compositor(args.compositor_mode, &cfg).location(loc!())?;
-        return run_wrapped_command_with_env(
-            &wayland_display,
-            xwayland_display,
-            args.no_wayland,
-            args.no_x11,
-            &args.cmd,
-        )
-        .location(loc!());
-    }
-
-    #[cfg(not(unix))]
-    {
-        run_wrapped_command(&cfg, args.no_wayland, args.no_x11, &args.cmd).location(loc!())
+        #[cfg(not(unix))]
+        {
+            run_wrapped_command(&cfg, args.no_wayland, args.no_x11, &args.cmd).location(loc!())
+        }
     }
 }
 
 #[cfg(target_os = "macos")]
-fn run_macos_forward(socket: Option<PathBuf>, cmd: &[OsString]) -> Result<()> {
-    use std::time::Duration;
-    use wprs::protocols::wprs as proto;
-    use wprs::server::backends::macos::MacosWindowBackend;
-    use wprs::server::backends::macos::MacosWindowBackendConfig;
-    use wprs::server::runtime::run_loop;
+fn run_macos_forward(socket: Option<PathBuf>, cmd: &[OsString]) -> Result<i32> {
+    use std::os::unix::net::UnixStream;
 
     let (program, args) = cmd
         .split_first()
@@ -625,23 +636,89 @@ fn run_macos_forward(socket: Option<PathBuf>, cmd: &[OsString]) -> Result<()> {
     let pid = child.id();
     info!("wrun(macos): spawned pid={pid}");
 
-    let sock = socket.unwrap_or_else(default_wrun_socket_path);
-    std::fs::create_dir_all(sock.parent().location(loc!())?).location(loc!())?;
-    let serializer: Serializer<proto::Request, proto::Event> =
-        Serializer::new_server(&sock).location(loc!())?;
-    println!("unix://{}", sock.display());
+    let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::temp_dir().join(whoami::username()));
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
 
-    let backend = MacosWindowBackend::new(MacosWindowBackendConfig {
-        dpi: None,
-        target_pid: Some(pid),
-    });
-    // Polling tick: 30 FPS.
-    std::thread::spawn(move || {
-        run_loop::run(backend, serializer, Duration::from_secs_f64(1.0 / 30.0))
-            .log_and_ignore(loc!());
-    });
+    let sock = socket.unwrap_or_else(|| runtime_dir.join(format!("wrun-{unique}.sock")));
+    let control_sock = runtime_dir.join(format!("wrun-{unique}.ctrl.sock"));
+    std::fs::create_dir_all(sock.parent().location(loc!())?).location(loc!())?;
+    if sock.exists() {
+        let _ = std::fs::remove_file(&sock);
+    }
+    if control_sock.exists() {
+        let _ = std::fs::remove_file(&control_sock);
+    }
+
+    let log_file = sock
+        .parent()
+        .location(loc!())?
+        .join(format!("wprsd-{unique}.log"));
+
+    let wprsd = find_wprsd_exe();
+    let mut cmd_wprsd = Command::new(wprsd);
+    cmd_wprsd
+        .arg("--backend")
+        .arg("macos-seamless")
+        .arg("--socket")
+        .arg(&sock)
+        .arg("--control-socket")
+        .arg(&control_sock)
+        .arg("--framerate")
+        .arg("30")
+        .arg("--stderr-log-level")
+        .arg("warn")
+        .arg("--log-file")
+        .arg(&log_file)
+        .arg("--file-log-level")
+        .arg("info");
+
+    let mut wprsd_child = cmd_wprsd.spawn().location(loc!())?;
+    if let Err(err) = wait_for_wprsd_socket(&control_sock) {
+        let _ = wprsd_child.kill();
+        let _ = wprsd_child.wait();
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(err);
+    }
+
+    let mut stream = UnixStream::connect(&control_sock).location(loc!())?;
+    wctl_codec::send(&mut stream, &wctl::Request::ServerInfo).location(loc!())?;
+    let endpoint = match wctl_codec::recv::<wctl::Response>(&mut stream).location(loc!())? {
+        wctl::Response::ServerInfo(info) => info.wprs_endpoint,
+        wctl::Response::Error { message } => bail!("wctl server_info failed: {message}"),
+        other => bail!("unexpected wctl response: {other:?}"),
+    };
+
+    wctl_codec::send(
+        &mut stream,
+        &wctl::Request::SetCaptureTargetPid { pid: Some(pid) },
+    )
+    .location(loc!())?;
+    match wctl_codec::recv::<wctl::Response>(&mut stream).location(loc!())? {
+        wctl::Response::Ok => {},
+        wctl::Response::Error { message } => bail!("wctl set capture pid failed: {message}"),
+        other => bail!("unexpected wctl response: {other:?}"),
+    }
+
+    println!("{endpoint}");
 
     let status = child.wait().location(loc!())?;
-    info!("wrun(macos): wrapped app exited: {status}");
-    Ok(())
+    let exit_code = status.code().unwrap_or(1);
+
+    wctl_codec::send(
+        &mut stream,
+        &wctl::Request::SetCaptureTargetPid { pid: None },
+    )
+    .location(loc!())?;
+    let _ = wctl_codec::recv::<wctl::Response>(&mut stream);
+
+    let _ = wprsd_child.kill();
+    let _ = wprsd_child.wait();
+
+    Ok(exit_code)
 }

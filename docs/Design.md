@@ -34,6 +34,13 @@ Linux specifics (when `wprsd` is a Wayland compositor, optionally with XWayland)
 - X11 apps connect via `DISPLAY` to XWayland hosted by `wprsd`.
 - `wrun` requests session env values from `wprsd` and spawns the target app with those env vars.
 
+macOS specifics (capture backends):
+
+- Apps do not connect to `wprsd`; `wprsd` captures existing windows or the main display.
+- Capture requires Screen Recording permission; input injection requires Accessibility permission.
+- `wrun` may spawn a short-lived `wprsd` to capture a single app in a daemon-mode-like topology.
+  - On macOS window capture, `wrun` spawns the app and passes the PID to `wprsd` over `wctl` (never via CLI flags).
+
 ### Mode B: daemon-less mode (fallback)
 
 ```

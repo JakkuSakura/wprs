@@ -5,5 +5,7 @@
 
 pub mod wprs;
 
+pub mod wctl;
+
 #[cfg(feature = "rdp")]
 pub mod rdp;

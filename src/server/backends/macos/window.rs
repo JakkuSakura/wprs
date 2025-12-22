@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU32;
+use std::sync::atomic::Ordering;
 
 use crate::prelude::*;
 use crate::protocols::wprs::Capabilities;
@@ -25,6 +27,26 @@ pub struct MacosWindowBackendConfig {
     pub target_pid: Option<u32>,
 }
 
+#[derive(Clone, Debug)]
+pub struct MacosTargetPid(Arc<AtomicU32>);
+
+impl MacosTargetPid {
+    pub fn new(initial: Option<u32>) -> Self {
+        Self(Arc::new(AtomicU32::new(initial.unwrap_or(0))))
+    }
+
+    pub fn get(&self) -> Option<u32> {
+        match self.0.load(Ordering::Relaxed) {
+            0 => None,
+            pid => Some(pid),
+        }
+    }
+
+    pub fn set(&self, pid: Option<u32>) {
+        self.0.store(pid.unwrap_or(0), Ordering::Relaxed);
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct WindowBounds {
     x: f64,
@@ -43,7 +65,7 @@ pub struct MacosWindowBackend {
     display_config: DisplayConfig,
     windows: HashMap<u32, TrackedWindow>,
     pressed_buttons: u32,
-    target_pid: Option<u32>,
+    target_pid: MacosTargetPid,
 }
 
 impl MacosWindowBackend {
@@ -58,8 +80,12 @@ impl MacosWindowBackend {
             display_config,
             windows: HashMap::new(),
             pressed_buttons: 0,
-            target_pid: config.target_pid,
+            target_pid: MacosTargetPid::new(config.target_pid),
         }
+    }
+
+    pub fn target_pid_handle(&self) -> MacosTargetPid {
+        self.target_pid.clone()
     }
 
     fn surface_state_for_window(
@@ -150,7 +176,7 @@ impl PollingBackend for MacosWindowBackend {
 
         let windows = list_windows().location(loc!())?;
         for w in windows {
-            if let Some(pid) = self.target_pid {
+            if let Some(pid) = self.target_pid.get() {
                 if w.owner_pid != pid {
                     continue;
                 }
@@ -172,7 +198,7 @@ impl PollingBackend for MacosWindowBackend {
         let mut out = Vec::new();
 
         let windows = list_windows().location(loc!())?;
-        let windows: Vec<WindowInfo> = if let Some(pid) = self.target_pid {
+        let windows: Vec<WindowInfo> = if let Some(pid) = self.target_pid.get() {
             windows.into_iter().filter(|w| w.owner_pid == pid).collect()
         } else {
             windows

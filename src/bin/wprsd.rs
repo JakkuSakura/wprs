@@ -16,12 +16,8 @@ use std::env;
 use std::fs;
 use std::process::Child;
 use std::process::Command;
-use std::time::Duration;
-
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::sync::Mutex;
+use std::time::Duration;
 
 use clap::Parser;
 use wprs::config;
@@ -119,16 +115,27 @@ fn run_selected_backend(config: &WprsdConfig) -> Result<()> {
     };
 
     let server_info = wctl::ServerInfo {
-        wprs_endpoint: wprs_endpoint.clone(),
-        wayland_display: Some(config.wayland.display.clone()),
-        xwayland_display: config.wayland.xwayland.as_ref().and_then(|x| x.display),
+        wprs_endpoint,
+        wayland_display: if backend_kind == WprsdBackend::Wayland {
+            Some(config.wayland.display.clone())
+        } else {
+            None
+        },
+        xwayland_display: if backend_kind == WprsdBackend::Wayland {
+            config.wayland.xwayland.as_ref().and_then(|x| x.display)
+        } else {
+            None
+        },
     };
 
-    let control_socket = config.control_socket.clone();
-    std::thread::spawn(move || {
-        let handler = Arc::new(ControlHandler::new(server_info, macos_target_pid));
-        wctl::unix::serve(&control_socket, handler).log_and_ignore(loc!());
-    });
+    #[cfg(unix)]
+    {
+        let control_socket = config.control_socket.clone();
+        std::thread::spawn(move || {
+            let handler = Arc::new(ControlHandler::new(server_info, macos_target_pid));
+            wctl::unix::serve(&control_socket, handler).log_and_ignore(loc!());
+        });
+    }
 
     let tick_interval = match backend.tick_mode() {
         TickMode::Polling => Some(Duration::from_secs_f64(
@@ -237,6 +244,7 @@ fn build_backend(
             let backend = backends::macos::MacosWindowBackend::new(
                 backends::macos::MacosWindowBackendConfig {
                     dpi: config.display_dpi,
+                    target_pid: None,
                 },
             );
             let pid = backend.target_pid_handle();
@@ -266,18 +274,13 @@ fn build_backend(
     }
 }
 
-struct Session {
-    id: u64,
-    child: Child,
-}
-
+#[cfg(unix)]
 struct ControlHandler {
     server_info: wctl::ServerInfo,
     macos_target_pid: Option<backends::macos::MacosTargetPid>,
-    next_session_id: AtomicU64,
-    session: Mutex<Option<Session>>,
 }
 
+#[cfg(unix)]
 impl ControlHandler {
     fn new(
         server_info: wctl::ServerInfo,
@@ -286,104 +289,26 @@ impl ControlHandler {
         Self {
             server_info,
             macos_target_pid,
-            next_session_id: AtomicU64::new(1),
-            session: Mutex::new(None),
-        }
-    }
-
-    fn spawn_session(&self, argv: Vec<String>) -> wctl::Response {
-        if argv.is_empty() {
-            return wctl::Response::Error {
-                message: "spawn requires non-empty argv".to_string(),
-            };
-        }
-        let Some(pid_handle) = self.macos_target_pid.clone() else {
-            return wctl::Response::Error {
-                message: "spawn is not supported by the current backend".to_string(),
-            };
-        };
-
-        let mut guard = self.session.lock().expect("mutex poisoned");
-        if guard.is_some() {
-            return wctl::Response::Error {
-                message: "session already running".to_string(),
-            };
-        }
-
-        let program = &argv[0];
-        let args = &argv[1..];
-        let mut cmd = Command::new(program);
-        cmd.args(args);
-
-        let child = match cmd.spawn() {
-            Ok(child) => child,
-            Err(err) => {
-                return wctl::Response::Error {
-                    message: format!("failed to spawn {program:?}: {err}"),
-                };
-            },
-        };
-
-        let id = self.next_session_id.fetch_add(1, Ordering::Relaxed);
-        pid_handle.set(Some(child.id()));
-        *guard = Some(Session { id, child });
-
-        wctl::Response::Spawned {
-            session_id: id,
-            wprs_endpoint: self.server_info.wprs_endpoint.clone(),
-        }
-    }
-
-    fn wait_session(&self, session_id: u64) -> wctl::Response {
-        let session = {
-            let mut guard = self.session.lock().expect("mutex poisoned");
-            match guard.take() {
-                Some(s) if s.id == session_id => s,
-                Some(s) => {
-                    *guard = Some(s);
-                    return wctl::Response::Error {
-                        message: format!("unknown session id {session_id}"),
-                    };
-                },
-                None => {
-                    return wctl::Response::Error {
-                        message: "no running session".to_string(),
-                    };
-                },
-            }
-        };
-
-        let mut child = session.child;
-        let status = match child.wait() {
-            Ok(status) => status,
-            Err(err) => {
-                if let Some(pid) = &self.macos_target_pid {
-                    pid.set(None);
-                }
-                return wctl::Response::Error {
-                    message: format!("wait failed: {err}"),
-                };
-            },
-        };
-
-        if let Some(pid) = &self.macos_target_pid {
-            pid.set(None);
-        }
-
-        wctl::Response::Exited {
-            session_id,
-            exit_code: status.code().unwrap_or(1),
         }
     }
 }
 
+#[cfg(unix)]
 impl wctl::unix::Handler for ControlHandler {
     fn handle(&self, req: wctl::Request) -> wctl::Response {
         match req {
             wctl::Request::Ping => wctl::Response::Pong,
             wctl::Request::ServerInfo => wctl::Response::ServerInfo(self.server_info.clone()),
-            wctl::Request::Spawn { argv } => self.spawn_session(argv),
-            wctl::Request::Wait { session_id } => self.wait_session(session_id),
+            wctl::Request::SetCaptureTargetPid { pid } => {
+                let Some(handle) = &self.macos_target_pid else {
+                    return wctl::Response::Error {
+                        message: "capture target pid is not supported by the current backend"
+                            .to_string(),
+                    };
+                };
+                handle.set(pid);
+                wctl::Response::Ok
+            },
         }
     }
 }
