@@ -830,6 +830,18 @@ impl Framed for Version {
     }
 }
 
+impl Framed for wayland::WlSurfaceId {
+    fn framed_write<W: Write>(&self, stream: &mut W) -> Result<()> {
+        stream.write_all(&self.0.to_be_bytes()).location(loc!())
+    }
+
+    fn framed_read<R: Read>(stream: &mut R) -> Result<Self> {
+        let mut buf = [0u8; std::mem::size_of::<u64>()];
+        stream.read_exact(&mut buf).location(loc!())?;
+        Ok(Self(u64::from_be_bytes(buf)))
+    }
+}
+
 // TODO: figure out how to shorten the T::Archived bound. This may require
 // https://github.com/rust-lang/rust/issues/52662.
 
@@ -880,28 +892,47 @@ impl Framed for RawBufferKind {
 pub struct RawBufferHeader {
     pub version: u8,
     pub kind: RawBufferKind,
+    pub surface: Option<wayland::WlSurfaceId>,
 }
 
 impl RawBufferHeader {
     pub const V1: u8 = 1;
+    pub const V2: u8 = 2;
 }
 
 impl Framed for RawBufferHeader {
     fn framed_write<W: Write>(&self, stream: &mut W) -> Result<()> {
         self.version.framed_write(stream).location(loc!())?;
         self.kind.framed_write(stream).location(loc!())?;
+        if self.version >= Self::V2 {
+            let surface = self
+                .surface
+                .ok_or_else(|| anyhow!("RawBufferHeader v2 requires surface"))
+                .location(loc!())?;
+            surface.framed_write(stream).location(loc!())?;
+        }
         Ok(())
     }
 
     fn framed_read<R: Read>(stream: &mut R) -> Result<Self> {
         let version = u8::framed_read(stream).location(loc!())?;
         let kind = RawBufferKind::framed_read(stream).location(loc!())?;
-        Ok(Self { version, kind })
+        let surface = if version >= Self::V2 {
+            Some(wayland::WlSurfaceId::framed_read(stream).location(loc!())?)
+        } else {
+            None
+        };
+        Ok(Self {
+            version,
+            kind,
+            surface,
+        })
     }
 }
 
 #[derive(Clone)]
 pub struct RawBufferPayload {
+    pub surface: wayland::WlSurfaceId,
     pub kind: RawBufferKind,
     pub shards: CompressedShards,
 }
@@ -951,7 +982,8 @@ where
             Self::Object(obj) => write!(f, "Object({obj:?})"),
             Self::RawBuffer(msg) => write!(
                 f,
-                "RawBuffer(kind={:?}, bytes={})",
+                "RawBuffer(surface={:?}, kind={:?}, bytes={})",
+                msg.header.surface,
                 msg.header.kind,
                 msg.bytes.len()
             ),
@@ -1122,8 +1154,9 @@ where
             },
             SendType::RawBuffer(payload) => (
                 Some(RawBufferHeader {
-                    version: RawBufferHeader::V1,
+                    version: RawBufferHeader::V2,
                     kind: payload.kind,
+                    surface: Some(payload.surface),
                 }),
                 payload.shards,
                 MessageType::RawBuffer,

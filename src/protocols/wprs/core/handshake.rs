@@ -37,6 +37,7 @@ fn externalize_compressed_buffer(state: &mut SurfaceState) -> Option<SendType<Re
     let shards = std::mem::take(shards);
     *data = BufferData::External;
     Some(SendType::RawBuffer(RawBufferPayload {
+        surface: state.id,
         kind: RawBufferKind::FilteredBgra,
         shards,
     }))

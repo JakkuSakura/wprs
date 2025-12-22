@@ -16,7 +16,8 @@ use crate::utils::filtering;
 /// association logic out of presentation backends.
 #[derive(Default)]
 pub struct ClientSync {
-    buffer_cache: Option<UncompressedBufferData>,
+    buffer_cache: std::collections::HashMap<crate::models::surface::WlSurfaceId, UncompressedBufferData>,
+    legacy_last_buffer: Option<UncompressedBufferData>,
     #[cfg(feature = "video-h264")]
     h264_decoder: Option<crate::protocols::video::h264::H264Decoder>,
 }
@@ -34,9 +35,15 @@ impl ClientSync {
     pub fn handle_message(&mut self, msg: RecvType<Request>) -> Result<Option<RecvType<Request>>> {
         match msg {
             RecvType::RawBuffer(msg) => {
+                let surface = msg.header.surface;
                 match msg.header.kind {
                     RawBufferKind::FilteredBgra => {
-                        self.buffer_cache = Some(UncompressedBufferData(msg.bytes.into()));
+                        let data = UncompressedBufferData(msg.bytes.into());
+                        if let Some(surface) = surface {
+                            self.buffer_cache.insert(surface, data);
+                        } else {
+                            self.legacy_last_buffer = Some(data);
+                        }
                     }
                     #[cfg(feature = "video-h264")]
                     RawBufferKind::H264 => {
@@ -57,7 +64,12 @@ impl ClientSync {
                         let ptr = decoded.bgra.as_ptr();
                         let data = unsafe { BufferPointer::new(&ptr, decoded.bgra.len()) };
                         let filtered = filtering::filter_to_vec4u8s(data);
-                        self.buffer_cache = Some(UncompressedBufferData(filtered));
+                        let data = UncompressedBufferData(filtered);
+                        if let Some(surface) = surface {
+                            self.buffer_cache.insert(surface, data);
+                        } else {
+                            self.legacy_last_buffer = Some(data);
+                        }
                     }
                     #[cfg(not(feature = "video-h264"))]
                     RawBufferKind::H264 => {
@@ -70,7 +82,12 @@ impl ClientSync {
                         let ptr = bgra.as_ptr();
                         let data = unsafe { BufferPointer::new(&ptr, bgra.len()) };
                         let filtered = filtering::filter_to_vec4u8s(data);
-                        self.buffer_cache = Some(UncompressedBufferData(filtered));
+                        let data = UncompressedBufferData(filtered);
+                        if let Some(surface) = surface {
+                            self.buffer_cache.insert(surface, data);
+                        } else {
+                            self.legacy_last_buffer = Some(data);
+                        }
                     }
                     RawBufferKind::Jpeg => {
                         let (_w, _h, bgra) =
@@ -79,7 +96,12 @@ impl ClientSync {
                         let ptr = bgra.as_ptr();
                         let data = unsafe { BufferPointer::new(&ptr, bgra.len()) };
                         let filtered = filtering::filter_to_vec4u8s(data);
-                        self.buffer_cache = Some(UncompressedBufferData(filtered));
+                        let data = UncompressedBufferData(filtered);
+                        if let Some(surface) = surface {
+                            self.buffer_cache.insert(surface, data);
+                        } else {
+                            self.legacy_last_buffer = Some(data);
+                        }
                     }
                 }
 
@@ -92,7 +114,9 @@ impl ClientSync {
 
                 if let Some(BufferAssignment::New(mut buf)) = state.buffer.take() {
                     if buf.data.is_external() {
-                        if let Some(cache) = self.buffer_cache.take() {
+                        if let Some(cache) = self.buffer_cache.remove(&surface.surface) {
+                            buf.data = BufferData::Uncompressed(cache);
+                        } else if let Some(cache) = self.legacy_last_buffer.take() {
                             buf.data = BufferData::Uncompressed(cache);
                         }
                     }
@@ -106,4 +130,3 @@ impl ClientSync {
         }
     }
 }
-

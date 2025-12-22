@@ -279,6 +279,7 @@ fn apply_observation<B: PollingBackend>(
                     .serializer
                     .writer()
                     .send(SendType::RawBuffer(crate::protocols::wprs::RawBufferPayload {
+                        surface: surface.id,
                         kind,
                         shards,
                     }));
