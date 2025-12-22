@@ -1,4 +1,3 @@
-use std::env;
 use std::process::Child;
 use std::process::Command;
 use std::sync::Arc;
@@ -45,11 +44,8 @@ pub fn infer_backend(config: &WprsdConfig) -> Result<WprsdBackend> {
         return Ok(WprsdBackend::WindowsFullscreen);
     }
     if cfg!(unix) {
-        if env::var_os("DISPLAY").is_some() {
-            return Ok(WprsdBackend::X11Fullscreen);
-        }
         bail!(
-            "no backend selected and $DISPLAY is not set; set `backend = \"wayland\"` and rebuild with `--features wayland`, or set $DISPLAY / choose an X11 backend explicitly"
+            "no backend selected; set `backend = \"wayland\"` and rebuild with `--features wayland`, or explicitly select a capture backend"
         )
     }
 
@@ -217,14 +213,6 @@ fn build_backend(
     Option<backends::windows::WindowsTargetPid>,
 )> {
     match backend {
-        WprsdBackend::X11Fullscreen => Ok((
-            Box::new(
-                backends::x11::X11FullscreenBackend::connect(config.x11_title.clone())
-                    .location(loc!())?,
-            ),
-            None,
-            None,
-        )),
         WprsdBackend::WindowsFullscreen => Ok((
             Box::new(backends::windows::WindowsFullscreenBackend::new()),
             None,

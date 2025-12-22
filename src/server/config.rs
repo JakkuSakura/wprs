@@ -47,7 +47,6 @@ impl std::str::FromStr for IntegrationMode {
 #[serde(rename_all = "kebab-case")]
 pub enum WprsdBackend {
     Wayland,
-    X11Fullscreen,
     WindowsFullscreen,
     MacosFullscreen,
     WindowsSeamless,
@@ -69,13 +68,12 @@ impl std::str::FromStr for WprsdBackend {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "wayland" => Ok(Self::Wayland),
-            "x11-fullscreen" => Ok(Self::X11Fullscreen),
             "windows-fullscreen" => Ok(Self::WindowsFullscreen),
             "macos-fullscreen" => Ok(Self::MacosFullscreen),
             "windows-seamless" => Ok(Self::WindowsSeamless),
             "macos-seamless" => Ok(Self::MacosSeamless),
             other => bail!(
-                "invalid backend {other:?} (expected: wayland|x11-fullscreen|windows-fullscreen|macos-fullscreen|windows-seamless|macos-seamless)"
+                "invalid backend {other:?} (expected: wayland|windows-fullscreen|macos-fullscreen|windows-seamless|macos-seamless)"
             ),
         }
     }
@@ -90,7 +88,6 @@ pub struct WprsdConfig {
     pub endpoint: Option<Endpoint>,
     pub backend: Option<WprsdBackend>,
     pub framerate: u32,
-    pub x11_title: String,
     pub log_file: Option<PathBuf>,
     pub stderr_log_level: SerializableLevel,
     pub file_log_level: SerializableLevel,
@@ -177,7 +174,6 @@ impl Default for WprsdConfig {
             endpoint: None,
             backend: None,
             framerate: 60,
-            x11_title: "wprs x11".to_string(),
             log_file: None,
             stderr_log_level: SerializableLevel(Level::INFO),
             file_log_level: SerializableLevel(Level::TRACE),
@@ -233,9 +229,6 @@ pub struct WprsdArgs {
 
     #[arg(long, value_name = "FPS")]
     pub framerate: Option<u32>,
-
-    #[arg(long, value_name = "TITLE")]
-    pub x11_title: Option<String>,
 
     #[arg(long, value_name = "PATH")]
     pub log_file: Option<PathBuf>,
@@ -314,9 +307,6 @@ impl WprsdArgs {
         }
         if let Some(v) = self.framerate {
             cfg.framerate = v;
-        }
-        if let Some(v) = self.x11_title {
-            cfg.x11_title = v;
         }
         if let Some(v) = self.log_file {
             cfg.log_file = Some(v);

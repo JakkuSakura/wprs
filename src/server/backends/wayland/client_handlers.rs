@@ -1350,41 +1350,4 @@ impl core::Backend for WprsServerState {
     }
 }
 
-#[cfg(feature = "xwayland")]
-#[cfg(test)]
-mod tests {
-    use super::configure_x11_surface_with_override_redirect_fallback;
-
-    use smithay::xwayland::xwm::X11SurfaceError;
-    use x11rb::rust_connection::ConnectionError;
-
-    use crate::loc;
-
-    #[test]
-    fn x11_configure_fallback_invoked_for_override_redirect() {
-        let mut synthetic_called = false;
-        let res = configure_x11_surface_with_override_redirect_fallback(
-            || Err(X11SurfaceError::UnsupportedForOverrideRedirect),
-            || {
-                synthetic_called = true;
-                Ok(())
-            },
-            loc!(),
-        );
-
-        assert!(res.is_ok());
-        assert!(synthetic_called);
-    }
-
-    #[test]
-    fn x11_configure_non_override_redirect_error_is_propagated() {
-        let res = configure_x11_surface_with_override_redirect_fallback(
-            || Err(X11SurfaceError::Connection(ConnectionError::UnknownError)),
-            || Ok(()),
-            loc!(),
-        );
-
-        let err = res.unwrap_err();
-        assert!(format!("{err:?}").contains("Unknown connection error"));
-    }
-}
+// NOTE: X11-native support is intentionally not part of this crate anymore.
