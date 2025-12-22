@@ -59,7 +59,7 @@ pub fn run_client_for_endpoint(
             #[cfg(feature = "image-jpeg")]
             codecs.push(transport::TransportCodec::Jpeg);
             #[cfg(feature = "video-h264")]
-            codecs.insert(0, transport::TransportCodec::H264);
+            codecs.push(transport::TransportCodec::H264);
             codecs
         };
         let hello = transport::ClientHello {
@@ -160,7 +160,7 @@ fn run_viewer(config: WprscConfig) -> Result<()> {
         #[cfg(feature = "image-jpeg")]
         supported_codecs.push(transport::TransportCodec::Jpeg);
         #[cfg(feature = "video-h264")]
-        supported_codecs.insert(0, transport::TransportCodec::H264);
+        supported_codecs.push(transport::TransportCodec::H264);
         let hello = transport::ClientHello {
             supported_codecs,
             supports_buffer_patches,

@@ -36,8 +36,6 @@ use crate::client::config::KeyboardMode;
 use crate::client::coords;
 use crate::client::coords::ServerBufferScale;
 use crate::client::coords::UiScaleFactor;
-#[cfg(feature = "video-h264")]
-use crate::utils::buffer_pointer::BufferPointer;
 use crate::utils::filtering;
 use crate::prelude::*;
 use crate::protocols::wprs as proto;

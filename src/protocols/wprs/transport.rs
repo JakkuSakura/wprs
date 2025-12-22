@@ -86,7 +86,8 @@ impl Default for TransportPreferences {
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Archive, Deserialize, Serialize)]
 pub enum TransportCodec {
-    /// Frame payloads are sharded and optionally zstd-compressed.
+    /// Frame payloads are sharded (split into independently-transferred chunks)
+    /// and optionally zstd-compressed.
     ///
     /// This is the current on-wire representation (see `CompressedShard::compression`).
     ShardedZstd { level: i32 },
@@ -326,6 +327,8 @@ impl Default for ClientHello {
         ];
         #[cfg(feature = "image-jpeg")]
         supported_codecs.push(TransportCodec::Jpeg);
+        #[cfg(feature = "video-h264")]
+        supported_codecs.push(TransportCodec::H264);
 
         Self {
             supported_codecs,

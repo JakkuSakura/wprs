@@ -1,6 +1,7 @@
 use std::sync::OnceLock;
 
 use ffmpeg_next as ffmpeg;
+use ffmpeg_next::error::EAGAIN;
 
 use crate::prelude::*;
 
@@ -36,7 +37,7 @@ impl H264Encoder {
         let codec = ffmpeg::encoder::find(ffmpeg::codec::Id::H264)
             .ok_or_else(|| anyhow!("H264 encoder not available"))
             .location(loc!())?;
-        let mut context = ffmpeg::codec::context::Context::new();
+        let context = ffmpeg::codec::context::Context::new();
         let mut encoder = context.encoder().video().location(loc!())?;
         encoder.set_width(width);
         encoder.set_height(height);
@@ -71,13 +72,16 @@ impl H264Encoder {
 
     pub fn encode(&mut self, bgra: &[u8], stride: usize) -> Result<Vec<u8>> {
         ensure_ffmpeg().location(loc!())?;
-        let mut source = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::BGRA, self.width, self.height);
+        let mut source =
+            ffmpeg::frame::Video::new(ffmpeg::format::Pixel::BGRA, self.width, self.height);
         let row_bytes = self.width as usize * 4;
         let src_stride = stride.max(row_bytes);
+        let dst_stride = source.stride(0);
+        let dst = source.data_mut(0);
         for y in 0..self.height as usize {
             let src = &bgra[y * src_stride..y * src_stride + row_bytes];
-            let dst = &mut source.data_mut(0)[y * source.stride(0)..y * source.stride(0) + row_bytes];
-            dst.copy_from_slice(src);
+            let out_row = &mut dst[y * dst_stride..y * dst_stride + row_bytes];
+            out_row.copy_from_slice(src);
         }
 
         self.scaler.run(&source, &mut self.frame).location(loc!())?;
@@ -88,8 +92,12 @@ impl H264Encoder {
         loop {
             let mut packet = ffmpeg::Packet::empty();
             match self.encoder.receive_packet(&mut packet) {
-                Ok(()) => out.extend_from_slice(packet.data()),
-                Err(err) if err == ffmpeg::Error::Again => break,
+                Ok(()) => {
+                    if let Some(data) = packet.data() {
+                        out.extend_from_slice(data);
+                    }
+                }
+                Err(err) if err == ffmpeg::Error::Other { errno: EAGAIN } => break,
                 Err(err) => return Err(anyhow!(err)).location(loc!()),
             }
         }
@@ -108,7 +116,7 @@ impl H264Decoder {
         let codec = ffmpeg::decoder::find(ffmpeg::codec::Id::H264)
             .ok_or_else(|| anyhow!("H264 decoder not available"))
             .location(loc!())?;
-        let mut context = ffmpeg::codec::context::Context::new();
+        let context = ffmpeg::codec::context::Context::new();
         let decoder = context.decoder().open_as(codec).location(loc!())?.video().location(loc!())?;
         Ok(Self {
             decoder,
@@ -163,7 +171,7 @@ impl H264Decoder {
                     bgra: out,
                 }))
             },
-            Err(err) if err == ffmpeg::Error::Again => Ok(None),
+            Err(err) if err == ffmpeg::Error::Other { errno: EAGAIN } => Ok(None),
             Err(err) => Err(anyhow!(err)).location(loc!()),
         }
     }

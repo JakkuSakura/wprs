@@ -132,7 +132,7 @@ mod wayland_server_impl {
                     #[cfg(feature = "image-jpeg")]
                     codecs.push(transport::TransportCodec::Jpeg);
                     #[cfg(feature = "video-h264")]
-                    codecs.insert(0, transport::TransportCodec::H264);
+                    codecs.push(transport::TransportCodec::H264);
                     codecs
                 },
                 supports_buffer_patches,

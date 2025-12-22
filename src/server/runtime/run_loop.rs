@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::time::Duration;
 
@@ -23,13 +24,12 @@ use crate::protocols::wprs::wayland::BufferMetadata;
 use crate::protocols::wprs::wayland::Role;
 use crate::protocols::wprs::wayland::SurfaceRequestPayload;
 use crate::protocols::wprs::wayland::SurfaceState;
+use crate::protocols::wprs::wayland::WlSurfaceId;
 use crate::server::runtime::backend::BackendObservation;
 use crate::server::runtime::backend::BackendSurfaceRole;
 use crate::server::runtime::backend::PollingBackend;
 use crate::utils::sharding_compression::ShardingCompressor;
 use crate::utils::sharding_compression::CompressedShards;
-#[cfg(feature = "video-h264")]
-use crate::utils::arc_slice::ArcSlice;
 use crate::protocols::wprs::xdg_shell;
 
 #[cfg(feature = "video-h264")]
@@ -49,7 +49,7 @@ struct State<B> {
     transport_config: transport::TransportConfig,
     tick_fps: u32,
     #[cfg(feature = "video-h264")]
-    h264: Option<H264EncodeState>,
+    h264: HashMap<WlSurfaceId, H264EncodeState>,
 }
 
 fn select_transport_config(hello: &transport::ClientHello) -> transport::TransportConfig {
@@ -72,12 +72,26 @@ fn select_transport_config(hello: &transport::ClientHello) -> transport::Transpo
         codec = transport::TransportCodec::ShardedRaw;
     }
 
+    // NOTE: H.264 support is compiled in by default, but it is intentionally
+    // not selected as the default negotiated codec.
     #[cfg(feature = "video-h264")]
-    if hello
-        .supported_codecs
-        .contains(&transport::TransportCodec::H264)
     {
-        codec = transport::TransportCodec::H264;
+        let supports_h264 = hello
+            .supported_codecs
+            .contains(&transport::TransportCodec::H264);
+        let prefers_bandwidth = hello
+            .preferences
+            .bandwidth_weight
+            .saturating_sub(hello.preferences.clarity_weight)
+            >= 30;
+        let low_target_bitrate = hello
+            .preferences
+            .target_bitrate_kbps
+            .map_or(false, |kbps| kbps < 8_000);
+
+        if supports_h264 && (prefers_bandwidth || low_target_bitrate) {
+            codec = transport::TransportCodec::H264;
+        }
     }
 
     // Best-effort "clarity-first" policy for image payloads.
@@ -167,9 +181,10 @@ fn surface_state_for_descriptor(
 }
 
 fn encode_bgra_frame(
+    surface_id: WlSurfaceId,
     transport_config: &transport::TransportConfig,
     compressor: &mut ShardingCompressor,
-    #[cfg(feature = "video-h264")] h264: &mut Option<H264EncodeState>,
+    #[cfg(feature = "video-h264")] h264: &mut HashMap<WlSurfaceId, H264EncodeState>,
     #[allow(unused_variables)]
     tick_fps: u32,
     metadata: BufferMetadata,
@@ -189,19 +204,35 @@ fn encode_bgra_frame(
     match transport_config.codec {
         #[cfg(feature = "video-h264")]
         transport::TransportCodec::H264 => {
-            let should_reinit = h264
-                .as_ref()
-                .map_or(true, |state| state.width != metadata.width || state.height != metadata.height);
+            let width = u32::try_from(metadata.width)
+                .ok()
+                .filter(|w| *w > 0)
+                .ok_or_else(|| anyhow!("invalid h264 width: {}", metadata.width))
+                .location(loc!())?;
+            let height = u32::try_from(metadata.height)
+                .ok()
+                .filter(|h| *h > 0)
+                .ok_or_else(|| anyhow!("invalid h264 height: {}", metadata.height))
+                .location(loc!())?;
+
+            let should_reinit = match h264.get(&surface_id) {
+                Some(existing) => existing.width != width || existing.height != height,
+                None => true,
+            };
             if should_reinit {
-                *h264 = Some(H264EncodeState {
-                    width: metadata.width,
-                    height: metadata.height,
-                    encoder: H264Encoder::new(metadata.width, metadata.height, tick_fps)
-                        .location(loc!())?,
-                });
+                let encoder = H264Encoder::new(width, height, tick_fps).location(loc!())?;
+                h264.insert(
+                    surface_id,
+                    H264EncodeState {
+                        width,
+                        height,
+                        encoder,
+                    },
+                );
             }
-            let encoder = h264.as_mut().unwrap();
-            let encoded = encoder
+
+            let encoder_state = h264.get_mut(&surface_id).unwrap();
+            let encoded = encoder_state
                 .encoder
                 .encode(bgra, metadata.stride as usize)
                 .location(loc!())?;
@@ -266,6 +297,7 @@ fn apply_observation<B: PollingBackend>(
 
             if let Some(frame) = frame {
                 let (kind, shards) = encode_bgra_frame(
+                    surface.id,
                     &state.transport_config,
                     &mut state.compressor,
                     #[cfg(feature = "video-h264")]
@@ -291,6 +323,10 @@ fn apply_observation<B: PollingBackend>(
         }
 
         BackendObservation::SurfaceDestroyed { client, surface } => {
+            #[cfg(feature = "video-h264")]
+            {
+                state.h264.remove(&surface);
+            }
             state
                 .serializer
                 .writer()
@@ -328,7 +364,7 @@ pub fn run<B: PollingBackend>(
         transport_config: transport::TransportConfig::default(),
         tick_fps,
         #[cfg(feature = "video-h264")]
-        h264: None,
+        h264: HashMap::new(),
     };
 
     let reader = state

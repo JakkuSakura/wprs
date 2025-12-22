@@ -9,6 +9,24 @@ This document describes the process topology and protocol boundaries of `wprs`.
 - **Protocol adaptation is implemented by clients** (including bridges).
   - A bridge consumes WPRS from `wprsd` and publishes another protocol endpoint (RDP/VNC/...).
 
+## What WPRS Is
+
+WPRS is a smart, network-optimized protocol for syncing GUI state.
+
+- The protocol layer owns state/event syncing semantics.
+  - Messages are designed so that a client can apply updates deterministically or queue them until prerequisites arrive.
+  - Backends should not implement ad-hoc syncing logic; they should emit observations/events and let the protocol core order/apply.
+- Codecs/serialization are transport concerns.
+  - Surface/window state is a model.
+  - Frame payloads are transported separately and can be optimized per codec.
+
+### In-process fast path
+
+When server and client live in the same process (daemon-less mode), the intent is to bypass network codecs and serialization entirely.
+
+- Prefer sharing/memcpy of frame payloads (and direct invocation for events) over passing through WPRS framing or rkyv.
+- WPRS remains the canonical model boundary for daemon mode and for any cross-process/network transport.
+
 ## Binaries
 
 - `wprsd`: host daemon/server; runs host backends and serves WPRS.

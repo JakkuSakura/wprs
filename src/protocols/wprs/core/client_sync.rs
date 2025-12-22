@@ -19,7 +19,10 @@ pub struct ClientSync {
     buffer_cache: std::collections::HashMap<crate::protocols::wprs::wayland::WlSurfaceId, UncompressedBufferData>,
     legacy_last_buffer: Option<UncompressedBufferData>,
     #[cfg(feature = "video-h264")]
-    h264_decoder: Option<crate::protocols::video::h264::H264Decoder>,
+    h264_decoder: std::collections::HashMap<
+        crate::protocols::wprs::wayland::WlSurfaceId,
+        crate::protocols::video::h264::H264Decoder,
+    >,
 }
 
 impl ClientSync {
@@ -47,17 +50,20 @@ impl ClientSync {
                     }
                     #[cfg(feature = "video-h264")]
                     RawBufferKind::H264 => {
-                        if self.h264_decoder.is_none() {
-                            self.h264_decoder = Some(
-                                crate::protocols::video::h264::H264Decoder::new().location(loc!())?,
-                            );
-                        }
-                        let decoded = self
+                        let Some(surface) = surface else {
+                            warn!("received H264 buffer without surface id; ignoring");
+                            return Ok(None);
+                        };
+
+                        let decoder = self
                             .h264_decoder
-                            .as_mut()
-                            .unwrap()
-                            .decode(&msg.bytes)
-                            .location(loc!())?;
+                            .entry(surface)
+                            .or_insert_with(|| {
+                                crate::protocols::video::h264::H264Decoder::new()
+                                    .expect("H264Decoder init")
+                            });
+
+                        let decoded = decoder.decode(&msg.bytes).location(loc!())?;
                         let Some(decoded) = decoded else {
                             return Ok(None);
                         };
@@ -65,11 +71,7 @@ impl ClientSync {
                         let data = unsafe { BufferPointer::new(&ptr, decoded.bgra.len()) };
                         let filtered = filtering::filter_to_vec4u8s(data);
                         let data = UncompressedBufferData(filtered);
-                        if let Some(surface) = surface {
-                            self.buffer_cache.insert(surface, data);
-                        } else {
-                            self.legacy_last_buffer = Some(data);
-                        }
+                        self.buffer_cache.insert(surface, data);
                     }
                     #[cfg(not(feature = "video-h264"))]
                     RawBufferKind::H264 => {
@@ -108,8 +110,18 @@ impl ClientSync {
                 Ok(None)
             }
             RecvType::Object(Request::Surface(mut surface)) => {
+                match &surface.payload {
+                    SurfaceRequestPayload::Destroyed => {
+                        self.buffer_cache.remove(&surface.surface);
+                        #[cfg(feature = "video-h264")]
+                        self.h264_decoder.remove(&surface.surface);
+                        return Ok(Some(RecvType::Object(Request::Surface(surface))));
+                    }
+                    SurfaceRequestPayload::Commit(_) => {}
+                }
+
                 let SurfaceRequestPayload::Commit(mut state) = surface.payload else {
-                    return Ok(Some(RecvType::Object(Request::Surface(surface))));
+                    unreachable!()
                 };
 
                 if let Some(BufferAssignment::New(mut buf)) = state.buffer.take() {
