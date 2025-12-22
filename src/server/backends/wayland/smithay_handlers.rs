@@ -877,6 +877,7 @@ pub fn commit_impl(
                 .serializer
                 .writer()
                 .send(SendType::RawBuffer(crate::protocols::wprs::RawBufferPayload {
+                    kind: crate::protocols::wprs::RawBufferKind::FilteredBgra,
                     shards: raw_buffer_to_send,
                 }));
         },

@@ -847,9 +847,69 @@ where
 ///
 /// This is intentionally *not* rkyv-serialized. It uses the custom `Framed`
 /// encoding implemented by `CompressedShards` for efficient streaming.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[repr(u8)]
+pub enum RawBufferKind {
+    /// Filtered pixel bytes (Vec4u8s / SOA filter output).
+    FilteredBgra = 1,
+    /// H.264 bitstream bytes.
+    H264 = 2,
+    /// PNG image bytes.
+    Png = 3,
+    /// JPEG image bytes.
+    Jpeg = 4,
+}
+
+impl Framed for RawBufferKind {
+    fn framed_write<W: Write>(&self, stream: &mut W) -> Result<()> {
+        (*self as u8).framed_write(stream)
+    }
+
+    fn framed_read<R: Read>(stream: &mut R) -> Result<Self> {
+        match u8::framed_read(stream).location(loc!())? {
+            1 => Ok(Self::FilteredBgra),
+            2 => Ok(Self::H264),
+            3 => Ok(Self::Png),
+            4 => Ok(Self::Jpeg),
+            other => bail!("invalid RawBufferKind {other}")
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct RawBufferHeader {
+    pub version: u8,
+    pub kind: RawBufferKind,
+}
+
+impl RawBufferHeader {
+    pub const V1: u8 = 1;
+}
+
+impl Framed for RawBufferHeader {
+    fn framed_write<W: Write>(&self, stream: &mut W) -> Result<()> {
+        self.version.framed_write(stream).location(loc!())?;
+        self.kind.framed_write(stream).location(loc!())?;
+        Ok(())
+    }
+
+    fn framed_read<R: Read>(stream: &mut R) -> Result<Self> {
+        let version = u8::framed_read(stream).location(loc!())?;
+        let kind = RawBufferKind::framed_read(stream).location(loc!())?;
+        Ok(Self { version, kind })
+    }
+}
+
 #[derive(Clone)]
 pub struct RawBufferPayload {
+    pub kind: RawBufferKind,
     pub shards: CompressedShards,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct RawBufferMessage {
+    pub header: RawBufferHeader,
+    pub bytes: Vec<u8>,
 }
 
 impl<ST> fmt::Debug for SendType<ST>
@@ -877,7 +937,7 @@ where
         + for<'a> bytecheck::CheckBytes<HighValidator<'a, RancorError>>,
 {
     Object(RT),
-    RawBuffer(Vec<u8>),
+    RawBuffer(RawBufferMessage),
 }
 
 impl<RT> fmt::Debug for RecvType<RT>
@@ -889,7 +949,12 @@ where
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Object(obj) => write!(f, "Object({obj:?})"),
-            Self::RawBuffer(vec) => write!(f, "RawBuffer([{:?}])", vec.len()),
+            Self::RawBuffer(msg) => write!(
+                f,
+                "RawBuffer(kind={:?}, bytes={})",
+                msg.header.kind,
+                msg.bytes.len()
+            ),
         }
     }
 }
@@ -954,13 +1019,13 @@ where
                 .location(loc!())?;
             },
             MessageType::RawBuffer => {
-                let obj = RecvType::RawBuffer(
-                    CompressedShards::streaming_framed_decompress_to_owned(
-                        &mut stream,
-                        &mut decompressor,
-                    )
-                    .location(loc!())?,
-                );
+                let header = RawBufferHeader::framed_read(&mut stream).location(loc!())?;
+                let bytes = CompressedShards::streaming_framed_decompress_to_owned(
+                    &mut stream,
+                    &mut decompressor,
+                )
+                .location(loc!())?;
+                let obj = RecvType::RawBuffer(RawBufferMessage { header, bytes });
                 debug!("read obj: {obj:?}");
                 output_channel.send(obj)
                 // The error type is not Send + Sync, which anyhow requires.
@@ -1044,7 +1109,7 @@ where
             compression_ratio = field::Empty
         )
         .entered();
-        let (compressed_shards, message_type): (CompressedShards, MessageType) = match obj {
+        let (header, compressed_shards, message_type): (Option<RawBufferHeader>, CompressedShards, MessageType) = match obj {
             SendType::Object(obj) => {
                 let serialized_data = ArcSlice::new(
                     debug_span!("serialize")
@@ -1053,12 +1118,22 @@ where
                 );
 
                 let shards = compressor.compress(NonZeroUsize::new(1).unwrap(), serialized_data);
-                (shards, MessageType::Object)
+                (None, shards, MessageType::Object)
             },
-            SendType::RawBuffer(payload) => (payload.shards, MessageType::RawBuffer),
+            SendType::RawBuffer(payload) => (
+                Some(RawBufferHeader {
+                    version: RawBufferHeader::V1,
+                    kind: payload.kind,
+                }),
+                payload.shards,
+                MessageType::RawBuffer,
+            ),
         };
 
         message_type.framed_write(&mut stream).location(loc!())?;
+        if let Some(header) = header {
+            header.framed_write(&mut stream).location(loc!())?;
+        }
         compressed_shards.framed_write(&mut stream).location(loc!())?;
         stream.flush().location(loc!())?;
 

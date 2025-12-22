@@ -602,15 +602,15 @@ impl WprsClientState {
     }
 
     #[instrument(skip_all, level = "debug")]
-    fn handle_buffer(&mut self, buffer: Vec<u8>) -> Result<()> {
-        match self.transport_config.codec {
+    fn handle_buffer(&mut self, buffer: crate::protocols::wprs::RawBufferMessage) -> Result<()> {
+        match buffer.header.kind {
             #[cfg(feature = "video-h264")]
-            transport::TransportCodec::H264 => {
+            crate::protocols::wprs::RawBufferKind::H264 => {
                 if self.h264_decoder.is_none() {
                     self.h264_decoder = Some(crate::protocols::video::h264::H264Decoder::new().location(loc!())?);
                 }
                 let decoder = self.h264_decoder.as_mut().unwrap();
-                let decoded = decoder.decode(&buffer).location(loc!())?;
+                let decoded = decoder.decode(&buffer.bytes).location(loc!())?;
                 let Some(decoded) = decoded else {
                     return Ok(());
                 };
@@ -620,11 +620,14 @@ impl WprsClientState {
                 self.buffer_cache = Some(UncompressedBufferData(filtered));
             }
             #[cfg(not(feature = "video-h264"))]
-            transport::TransportCodec::H264 => {
+            crate::protocols::wprs::RawBufferKind::H264 => {
                 warn!("received H264 buffer without video-h264 support");
             }
-            _ => {
-                self.buffer_cache = Some(UncompressedBufferData(buffer.into()));
+            crate::protocols::wprs::RawBufferKind::FilteredBgra => {
+                self.buffer_cache = Some(UncompressedBufferData(buffer.bytes.into()));
+            }
+            other => {
+                warn!("received unsupported raw buffer kind: {other:?}");
             }
         }
         Ok(())

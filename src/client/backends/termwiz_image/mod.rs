@@ -111,8 +111,15 @@ impl TerminalPresenter {
 
     fn handle_message(&mut self, msg: RecvType<Request>) -> Result<()> {
         match msg {
-            RecvType::RawBuffer(buf) => {
-                self.buffer_cache = Some(Vec4u8s::from(buf));
+            RecvType::RawBuffer(msg) => {
+                match msg.header.kind {
+                    proto::RawBufferKind::FilteredBgra => {
+                        self.buffer_cache = Some(Vec4u8s::from(msg.bytes));
+                    }
+                    other => {
+                        warn!("termwiz-image: unsupported raw buffer kind: {other:?}");
+                    }
+                }
             },
             RecvType::Object(Request::Surface(surface)) => {
                 use proto::wayland::BufferAssignment;

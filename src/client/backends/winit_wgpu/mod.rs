@@ -1352,16 +1352,16 @@ impl App {
         msg: RecvType<Request>,
     ) -> Result<()> {
         match msg {
-            RecvType::RawBuffer(buf) => {
-                match self.transport_config.codec {
+            RecvType::RawBuffer(msg) => {
+                match msg.header.kind {
                     #[cfg(feature = "video-h264")]
-                    transport::TransportCodec::H264 => {
+                    crate::protocols::wprs::RawBufferKind::H264 => {
                         if self.h264_decoder.is_none() {
                             self.h264_decoder =
                                 Some(crate::protocols::video::h264::H264Decoder::new().location(loc!())?);
                         }
                         let decoded =
-                            self.h264_decoder.as_mut().unwrap().decode(&buf).location(loc!())?;
+                            self.h264_decoder.as_mut().unwrap().decode(&msg.bytes).location(loc!())?;
                         let Some(decoded) = decoded else {
                             return Ok(());
                         };
@@ -1372,12 +1372,16 @@ impl App {
                         Ok(())
                     }
                     #[cfg(not(feature = "video-h264"))]
-                    transport::TransportCodec::H264 => {
+                    crate::protocols::wprs::RawBufferKind::H264 => {
                         warn!("received H264 buffer without video-h264 support");
                         Ok(())
                     }
-                    _ => {
-                        self.buffer_cache = Some(UncompressedBufferData(buf.into()));
+                    crate::protocols::wprs::RawBufferKind::FilteredBgra => {
+                        self.buffer_cache = Some(UncompressedBufferData(msg.bytes.into()));
+                        Ok(())
+                    }
+                    other => {
+                        warn!("received unsupported raw buffer kind: {other:?}");
                         Ok(())
                     }
                 }

@@ -15,6 +15,7 @@
 use crate::prelude::*;
 use crate::protocols::wprs::Capabilities;
 use crate::protocols::wprs::DisplayConfig;
+use crate::protocols::wprs::RawBufferKind;
 use crate::protocols::wprs::RawBufferPayload;
 use crate::protocols::wprs::Request;
 use crate::protocols::wprs::SendType;
@@ -35,7 +36,10 @@ fn externalize_compressed_buffer(state: &mut SurfaceState) -> Option<SendType<Re
 
     let shards = std::mem::take(shards);
     *data = BufferData::External;
-    Some(SendType::RawBuffer(RawBufferPayload { shards }))
+    Some(SendType::RawBuffer(RawBufferPayload {
+        kind: RawBufferKind::FilteredBgra,
+        shards,
+    }))
 }
 
 pub fn surface_messages(state: SurfaceState) -> Result<Vec<SendType<Request>>> {

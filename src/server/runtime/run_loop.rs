@@ -160,9 +160,18 @@ fn apply_observation<B: PollingBackend>(
                 };
 
                 buf.data = BufferData::External;
-                state.serializer.writer().send(SendType::RawBuffer(
-                    crate::protocols::wprs::RawBufferPayload { shards },
-                ));
+                let kind = match state.transport_config.codec {
+                    #[cfg(feature = "video-h264")]
+                    transport::TransportCodec::H264 => crate::protocols::wprs::RawBufferKind::H264,
+                    _ => crate::protocols::wprs::RawBufferKind::FilteredBgra,
+                };
+                state
+                    .serializer
+                    .writer()
+                    .send(SendType::RawBuffer(crate::protocols::wprs::RawBufferPayload {
+                        kind,
+                        shards,
+                    }));
             }
 
             for msg in handshake::surface_messages(s).location(loc!())? {
