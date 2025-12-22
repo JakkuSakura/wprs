@@ -3,6 +3,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process;
 use std::process::Command;
+use std::thread::JoinHandle;
 use std::time;
 use std::time::Duration;
 
@@ -29,6 +30,12 @@ pub struct RunConfig {
     pub cmd: Vec<OsString>,
 }
 
+struct DaemonInstance {
+    control_endpoint: wctl::Endpoint,
+    client: wctl::client::Client,
+    embedded_server_thread: Option<JoinHandle<()>>,
+}
+
 pub fn run(cfg: RunConfig) -> Result<i32> {
     ensure!(
         !cfg.cmd.is_empty(),
@@ -37,42 +44,8 @@ pub fn run(cfg: RunConfig) -> Result<i32> {
 
     let wprsd_config_from_file =
         maybe_load_wprsd_config(cfg.wprsd_config_file.clone()).location(loc!())?;
-    let probe_endpoints = resolve_wctl_probe_endpoints(&cfg.wctl_endpoint, &wprsd_config_from_file)
-        .location(loc!())?;
-    let embedded_control_endpoint =
-        resolve_embedded_control_endpoint(&cfg.wctl_endpoint).location(loc!())?;
-
-    let mut endpoint = None;
-    for candidate in &probe_endpoints {
-        let client = wctl::client::Client::new(candidate.clone());
-        if client.ping().is_ok() {
-            endpoint = Some(candidate.clone());
-            break;
-        }
-    }
-
-    let endpoint = endpoint.unwrap_or_else(|| embedded_control_endpoint.clone());
-    let client = wctl::client::Client::new(endpoint.clone());
-    let mut embedded_server_thread = None;
-    if let Err(err) = client.ping() {
-        info!("wrun: external wprsd not detected ({endpoint}): {err:?}; starting embedded wprsd");
-
-        let mut wprsd_config = derive_wprsd_config_for_wrun(
-            wprsd_config_from_file.clone(),
-            &embedded_control_endpoint,
-        )
-        .location(loc!())?;
-
-        if cfg!(target_os = "macos") && wprsd_config.backend.is_none() {
-            wprsd_config.backend = Some(WprsdBackend::MacosSeamless);
-        }
-
-        configure_wprsd_control_endpoint(&mut wprsd_config, embedded_control_endpoint.clone());
-        embedded_server_thread = Some(daemon::start_in_thread(wprsd_config));
-        client.wait_ready(Duration::from_secs(5)).location(loc!())?;
-    }
-
-    let server_info = client.server_info().location(loc!())?;
+    let daemon = connect_or_start_daemon(&cfg, wprsd_config_from_file.clone()).location(loc!())?;
+    let server_info = daemon.client.server_info().location(loc!())?;
     if cfg.present_backend.is_none() {
         println!("{}", server_info.wprs_endpoint);
     } else {
@@ -106,14 +79,15 @@ pub fn run(cfg: RunConfig) -> Result<i32> {
     let pid = child.id();
 
     if cfg!(target_os = "macos") {
-        client
+        daemon
+            .client
             .set_capture_target_pid(Some(pid))
             .log_and_ignore(loc!());
     }
 
     if let Some(present_backend) = cfg.present_backend {
         let (cancel_tx, cancel_rx) = std::sync::mpsc::channel::<()>();
-        let wait_endpoint = endpoint.clone();
+        let wait_endpoint = daemon.control_endpoint.clone();
 
         let wait_thread = std::thread::spawn(move || {
             let client = wctl::client::Client::new(wait_endpoint);
@@ -165,7 +139,7 @@ pub fn run(cfg: RunConfig) -> Result<i32> {
 
         let _ = cancel_tx.send(());
         let exit_code = wait_thread.join().unwrap_or(1);
-        drop(embedded_server_thread);
+        drop(daemon.embedded_server_thread);
         return Ok(exit_code);
     }
 
@@ -173,11 +147,51 @@ pub fn run(cfg: RunConfig) -> Result<i32> {
     let exit_code = status.code().unwrap_or(1);
 
     if cfg!(target_os = "macos") {
-        client.set_capture_target_pid(None).log_and_ignore(loc!());
+        daemon
+            .client
+            .set_capture_target_pid(None)
+            .log_and_ignore(loc!());
     }
 
-    drop(embedded_server_thread);
+    drop(daemon.embedded_server_thread);
     Ok(exit_code)
+}
+
+fn connect_or_start_daemon(
+    cfg: &RunConfig,
+    wprsd_config_from_file: Option<WprsdConfig>,
+) -> Result<DaemonInstance> {
+    let probe_endpoints = resolve_wctl_probe_endpoints(&cfg.wctl_endpoint, &wprsd_config_from_file)
+        .location(loc!())?;
+    for candidate in &probe_endpoints {
+        let client = wctl::client::Client::new(candidate.clone());
+        if client.ping().is_ok() {
+            return Ok(DaemonInstance {
+                control_endpoint: candidate.clone(),
+                client,
+                embedded_server_thread: None,
+            });
+        }
+    }
+
+    let embedded_control_endpoint =
+        resolve_embedded_control_endpoint(&cfg.wctl_endpoint).location(loc!())?;
+    let client = wctl::client::Client::new(embedded_control_endpoint.clone());
+    info!(
+        "wrun: external wprsd not detected; starting embedded wprsd ({embedded_control_endpoint})"
+    );
+
+    let wprsd_config =
+        derive_wprsd_config_for_wrun(wprsd_config_from_file, &embedded_control_endpoint)
+            .location(loc!())?;
+    let embedded_server_thread = Some(daemon::start_in_thread(wprsd_config));
+    client.wait_ready(Duration::from_secs(5)).location(loc!())?;
+
+    Ok(DaemonInstance {
+        control_endpoint: embedded_control_endpoint,
+        client,
+        embedded_server_thread,
+    })
 }
 
 fn maybe_load_wprsd_config(config_file: Option<PathBuf>) -> Result<Option<WprsdConfig>> {
@@ -295,12 +309,11 @@ fn derive_wprsd_config_for_wrun(
     let mut cfg = from_file.unwrap_or_default();
 
     if from_file_is_none {
-        cfg.control_endpoint = Some(embedded_control_endpoint.clone());
-
         match embedded_control_endpoint {
             #[cfg(unix)]
             wctl::Endpoint::Unix { path } => {
                 let dir = path.parent().unwrap_or_else(|| Path::new("/"));
+                cfg.control_endpoint = Some(embedded_control_endpoint.clone());
                 cfg.control_socket = path.clone();
                 cfg.socket = dir.join("wprsd.sock");
                 cfg.endpoint = None;
@@ -314,15 +327,13 @@ fn derive_wprsd_config_for_wrun(
                 });
             },
         }
+
+        if cfg!(target_os = "macos") && cfg.backend.is_none() {
+            cfg.backend = Some(WprsdBackend::MacosSeamless);
+        }
     }
 
     Ok(cfg)
 }
 
-fn configure_wprsd_control_endpoint(cfg: &mut WprsdConfig, endpoint: wctl::Endpoint) {
-    cfg.control_endpoint = Some(endpoint.clone());
-    #[cfg(unix)]
-    if let wctl::Endpoint::Unix { path } = endpoint {
-        cfg.control_socket = path;
-    }
-}
+// Intentionally omitted: wrun no longer mutates the daemon config in-place.
