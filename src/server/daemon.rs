@@ -7,6 +7,7 @@ use std::time::Duration;
 use crate::prelude::*;
 use crate::protocols::wctl;
 use crate::protocols::wctl::Endpoint as WctlEndpoint;
+use crate::protocols::wprs::Endpoint as WprsEndpoint;
 #[cfg(feature = "rdp")]
 use crate::protocols::wprs::Endpoint;
 use crate::protocols::wprs::Event as ProtoEvent;
@@ -85,6 +86,8 @@ pub fn resolve_control_endpoint(config: &WprsdConfig) -> WctlEndpoint {
 pub fn run(config: &WprsdConfig) -> Result<()> {
     if config.endpoint.is_none() {
         std::fs::create_dir_all(config.socket.parent().location(loc!())?).location(loc!())?;
+    } else if let Some(WprsEndpoint::Unix { path }) = &config.endpoint {
+        std::fs::create_dir_all(path.parent().location(loc!())?).location(loc!())?;
     }
 
     let control_endpoint = resolve_control_endpoint(config);
