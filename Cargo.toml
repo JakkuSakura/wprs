@@ -68,6 +68,8 @@ ironrdp-server = { git = "https://github.com/Devolutions/IronRDP", branch = "mas
 ironrdp-tokio = { git = "https://github.com/Devolutions/IronRDP", branch = "master", optional = true, features = ["reqwest-rustls-ring"] }
 base64 = "0.22.1"
 png = "0.18.0"
+jpeg-decoder = { version = "0.3.1", optional = true }
+jpeg-encoder = { version = "0.6.1", optional = true }
 termwiz = "0.23.3"
 ffmpeg-next = { version = "6.1", optional = true }
 
@@ -80,6 +82,9 @@ sspi = { git = "https://github.com/Devolutions/sspi-rs", branch = "master" }
 [features]
 # Ensure `wprsc` can run out-of-the-box on non-Wayland platforms.
 default = ["winit-wgpu-client"]
+
+# Enables JPEG encoding/decoding for the transport plane.
+image-jpeg = ["dep:jpeg-decoder", "dep:jpeg-encoder"]
 
 # By default, avoid pulling in platform-specific Wayland compositor/client code.
 # Enable the components you need explicitly.

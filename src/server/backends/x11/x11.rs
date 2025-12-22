@@ -4,19 +4,15 @@ use crate::prelude::*;
 use crate::protocols::wprs::Capabilities;
 use crate::protocols::wprs::ClientId;
 use crate::protocols::wprs::Event;
-use crate::protocols::wprs::wayland::Buffer;
-use crate::protocols::wprs::wayland::BufferAssignment;
-use crate::protocols::wprs::wayland::BufferData;
 use crate::protocols::wprs::wayland::BufferFormat;
 use crate::protocols::wprs::wayland::BufferMetadata;
-use crate::protocols::wprs::wayland::Role;
-use crate::protocols::wprs::wayland::SurfaceState;
 use crate::protocols::wprs::wayland::WlSurfaceId;
 use crate::protocols::wprs::xdg_shell::XdgToplevelId;
-use crate::protocols::wprs::xdg_shell::XdgToplevelState;
 use crate::server::runtime::backend::BackendObservation;
+use crate::server::runtime::backend::BackendBgraFrame;
+use crate::server::runtime::backend::BackendSurfaceDescriptor;
+use crate::server::runtime::backend::BackendSurfaceRole;
 use crate::server::runtime::backend::PollingBackend;
-use crate::server::runtime::backend::SurfaceSnapshot;
 
 #[cfg(unix)]
 use std::ffi::c_void;
@@ -251,38 +247,25 @@ impl X11FullscreenBackend {
         }
     }
 
-    fn surface_state(&self) -> SurfaceState {
-        SurfaceState {
+    fn surface_descriptor(&self) -> BackendSurfaceDescriptor {
+        BackendSurfaceDescriptor {
             client: ClientId(1),
             id: WlSurfaceId(1),
-            buffer: Some(BufferAssignment::New(Buffer {
-                metadata: BufferMetadata {
-                    width: self.width as i32,
-                    height: self.height as i32,
-                    stride: self.width as i32 * 4,
-                    format: BufferFormat::Argb8888,
-                },
-                data: BufferData::External,
-            })),
-            buffer_update: None,
-            role: Some(Role::XdgToplevel(XdgToplevelState {
+            role: BackendSurfaceRole::XdgToplevel {
                 id: XdgToplevelId(1),
-                parent: None,
                 title: Some(self.title.clone()),
                 app_id: Some("x11-fullscreen".to_string()),
-                decoration_mode: None,
-                maximized: None,
-                fullscreen: None,
-            })),
+            },
             buffer_scale: 1,
-            buffer_transform: None,
-            opaque_region: None,
-            input_region: None,
-            z_ordered_children: Vec::new(),
-            damage: None,
-            output_ids: Vec::new(),
-            viewport_state: None,
-            xdg_surface_state: None,
+        }
+    }
+
+    fn surface_metadata(&self) -> BufferMetadata {
+        BufferMetadata {
+            width: self.width as i32,
+            height: self.height as i32,
+            stride: self.width as i32 * 4,
+            format: BufferFormat::Argb8888,
         }
     }
 
@@ -373,9 +356,10 @@ impl PollingBackend for X11FullscreenBackend {
         Capabilities { xwayland: false }
     }
 
-    fn initial_snapshot(&mut self) -> Result<Vec<SurfaceSnapshot>> {
-        Ok(vec![SurfaceSnapshot {
-            state: self.surface_state(),
+    fn initial_snapshot(&mut self) -> Result<Vec<BackendObservation>> {
+        Ok(vec![BackendObservation::SurfaceCommit {
+            surface: self.surface_descriptor(),
+            frame: None,
         }])
     }
 
@@ -384,8 +368,11 @@ impl PollingBackend for X11FullscreenBackend {
         {
             let bgra = self.capture_root_bgra().location(loc!())?;
             return Ok(vec![BackendObservation::SurfaceCommit {
-                state: self.surface_state(),
-                bgra: Some(bgra),
+                surface: self.surface_descriptor(),
+                frame: Some(BackendBgraFrame {
+                    metadata: self.surface_metadata(),
+                    bgra,
+                }),
             }]);
         }
 

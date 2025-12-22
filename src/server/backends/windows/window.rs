@@ -9,17 +9,15 @@ use crate::protocols::wprs::ClientId;
 use crate::protocols::wprs::DisplayConfig;
 use crate::protocols::wprs::Event;
 use crate::protocols::wprs::wayland;
-use crate::protocols::wprs::wayland::Buffer;
-use crate::protocols::wprs::wayland::BufferAssignment;
-use crate::protocols::wprs::wayland::BufferData;
 use crate::protocols::wprs::wayland::BufferMetadata;
 use crate::protocols::wprs::wayland::PointerEventKind;
-use crate::protocols::wprs::wayland::SurfaceState;
 use crate::protocols::wprs::wayland::WlSurfaceId;
 use crate::protocols::wprs::xdg_shell;
 use crate::server::runtime::backend::BackendObservation;
+use crate::server::runtime::backend::BackendBgraFrame;
+use crate::server::runtime::backend::BackendSurfaceDescriptor;
+use crate::server::runtime::backend::BackendSurfaceRole;
 use crate::server::runtime::backend::PollingBackend;
-use crate::server::runtime::backend::SurfaceSnapshot;
 
 #[derive(Debug, Clone, Copy)]
 struct Rect {
@@ -88,40 +86,20 @@ impl WindowsWindowBackend {
         self.target_pid.clone()
     }
 
-    fn surface_state_for_window(
+    fn surface_descriptor_for_window(
         &self,
         hwnd_key: u64,
         title: &str,
-        metadata: BufferMetadata,
-    ) -> SurfaceState {
-        let toplevel = xdg_shell::XdgToplevelState {
-            id: xdg_shell::XdgToplevelId(hwnd_key),
-            parent: None,
-            title: Some(title.to_string()),
-            app_id: Some("windows".to_string()),
-            decoration_mode: None,
-            maximized: None,
-            fullscreen: None,
-        };
-
-        SurfaceState {
+    ) -> BackendSurfaceDescriptor {
+        BackendSurfaceDescriptor {
             client: ClientId(1),
             id: WlSurfaceId(hwnd_key),
-            buffer: Some(BufferAssignment::New(Buffer {
-                metadata,
-                data: BufferData::External,
-            })),
-            buffer_update: None,
-            role: Some(wayland::Role::XdgToplevel(toplevel)),
+            role: BackendSurfaceRole::XdgToplevel {
+                id: xdg_shell::XdgToplevelId(hwnd_key),
+                title: Some(title.to_string()),
+                app_id: Some("windows".to_string()),
+            },
             buffer_scale: 1,
-            buffer_transform: None,
-            opaque_region: None,
-            input_region: None,
-            z_ordered_children: Vec::new(),
-            damage: None,
-            output_ids: Vec::new(),
-            viewport_state: None,
-            xdg_surface_state: Some(xdg_shell::XdgSurfaceState::default()),
         }
     }
 
@@ -180,15 +158,16 @@ impl PollingBackend for WindowsWindowBackend {
         self.display_config.clone()
     }
 
-    fn initial_snapshot(&mut self) -> Result<Vec<SurfaceSnapshot>> {
+    fn initial_snapshot(&mut self) -> Result<Vec<BackendObservation>> {
         let windows = list_windows().location(loc!())?;
         let mut out = Vec::new();
         for w in windows {
-            let (metadata, _bgra) = capture_window_bgra(w.hwnd_key).location(loc!())?;
+            let (metadata, bgra) = capture_window_bgra(w.hwnd_key).location(loc!())?;
             self.windows
                 .insert(w.hwnd_key, TrackedWindow { rect: w.rect });
-            out.push(SurfaceSnapshot {
-                state: self.surface_state_for_window(w.hwnd_key, &w.title, metadata),
+            out.push(BackendObservation::SurfaceCommit {
+                surface: self.surface_descriptor_for_window(w.hwnd_key, &w.title),
+                frame: Some(BackendBgraFrame { metadata, bgra }),
             });
         }
         Ok(out)
@@ -227,8 +206,11 @@ impl PollingBackend for WindowsWindowBackend {
             let (metadata, bgra) = capture_window_bgra(w.hwnd_key).location(loc!())?;
             self.windows
                 .insert(w.hwnd_key, TrackedWindow { rect: w.rect });
-            let state = self.surface_state_for_window(w.hwnd_key, &w.title, metadata);
-            out.push(BackendObservation::SurfaceCommit { state, bgra: Some(bgra) });
+            let surface = self.surface_descriptor_for_window(w.hwnd_key, &w.title);
+            out.push(BackendObservation::SurfaceCommit {
+                surface,
+                frame: Some(BackendBgraFrame { metadata, bgra }),
+            });
         }
         Ok(out)
     }

@@ -57,7 +57,7 @@ use crate::protocols::wprs::wayland::{
 use crate::protocols::wprs::transport;
 use crate::protocols::wprs::wayland::{
     BufferAssignment, BufferData, Mode, OutputEvent, OutputInfo, Subpixel, SurfaceRequest,
-    SurfaceRequestPayload, Transform, UncompressedBufferData, WlSurfaceId,
+    SurfaceRequestPayload, Transform, WlSurfaceId,
 };
 use crate::protocols::wprs::xdg_shell::XdgPopupState;
 use crate::protocols::wprs::xdg_shell::{
@@ -557,10 +557,8 @@ struct App {
     decode_tx: std::sync::mpsc::Sender<DecodeJob>,
     server_rx: std::sync::mpsc::Receiver<RecvType<Request>>,
     decoded_frame_rx: std::sync::mpsc::Receiver<DecodedFrame>,
-    buffer_cache: Option<UncompressedBufferData>,
+    client_sync: crate::protocols::wprs::core::client_sync::ClientSync,
     transport_config: transport::TransportConfig,
-    #[cfg(feature = "video-h264")]
-    h264_decoder: Option<crate::protocols::video::h264::H264Decoder>,
     windows: HashMap<WlSurfaceId, WindowRenderer>,
     surface_by_window: HashMap<WindowId, WlSurfaceId>,
     outputs_sent: bool,
@@ -1351,41 +1349,11 @@ impl App {
         event_loop: &dyn ActiveEventLoop,
         msg: RecvType<Request>,
     ) -> Result<()> {
+        let Some(msg) = self.client_sync.handle_message(msg).location(loc!())? else {
+            return Ok(());
+        };
+
         match msg {
-            RecvType::RawBuffer(msg) => {
-                match msg.header.kind {
-                    #[cfg(feature = "video-h264")]
-                    crate::protocols::wprs::RawBufferKind::H264 => {
-                        if self.h264_decoder.is_none() {
-                            self.h264_decoder =
-                                Some(crate::protocols::video::h264::H264Decoder::new().location(loc!())?);
-                        }
-                        let decoded =
-                            self.h264_decoder.as_mut().unwrap().decode(&msg.bytes).location(loc!())?;
-                        let Some(decoded) = decoded else {
-                            return Ok(());
-                        };
-                        let ptr = decoded.bgra.as_ptr();
-                        let data = unsafe { BufferPointer::new(&ptr, decoded.bgra.len()) };
-                        let filtered = filtering::filter_to_vec4u8s(data);
-                        self.buffer_cache = Some(UncompressedBufferData(filtered));
-                        Ok(())
-                    }
-                    #[cfg(not(feature = "video-h264"))]
-                    crate::protocols::wprs::RawBufferKind::H264 => {
-                        warn!("received H264 buffer without video-h264 support");
-                        Ok(())
-                    }
-                    crate::protocols::wprs::RawBufferKind::FilteredBgra => {
-                        self.buffer_cache = Some(UncompressedBufferData(msg.bytes.into()));
-                        Ok(())
-                    }
-                    other => {
-                        warn!("received unsupported raw buffer kind: {other:?}");
-                        Ok(())
-                    }
-                }
-            },
             RecvType::Object(Request::Surface(surface)) => self.handle_surface(event_loop, surface),
             RecvType::Object(Request::DisplayConfig(cfg)) => {
                 if self.server_display_config.is_none() {
@@ -1617,12 +1585,7 @@ impl App {
                 }
 
                 // Apply buffer if present.
-                if let Some(BufferAssignment::New(mut buf)) = state.buffer.take() {
-                    if buf.data.is_external() {
-                        if let Some(cache) = self.buffer_cache.take() {
-                            buf.data = BufferData::Uncompressed(cache);
-                        }
-                    }
+                if let Some(BufferAssignment::New(buf)) = state.buffer.take() {
                     let filtered = match buf.data {
                         BufferData::Uncompressed(data) => data.0,
                         BufferData::Compressed(_) => {
@@ -2255,10 +2218,8 @@ pub fn run(
         decode_tx,
         server_rx,
         decoded_frame_rx,
-        buffer_cache: None,
+        client_sync: crate::protocols::wprs::core::client_sync::ClientSync::new(),
         transport_config: transport::TransportConfig::default(),
-        #[cfg(feature = "video-h264")]
-        h264_decoder: None,
         windows: HashMap::new(),
         surface_by_window: HashMap::new(),
         outputs_sent: false,

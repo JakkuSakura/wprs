@@ -1,0 +1,109 @@
+use crate::prelude::*;
+use crate::protocols::wprs::RawBufferKind;
+use crate::protocols::wprs::RecvType;
+use crate::protocols::wprs::Request;
+use crate::protocols::wprs::wayland::BufferAssignment;
+use crate::protocols::wprs::wayland::BufferData;
+use crate::protocols::wprs::wayland::SurfaceRequestPayload;
+use crate::protocols::wprs::wayland::UncompressedBufferData;
+use crate::utils::buffer_pointer::BufferPointer;
+use crate::utils::filtering;
+
+/// Client-side synchronizer for pairing `RawBuffer` frames with `Surface(Commit)` messages.
+///
+/// The current WPRS wire format externalizes frame bytes as `RawBuffer` messages and uses
+/// `BufferData::External` in the surface commit as a placeholder. This helper keeps the
+/// association logic out of presentation backends.
+#[derive(Default)]
+pub struct ClientSync {
+    buffer_cache: Option<UncompressedBufferData>,
+    #[cfg(feature = "video-h264")]
+    h264_decoder: Option<crate::protocols::video::h264::H264Decoder>,
+}
+
+impl ClientSync {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Transforms incoming server messages:
+    /// - Consumes `RecvType::RawBuffer` frames, decoding/filtering into an in-memory buffer.
+    /// - Rewrites `Surface(Commit)` messages to inline the decoded buffer when `External`.
+    ///
+    /// Returns `None` for messages that are fully handled by the synchronizer.
+    pub fn handle_message(&mut self, msg: RecvType<Request>) -> Result<Option<RecvType<Request>>> {
+        match msg {
+            RecvType::RawBuffer(msg) => {
+                match msg.header.kind {
+                    RawBufferKind::FilteredBgra => {
+                        self.buffer_cache = Some(UncompressedBufferData(msg.bytes.into()));
+                    }
+                    #[cfg(feature = "video-h264")]
+                    RawBufferKind::H264 => {
+                        if self.h264_decoder.is_none() {
+                            self.h264_decoder = Some(
+                                crate::protocols::video::h264::H264Decoder::new().location(loc!())?,
+                            );
+                        }
+                        let decoded = self
+                            .h264_decoder
+                            .as_mut()
+                            .unwrap()
+                            .decode(&msg.bytes)
+                            .location(loc!())?;
+                        let Some(decoded) = decoded else {
+                            return Ok(None);
+                        };
+                        let ptr = decoded.bgra.as_ptr();
+                        let data = unsafe { BufferPointer::new(&ptr, decoded.bgra.len()) };
+                        let filtered = filtering::filter_to_vec4u8s(data);
+                        self.buffer_cache = Some(UncompressedBufferData(filtered));
+                    }
+                    #[cfg(not(feature = "video-h264"))]
+                    RawBufferKind::H264 => {
+                        warn!("received H264 buffer without video-h264 support");
+                    }
+                    RawBufferKind::Png => {
+                        let (_w, _h, bgra) =
+                            crate::protocols::wprs::transport::decode_png_to_bgra(&msg.bytes)
+                                .location(loc!())?;
+                        let ptr = bgra.as_ptr();
+                        let data = unsafe { BufferPointer::new(&ptr, bgra.len()) };
+                        let filtered = filtering::filter_to_vec4u8s(data);
+                        self.buffer_cache = Some(UncompressedBufferData(filtered));
+                    }
+                    RawBufferKind::Jpeg => {
+                        let (_w, _h, bgra) =
+                            crate::protocols::wprs::transport::decode_jpeg_to_bgra(&msg.bytes)
+                                .location(loc!())?;
+                        let ptr = bgra.as_ptr();
+                        let data = unsafe { BufferPointer::new(&ptr, bgra.len()) };
+                        let filtered = filtering::filter_to_vec4u8s(data);
+                        self.buffer_cache = Some(UncompressedBufferData(filtered));
+                    }
+                }
+
+                Ok(None)
+            }
+            RecvType::Object(Request::Surface(mut surface)) => {
+                let SurfaceRequestPayload::Commit(mut state) = surface.payload else {
+                    return Ok(Some(RecvType::Object(Request::Surface(surface))));
+                };
+
+                if let Some(BufferAssignment::New(mut buf)) = state.buffer.take() {
+                    if buf.data.is_external() {
+                        if let Some(cache) = self.buffer_cache.take() {
+                            buf.data = BufferData::Uncompressed(cache);
+                        }
+                    }
+                    state.buffer = Some(BufferAssignment::New(buf));
+                }
+
+                surface.payload = SurfaceRequestPayload::Commit(state);
+                Ok(Some(RecvType::Object(Request::Surface(surface))))
+            }
+            other => Ok(Some(other)),
+        }
+    }
+}
+

@@ -5,22 +5,20 @@ use crate::protocols::wprs::DisplayConfig;
 use crate::protocols::wprs::Event;
 use crate::protocols::wprs::wayland;
 use crate::protocols::wprs::wayland::AxisSource;
-use crate::protocols::wprs::wayland::Buffer;
-use crate::protocols::wprs::wayland::BufferAssignment;
-use crate::protocols::wprs::wayland::BufferData;
 use crate::protocols::wprs::wayland::BufferMetadata;
 use crate::protocols::wprs::wayland::PointerEventKind;
 use crate::protocols::wprs::wayland::PointerGestureEvent;
-use crate::protocols::wprs::wayland::SurfaceState;
 use crate::protocols::wprs::wayland::WlSurfaceId;
 use crate::protocols::wprs::xdg_shell;
 use crate::server::runtime::backend::BackendObservation;
+use crate::server::runtime::backend::BackendBgraFrame;
+use crate::server::runtime::backend::BackendSurfaceDescriptor;
+use crate::server::runtime::backend::BackendSurfaceRole;
 use crate::server::runtime::backend::PollingBackend;
-use crate::server::runtime::backend::SurfaceSnapshot;
 
 #[derive(Debug)]
 pub struct MacosFullscreenBackend {
-    surface_state: SurfaceState,
+    surface: BackendSurfaceDescriptor,
     pressed_buttons: u32,
     last_pos: (f64, f64),
     display_config: DisplayConfig,
@@ -45,36 +43,19 @@ impl MacosFullscreenBackend {
         let dpi = config.dpi.or(detected_dpi);
         let display_config = DisplayConfig { scale_factor, dpi };
 
-        // A single synthetic surface representing the main display.
-        let toplevel = xdg_shell::XdgToplevelState {
-            id: xdg_shell::XdgToplevelId(1),
-            parent: None,
-            title: Some("wprs (macOS)".to_string()),
-            app_id: Some("wprs".to_string()),
-            decoration_mode: None,
-            maximized: Some(true),
-            fullscreen: Some(true),
-        };
-
-        let surface_state = SurfaceState {
+        let surface = BackendSurfaceDescriptor {
             client: ClientId(1),
             id: WlSurfaceId(1),
-            buffer: None,
-            buffer_update: None,
-            role: Some(wayland::Role::XdgToplevel(toplevel)),
+            role: BackendSurfaceRole::XdgToplevel {
+                id: xdg_shell::XdgToplevelId(1),
+                title: Some("wprs (macOS)".to_string()),
+                app_id: Some("wprs".to_string()),
+            },
             buffer_scale: display_config.scale_factor,
-            buffer_transform: None,
-            opaque_region: None,
-            input_region: None,
-            z_ordered_children: Vec::new(),
-            damage: None,
-            output_ids: Vec::new(),
-            viewport_state: None,
-            xdg_surface_state: Some(xdg_shell::XdgSurfaceState::default()),
         };
 
         Self {
-            surface_state,
+            surface,
             pressed_buttons: 0,
             last_pos: (0.0, 0.0),
             display_config,
@@ -91,28 +72,19 @@ impl PollingBackend for MacosFullscreenBackend {
         self.display_config.clone()
     }
 
-    fn initial_snapshot(&mut self) -> Result<Vec<SurfaceSnapshot>> {
-        let (metadata, _bgra) = capture_main_display_bgra().location(loc!())?;
-        self.surface_state.buffer = Some(BufferAssignment::New(Buffer {
-            metadata,
-            data: BufferData::External,
-        }));
-
-        Ok(vec![SurfaceSnapshot {
-            state: self.surface_state.clone(),
+    fn initial_snapshot(&mut self) -> Result<Vec<BackendObservation>> {
+        let (metadata, bgra) = capture_main_display_bgra().location(loc!())?;
+        Ok(vec![BackendObservation::SurfaceCommit {
+            surface: self.surface.clone(),
+            frame: Some(BackendBgraFrame { metadata, bgra }),
         }])
     }
 
     fn poll(&mut self) -> Result<Vec<BackendObservation>> {
         let (metadata, bgra) = capture_main_display_bgra().location(loc!())?;
-        self.surface_state.buffer = Some(BufferAssignment::New(Buffer {
-            metadata,
-            data: BufferData::External,
-        }));
-
         Ok(vec![BackendObservation::SurfaceCommit {
-            state: self.surface_state.clone(),
-            bgra: Some(bgra),
+            surface: self.surface.clone(),
+            frame: Some(BackendBgraFrame { metadata, bgra }),
         }])
     }
 

@@ -159,10 +159,8 @@ pub struct WprsClientState {
 
     pub(super) title_prefix: String,
 
-    pub(super) buffer_cache: Option<UncompressedBufferData>,
+    pub(super) client_sync: crate::protocols::wprs::core::client_sync::ClientSync,
     pub(super) transport_config: transport::TransportConfig,
-    #[cfg(feature = "video-h264")]
-    pub(super) h264_decoder: Option<H264Decoder>,
 }
 
 impl WprsClientState {
@@ -238,10 +236,8 @@ impl WprsClientState {
             active_swipe_surface: None,
             active_hold_surface: None,
             title_prefix: options.title_prefix,
-            buffer_cache: None,
+            client_sync: crate::protocols::wprs::core::client_sync::ClientSync::new(),
             transport_config: transport::TransportConfig::default(),
-            #[cfg(feature = "video-h264")]
-            h264_decoder: None,
         })
     }
 }
@@ -497,29 +493,15 @@ impl RemoteSurface {
     pub fn apply_buffer(
         &mut self,
         new_buffer: Option<BufferAssignment>,
-        buffer_cache: &mut Option<UncompressedBufferData>,
         pool: &mut SlotPool,
     ) -> Result<()> {
         match new_buffer {
             Some(BufferAssignment::New(mut new_buffer)) => {
-                if !new_buffer.data.is_external() {
-                    return Err(anyhow!(
-                        "Received buffer from surface state.  This means that somehow the buffer is being sent with the commit message, instead of inside the buffer message."
-                    ));
-                }
-
-                if let Some(buffer_data) = buffer_cache.take() {
-                    new_buffer.data = BufferData::Uncompressed(buffer_data);
-                }
-                // else use the data in new_buffer as the buffer is data is
-                // still sent inline on connection.
-
                 if new_buffer.data.is_external() {
-                    // TODO: do we want to log a warning and let the rest of the
-                    // commit work? Unclear that it matters.
-                    return Err(anyhow!(
-                        "Received buffer commit with empty data. This can happen if wprsc reattaches between wprsd sending a buffer message and a commit message."
-                    ));
+                    debug!(
+                        "received buffer commit with External data and no inlined payload; skipping"
+                    );
+                    return Ok(());
                 }
 
                 self.set_buffer(new_buffer, pool).location(loc!())?;

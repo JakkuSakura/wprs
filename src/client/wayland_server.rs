@@ -127,7 +127,10 @@ mod wayland_server_impl {
                         transport::TransportCodec::ShardedZstd { level: 1 },
                         transport::TransportCodec::ShardedLz4,
                         transport::TransportCodec::ShardedRaw,
+                        transport::TransportCodec::Png,
                     ];
+                    #[cfg(feature = "image-jpeg")]
+                    codecs.push(transport::TransportCodec::Jpeg);
                     #[cfg(feature = "video-h264")]
                     codecs.insert(0, transport::TransportCodec::H264);
                     codecs

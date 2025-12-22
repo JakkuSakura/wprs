@@ -9,17 +9,15 @@ use crate::protocols::wprs::ClientId;
 use crate::protocols::wprs::DisplayConfig;
 use crate::protocols::wprs::Event;
 use crate::protocols::wprs::wayland;
-use crate::protocols::wprs::wayland::Buffer;
-use crate::protocols::wprs::wayland::BufferAssignment;
-use crate::protocols::wprs::wayland::BufferData;
 use crate::protocols::wprs::wayland::BufferMetadata;
 use crate::protocols::wprs::wayland::PointerEventKind;
-use crate::protocols::wprs::wayland::SurfaceState;
 use crate::protocols::wprs::wayland::WlSurfaceId;
-use crate::protocols::wprs::xdg_shell;
 use crate::server::runtime::backend::BackendObservation;
+use crate::server::runtime::backend::BackendBgraFrame;
+use crate::server::runtime::backend::BackendSurfaceDescriptor;
+use crate::server::runtime::backend::BackendSurfaceRole;
 use crate::server::runtime::backend::PollingBackend;
-use crate::server::runtime::backend::SurfaceSnapshot;
+use crate::protocols::wprs::xdg_shell;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MacosWindowBackendConfig {
@@ -88,41 +86,21 @@ impl MacosWindowBackend {
         self.target_pid.clone()
     }
 
-    fn surface_state_for_window(
+    fn surface_descriptor_for_window(
         &self,
         window_id: u32,
         title: &str,
         app_id: &str,
-        metadata: BufferMetadata,
-    ) -> SurfaceState {
-        let toplevel = xdg_shell::XdgToplevelState {
-            id: xdg_shell::XdgToplevelId(window_id as u64),
-            parent: None,
-            title: Some(title.to_string()),
-            app_id: Some(app_id.to_string()),
-            decoration_mode: None,
-            maximized: None,
-            fullscreen: None,
-        };
-
-        SurfaceState {
+    ) -> BackendSurfaceDescriptor {
+        BackendSurfaceDescriptor {
             client: ClientId(1),
             id: WlSurfaceId(window_id as u64),
-            buffer: Some(BufferAssignment::New(Buffer {
-                metadata,
-                data: BufferData::External,
-            })),
-            buffer_update: None,
-            role: Some(wayland::Role::XdgToplevel(toplevel)),
+            role: BackendSurfaceRole::XdgToplevel {
+                id: xdg_shell::XdgToplevelId(window_id as u64),
+                title: Some(title.to_string()),
+                app_id: Some(app_id.to_string()),
+            },
             buffer_scale: self.display_config.scale_factor,
-            buffer_transform: None,
-            opaque_region: None,
-            input_region: None,
-            z_ordered_children: Vec::new(),
-            damage: None,
-            output_ids: Vec::new(),
-            viewport_state: None,
-            xdg_surface_state: Some(xdg_shell::XdgSurfaceState::default()),
         }
     }
 
@@ -171,7 +149,7 @@ impl PollingBackend for MacosWindowBackend {
         self.display_config.clone()
     }
 
-    fn initial_snapshot(&mut self) -> Result<Vec<SurfaceSnapshot>> {
+    fn initial_snapshot(&mut self) -> Result<Vec<BackendObservation>> {
         let mut out = Vec::new();
 
         let windows = list_windows().location(loc!())?;
@@ -182,12 +160,17 @@ impl PollingBackend for MacosWindowBackend {
                 }
             }
             // Capture once to get the initial window size.
-            let (metadata, _bgra) = capture_window_bgra(w.window_id).location(loc!())?;
+            let (metadata, bgra) = capture_window_bgra(w.window_id).location(loc!())?;
             self.windows
                 .insert(w.window_id, TrackedWindow { bounds: w.bounds });
+            let surface = self.surface_descriptor_for_window(w.window_id, &w.title, &w.app_id);
 
-            out.push(SurfaceSnapshot {
-                state: self.surface_state_for_window(w.window_id, &w.title, &w.app_id, metadata),
+            out.push(BackendObservation::SurfaceCommit {
+                surface,
+                frame: Some(BackendBgraFrame {
+                    metadata,
+                    bgra,
+                }),
             });
         }
 
@@ -228,11 +211,10 @@ impl PollingBackend for MacosWindowBackend {
             let (metadata, bgra) = capture_window_bgra(w.window_id).location(loc!())?;
             self.windows
                 .insert(w.window_id, TrackedWindow { bounds: w.bounds });
-            let state = self.surface_state_for_window(w.window_id, &w.title, &w.app_id, metadata);
-
+            let surface = self.surface_descriptor_for_window(w.window_id, &w.title, &w.app_id);
             out.push(BackendObservation::SurfaceCommit {
-                state,
-                bgra: Some(bgra),
+                surface,
+                frame: Some(BackendBgraFrame { metadata, bgra }),
             });
         }
 

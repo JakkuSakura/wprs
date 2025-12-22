@@ -29,6 +29,7 @@ use crate::protocols::wprs::xdg_shell::PopupEvent;
 use crate::protocols::wprs::xdg_shell::ToplevelEvent;
 
 pub mod handshake;
+pub mod client_sync;
 
 /// Platform-neutral server core.
 ///

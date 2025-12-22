@@ -100,7 +100,6 @@ impl WprsClientState {
             remote_surface
                 .apply_buffer(
                     surface_state.buffer.take(),
-                    &mut self.buffer_cache,
                     &mut self.pool,
                 )
                 .location(loc!())?;
@@ -601,38 +600,6 @@ impl WprsClientState {
         Ok(())
     }
 
-    #[instrument(skip_all, level = "debug")]
-    fn handle_buffer(&mut self, buffer: crate::protocols::wprs::RawBufferMessage) -> Result<()> {
-        match buffer.header.kind {
-            #[cfg(feature = "video-h264")]
-            crate::protocols::wprs::RawBufferKind::H264 => {
-                if self.h264_decoder.is_none() {
-                    self.h264_decoder = Some(crate::protocols::video::h264::H264Decoder::new().location(loc!())?);
-                }
-                let decoder = self.h264_decoder.as_mut().unwrap();
-                let decoded = decoder.decode(&buffer.bytes).location(loc!())?;
-                let Some(decoded) = decoded else {
-                    return Ok(());
-                };
-                let ptr = decoded.bgra.as_ptr();
-                let data = unsafe { BufferPointer::new(&ptr, decoded.bgra.len()) };
-                let filtered = filtering::filter_to_vec4u8s(data);
-                self.buffer_cache = Some(UncompressedBufferData(filtered));
-            }
-            #[cfg(not(feature = "video-h264"))]
-            crate::protocols::wprs::RawBufferKind::H264 => {
-                warn!("received H264 buffer without video-h264 support");
-            }
-            crate::protocols::wprs::RawBufferKind::FilteredBgra => {
-                self.buffer_cache = Some(UncompressedBufferData(buffer.bytes.into()));
-            }
-            other => {
-                warn!("received unsupported raw buffer kind: {other:?}");
-            }
-        }
-        Ok(())
-    }
-
     fn handle_transport(&mut self, req: transport::TransportRequest) -> Result<()> {
         match req {
             transport::TransportRequest::Config(cfg) => {
@@ -653,6 +620,12 @@ impl WprsClientState {
 
     #[instrument(skip(self), level = "debug")]
     pub fn handle_request(&mut self, request: RecvType<Request>) {
+        let Some(request) =
+            log_and_return!(self.client_sync.handle_message(request).location(loc!()))
+        else {
+            return;
+        };
+
         match request {
             RecvType::Object(Request::Transport(req)) => self.handle_transport(req),
             RecvType::Object(Request::Surface(surface)) => self.handle_surface(surface),
@@ -667,7 +640,7 @@ impl WprsClientState {
             },
             RecvType::Object(Request::Capabilities(caps)) => self.handle_capabilities(caps),
             RecvType::Object(Request::DisplayConfig(cfg)) => self.handle_display_config(cfg),
-            RecvType::RawBuffer(buffer) => self.handle_buffer(buffer),
+            RecvType::RawBuffer(_) => Ok(()),
         }
         .log_and_ignore(loc!())
         // TODO: maybe send errors back to the server.

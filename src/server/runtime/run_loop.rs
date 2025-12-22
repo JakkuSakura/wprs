@@ -19,13 +19,18 @@ use crate::protocols::wprs::core::handshake;
 use crate::protocols::wprs::transport;
 use crate::protocols::wprs::wayland::BufferAssignment;
 use crate::protocols::wprs::wayland::BufferData;
+use crate::protocols::wprs::wayland::BufferMetadata;
+use crate::protocols::wprs::wayland::Role;
 use crate::protocols::wprs::wayland::SurfaceRequestPayload;
+use crate::protocols::wprs::wayland::SurfaceState;
 use crate::server::runtime::backend::BackendObservation;
+use crate::server::runtime::backend::BackendSurfaceRole;
 use crate::server::runtime::backend::PollingBackend;
 use crate::utils::sharding_compression::ShardingCompressor;
 use crate::utils::sharding_compression::CompressedShards;
 #[cfg(feature = "video-h264")]
 use crate::utils::arc_slice::ArcSlice;
+use crate::protocols::wprs::xdg_shell;
 
 #[cfg(feature = "video-h264")]
 use crate::protocols::video::h264::H264Encoder;
@@ -75,6 +80,25 @@ fn select_transport_config(hello: &transport::ClientHello) -> transport::Transpo
         codec = transport::TransportCodec::H264;
     }
 
+    // Best-effort "clarity-first" policy for image payloads.
+    //
+    // This is intentionally conservative: we only switch away from the sharded
+    // filtered BGRA path when the client strongly prefers clarity.
+    let prefers_clarity = hello
+        .preferences
+        .clarity_weight
+        .saturating_sub(hello.preferences.bandwidth_weight)
+        >= 30;
+    if prefers_clarity && codec != transport::TransportCodec::H264 {
+        if hello.supported_codecs.contains(&transport::TransportCodec::Png)
+            && hello.preferences.bandwidth_weight < 50
+        {
+            codec = transport::TransportCodec::Png;
+        } else if hello.supported_codecs.contains(&transport::TransportCodec::Jpeg) {
+            codec = transport::TransportCodec::Jpeg;
+        }
+    }
+
     transport::TransportConfig {
         codec,
         buffer_patches: transport::BufferPatchConfig {
@@ -100,12 +124,130 @@ fn send_initial_snapshot<B: PollingBackend>(state: &mut State<B>) -> Result<()> 
         )));
 
     let snapshot = state.backend.initial_snapshot().location(loc!())?;
-    for surface in snapshot {
-        for msg in handshake::surface_messages(surface.state).location(loc!())? {
-            state.serializer.writer().send(msg);
-        }
+    for obs in snapshot {
+        apply_observation(state, obs).location(loc!())?;
     }
     Ok(())
+}
+
+fn surface_state_for_descriptor(
+    surface: &crate::server::runtime::backend::BackendSurfaceDescriptor,
+    buffer: Option<BufferAssignment>,
+) -> SurfaceState {
+    let role = match &surface.role {
+        BackendSurfaceRole::XdgToplevel { id, title, app_id } => {
+            Role::XdgToplevel(xdg_shell::XdgToplevelState {
+                id: *id,
+                parent: None,
+                title: title.clone(),
+                app_id: app_id.clone(),
+                decoration_mode: None,
+                maximized: None,
+                fullscreen: None,
+            })
+        }
+    };
+
+    SurfaceState {
+        client: surface.client,
+        id: surface.id,
+        buffer,
+        buffer_update: None,
+        role: Some(role),
+        buffer_scale: surface.buffer_scale,
+        buffer_transform: None,
+        opaque_region: None,
+        input_region: None,
+        z_ordered_children: Vec::new(),
+        damage: None,
+        output_ids: Vec::new(),
+        viewport_state: None,
+        xdg_surface_state: Some(xdg_shell::XdgSurfaceState::default()),
+    }
+}
+
+fn encode_bgra_frame(
+    transport_config: &transport::TransportConfig,
+    compressor: &mut ShardingCompressor,
+    #[cfg(feature = "video-h264")] h264: &mut Option<H264EncodeState>,
+    #[allow(unused_variables)]
+    tick_fps: u32,
+    metadata: BufferMetadata,
+    bgra: &[u8],
+) -> Result<(crate::protocols::wprs::RawBufferKind, CompressedShards)> {
+    let expected_len = metadata.len();
+    ensure!(
+        bgra.len() == expected_len,
+        "bgra size mismatch: expected {expected_len} bytes, got {}",
+        bgra.len()
+    );
+
+    let bgra_ptr = bgra.as_ptr();
+    // SAFETY: `bgra_ptr` points to `bgra.len()` bytes for the duration of this call.
+    let data = unsafe { BufferPointer::new(&bgra_ptr, bgra.len()) };
+
+    match transport_config.codec {
+        #[cfg(feature = "video-h264")]
+        transport::TransportCodec::H264 => {
+            let should_reinit = h264
+                .as_ref()
+                .map_or(true, |state| state.width != metadata.width || state.height != metadata.height);
+            if should_reinit {
+                *h264 = Some(H264EncodeState {
+                    width: metadata.width,
+                    height: metadata.height,
+                    encoder: H264Encoder::new(metadata.width, metadata.height, tick_fps)
+                        .location(loc!())?,
+                });
+            }
+            let encoder = h264.as_mut().unwrap();
+            let encoded = encoder
+                .encoder
+                .encode(bgra, metadata.stride as usize)
+                .location(loc!())?;
+            Ok((
+                crate::protocols::wprs::RawBufferKind::H264,
+                CompressedShards::single_uncompressed(encoded),
+            ))
+        }
+        transport::TransportCodec::Png => {
+            let png_bytes = crate::protocols::wprs::transport::encode_png_from_bgra(
+                metadata.width as u32,
+                metadata.height as u32,
+                metadata.stride as usize,
+                bgra,
+            )
+            .location(loc!())?;
+            Ok((
+                crate::protocols::wprs::RawBufferKind::Png,
+                CompressedShards::single_uncompressed(png_bytes),
+            ))
+        }
+        transport::TransportCodec::Jpeg => {
+            let jpeg_bytes = crate::protocols::wprs::transport::encode_jpeg_from_bgra(
+                metadata.width as u32,
+                metadata.height as u32,
+                metadata.stride as usize,
+                bgra,
+            )
+            .location(loc!())?;
+            Ok((
+                crate::protocols::wprs::RawBufferKind::Jpeg,
+                CompressedShards::single_uncompressed(jpeg_bytes),
+            ))
+        }
+        transport::TransportCodec::ShardedRaw => {
+            let filtered = filtering::filter_to_vec4u8s(data);
+            Ok((
+                crate::protocols::wprs::RawBufferKind::FilteredBgra,
+                CompressedShards::single_uncompressed(filtered.into()),
+            ))
+        }
+        _ => Ok((
+            crate::protocols::wprs::RawBufferKind::FilteredBgra,
+            filtering::filter_and_compress(data, compressor),
+        )),
+    }
 }
 
 fn apply_observation<B: PollingBackend>(
@@ -113,58 +255,26 @@ fn apply_observation<B: PollingBackend>(
     obs: BackendObservation,
 ) -> Result<()> {
     match obs {
-        BackendObservation::SurfaceCommit { state: mut s, bgra } => {
-            if let Some(bgra) = bgra {
-                let Some(BufferAssignment::New(buf)) = s.buffer.as_mut() else {
-                    bail!("SurfaceCommit with frame requires BufferAssignment::New")
-                };
+        BackendObservation::SurfaceCommit { surface, frame } => {
+            let buffer = frame.as_ref().map(|frame| {
+                BufferAssignment::New(crate::protocols::wprs::wayland::Buffer {
+                    metadata: frame.metadata,
+                    data: BufferData::External,
+                })
+            });
+            let state_to_send = surface_state_for_descriptor(&surface, buffer);
 
-                let expected_len = buf.metadata.len();
-                ensure!(
-                    bgra.len() == expected_len,
-                    "bgra size mismatch: expected {expected_len} bytes, got {}",
-                    bgra.len()
-                );
-
-                let bgra_ptr = bgra.as_ptr();
-                // SAFETY: `bgra_ptr` points to `bgra.len()` bytes for the duration of this call.
-                let data = unsafe { BufferPointer::new(&bgra_ptr, bgra.len()) };
-
-                let shards: CompressedShards = match state.transport_config.codec {
+            if let Some(frame) = frame {
+                let (kind, shards) = encode_bgra_frame(
+                    &state.transport_config,
+                    &mut state.compressor,
                     #[cfg(feature = "video-h264")]
-                    transport::TransportCodec::H264 => {
-                        let metadata = buf.metadata;
-                        let should_reinit = state
-                            .h264
-                            .as_ref()
-                            .map_or(true, |h264| h264.width != metadata.width || h264.height != metadata.height);
-                        if should_reinit {
-                            state.h264 = Some(H264EncodeState {
-                                width: metadata.width,
-                                height: metadata.height,
-                                encoder: H264Encoder::new(metadata.width, metadata.height, state.tick_fps)
-                                    .location(loc!())?,
-                            });
-                        }
-                        let h264 = state.h264.as_mut().unwrap();
-                        let encoded =
-                            h264.encoder.encode(&bgra, metadata.stride as usize).location(loc!())?;
-                        // Video bitstreams are already compressed; do not zstd-compress again.
-                        CompressedShards::single_uncompressed(encoded)
-                    }
-                    transport::TransportCodec::ShardedRaw => {
-                        let filtered = filtering::filter_to_vec4u8s(data);
-                        CompressedShards::single_uncompressed(filtered.into())
-                    }
-                    _ => filtering::filter_and_compress(data, &mut state.compressor),
-                };
-
-                buf.data = BufferData::External;
-                let kind = match state.transport_config.codec {
-                    #[cfg(feature = "video-h264")]
-                    transport::TransportCodec::H264 => crate::protocols::wprs::RawBufferKind::H264,
-                    _ => crate::protocols::wprs::RawBufferKind::FilteredBgra,
-                };
+                    &mut state.h264,
+                    state.tick_fps,
+                    frame.metadata,
+                    &frame.bgra,
+                )
+                .location(loc!())?;
                 state
                     .serializer
                     .writer()
@@ -174,10 +284,10 @@ fn apply_observation<B: PollingBackend>(
                     }));
             }
 
-            for msg in handshake::surface_messages(s).location(loc!())? {
+            for msg in handshake::surface_messages(state_to_send).location(loc!())? {
                 state.serializer.writer().send(msg);
             }
-        },
+        }
 
         BackendObservation::SurfaceDestroyed { client, surface } => {
             state

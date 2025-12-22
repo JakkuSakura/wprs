@@ -5,19 +5,15 @@ use crate::prelude::*;
 use crate::protocols::wprs::Capabilities;
 use crate::protocols::wprs::ClientId;
 use crate::protocols::wprs::Event;
-use crate::protocols::wprs::wayland::Buffer;
-use crate::protocols::wprs::wayland::BufferAssignment;
-use crate::protocols::wprs::wayland::BufferData;
 use crate::protocols::wprs::wayland::BufferFormat;
 use crate::protocols::wprs::wayland::BufferMetadata;
-use crate::protocols::wprs::wayland::Role;
-use crate::protocols::wprs::wayland::SurfaceState;
 use crate::protocols::wprs::wayland::WlSurfaceId;
 use crate::protocols::wprs::xdg_shell::XdgToplevelId;
-use crate::protocols::wprs::xdg_shell::XdgToplevelState;
 use crate::server::runtime::backend::BackendObservation;
+use crate::server::runtime::backend::BackendSurfaceDescriptor;
+use crate::server::runtime::backend::BackendSurfaceRole;
+use crate::server::runtime::backend::BackendBgraFrame;
 use crate::server::runtime::backend::PollingBackend;
-use crate::server::runtime::backend::SurfaceSnapshot;
 
 pub mod patterns;
 
@@ -121,39 +117,25 @@ impl MockSurface {
         }
     }
 
-    pub fn base_state(&self) -> SurfaceState {
-        SurfaceState {
+    pub fn descriptor(&self) -> BackendSurfaceDescriptor {
+        BackendSurfaceDescriptor {
             client: self.client,
             id: self.id,
-            buffer: Some(BufferAssignment::New(Buffer {
-                metadata: BufferMetadata {
-                    width: self.width as i32,
-                    height: self.height as i32,
-                    stride: (self.width * 4) as i32,
-                    format: BufferFormat::Argb8888,
-                },
-                // Filled in by the core loop.
-                data: BufferData::External,
-            })),
-            buffer_update: None,
-            role: Some(Role::XdgToplevel(XdgToplevelState {
-                id: XdgToplevelId(1),
-                parent: None,
+            role: BackendSurfaceRole::XdgToplevel {
+                id: XdgToplevelId(self.id.0),
                 title: Some(self.title.clone()),
                 app_id: Some("wprs-mock".to_string()),
-                decoration_mode: None,
-                maximized: None,
-                fullscreen: None,
-            })),
+            },
             buffer_scale: 1,
-            buffer_transform: None,
-            opaque_region: None,
-            input_region: None,
-            z_ordered_children: Vec::new(),
-            damage: None,
-            output_ids: Vec::new(),
-            viewport_state: None,
-            xdg_surface_state: None,
+        }
+    }
+
+    pub fn frame_metadata(&self) -> BufferMetadata {
+        BufferMetadata {
+            width: self.width as i32,
+            height: self.height as i32,
+            stride: (self.width * 4) as i32,
+            format: BufferFormat::Argb8888,
         }
     }
 }
@@ -199,12 +181,13 @@ impl PollingBackend for MockBackend {
         Capabilities { xwayland: false }
     }
 
-    fn initial_snapshot(&mut self) -> Result<Vec<SurfaceSnapshot>> {
+    fn initial_snapshot(&mut self) -> Result<Vec<BackendObservation>> {
         Ok(self
             .surfaces
             .iter()
-            .map(|surface| SurfaceSnapshot {
-                state: surface.base_state(),
+            .map(|surface| BackendObservation::SurfaceCommit {
+                surface: surface.descriptor(),
+                frame: None,
             })
             .collect())
     }
@@ -222,9 +205,10 @@ impl PollingBackend for MockBackend {
                     surface.height,
                     self.frame.wrapping_add(idx as u64 * 37),
                 );
+                let metadata = surface.frame_metadata();
                 BackendObservation::SurfaceCommit {
-                    state: surface.base_state(),
-                    bgra: Some(bgra),
+                    surface: surface.descriptor(),
+                    frame: Some(BackendBgraFrame { metadata, bgra }),
                 }
             })
             .collect())

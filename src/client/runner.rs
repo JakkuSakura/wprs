@@ -54,7 +54,10 @@ pub fn run_client_for_endpoint(
                 transport::TransportCodec::ShardedZstd { level: 1 },
                 transport::TransportCodec::ShardedLz4,
                 transport::TransportCodec::ShardedRaw,
+                transport::TransportCodec::Png,
             ];
+            #[cfg(feature = "image-jpeg")]
+            codecs.push(transport::TransportCodec::Jpeg);
             #[cfg(feature = "video-h264")]
             codecs.insert(0, transport::TransportCodec::H264);
             codecs
@@ -152,7 +155,10 @@ fn run_viewer(config: WprscConfig) -> Result<()> {
             transport::TransportCodec::ShardedZstd { level: 1 },
             transport::TransportCodec::ShardedLz4,
             transport::TransportCodec::ShardedRaw,
+            transport::TransportCodec::Png,
         ];
+        #[cfg(feature = "image-jpeg")]
+        supported_codecs.push(transport::TransportCodec::Jpeg);
         #[cfg(feature = "video-h264")]
         supported_codecs.insert(0, transport::TransportCodec::H264);
         let hello = transport::ClientHello {

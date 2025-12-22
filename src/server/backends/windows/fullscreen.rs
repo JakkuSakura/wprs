@@ -3,7 +3,6 @@ use crate::protocols::wprs::Capabilities;
 use crate::protocols::wprs::Event;
 use crate::server::runtime::backend::BackendObservation;
 use crate::server::runtime::backend::PollingBackend;
-use crate::server::runtime::backend::SurfaceSnapshot;
 
 #[derive(Debug, Default)]
 pub struct WindowsFullscreenBackend;
@@ -19,7 +18,7 @@ impl PollingBackend for WindowsFullscreenBackend {
         Capabilities { xwayland: false }
     }
 
-    fn initial_snapshot(&mut self) -> Result<Vec<SurfaceSnapshot>> {
+    fn initial_snapshot(&mut self) -> Result<Vec<BackendObservation>> {
         bail!("Windows fullscreen capture backend is not implemented yet")
     }
 

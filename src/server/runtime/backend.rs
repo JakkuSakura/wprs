@@ -5,23 +5,39 @@ use crate::protocols::wprs::DisplayConfig;
 use crate::protocols::wprs::Event;
 use crate::protocols::wprs::Request;
 use crate::protocols::wprs::Serializer;
-use crate::protocols::wprs::wayland::SurfaceState;
+use crate::protocols::wprs::wayland::BufferMetadata;
 use crate::protocols::wprs::wayland::WlSurfaceId;
+use crate::protocols::wprs::xdg_shell;
 
-#[derive(Debug, Clone)]
-pub struct SurfaceSnapshot {
-    pub state: SurfaceState,
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum BackendSurfaceRole {
+    XdgToplevel {
+        id: xdg_shell::XdgToplevelId,
+        title: Option<String>,
+        app_id: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct BackendSurfaceDescriptor {
+    pub client: ClientId,
+    pub id: WlSurfaceId,
+    pub role: BackendSurfaceRole,
+    pub buffer_scale: i32,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct BackendBgraFrame {
+    pub metadata: BufferMetadata,
+    pub bgra: Vec<u8>,
 }
 
 #[derive(Debug, Clone)]
 pub enum BackendObservation {
     /// A surface commit, optionally carrying a full BGRA frame to be sent.
-    ///
-    /// If `bgra` is present, the core loop will compress it, emit a `RawBuffer`,
-    /// and send a `Surface(Commit)` with buffer data externalized.
     SurfaceCommit {
-        state: SurfaceState,
-        bgra: Option<Vec<u8>>,
+        surface: BackendSurfaceDescriptor,
+        frame: Option<BackendBgraFrame>,
     },
 
     /// Destroy a previously-advertised surface.
@@ -50,7 +66,7 @@ pub trait PollingBackend {
         DisplayConfig::default()
     }
 
-    fn initial_snapshot(&mut self) -> Result<Vec<SurfaceSnapshot>>;
+    fn initial_snapshot(&mut self) -> Result<Vec<BackendObservation>>;
 
     fn poll(&mut self) -> Result<Vec<BackendObservation>>;
 

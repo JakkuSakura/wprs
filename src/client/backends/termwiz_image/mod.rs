@@ -10,7 +10,6 @@ use crate::protocols::wprs as proto;
 use crate::protocols::wprs::RecvType;
 use crate::protocols::wprs::Request;
 use crate::protocols::wprs::Serializer;
-use crate::utils::vec4u8::Vec4u8s;
 
 use calloop::EventLoop as CalloopEventLoop;
 use calloop::channel::Event as CalloopChannelEvent;
@@ -82,7 +81,7 @@ fn bgra_to_rgba_in_place(buf: &mut [u8]) {
 struct TerminalPresenter {
     renderer: TerminfoRenderer,
     screen_size: ScreenSize,
-    buffer_cache: Option<Vec4u8s>,
+    client_sync: crate::protocols::wprs::core::client_sync::ClientSync,
     selected_surface: Option<proto::wayland::WlSurfaceId>,
 }
 
@@ -104,23 +103,17 @@ impl TerminalPresenter {
                 xpixel: size.xpixel,
                 ypixel: size.ypixel,
             },
-            buffer_cache: None,
+            client_sync: crate::protocols::wprs::core::client_sync::ClientSync::new(),
             selected_surface: None,
         })
     }
 
     fn handle_message(&mut self, msg: RecvType<Request>) -> Result<()> {
+        let Some(msg) = self.client_sync.handle_message(msg).location(loc!())? else {
+            return Ok(());
+        };
+
         match msg {
-            RecvType::RawBuffer(msg) => {
-                match msg.header.kind {
-                    proto::RawBufferKind::FilteredBgra => {
-                        self.buffer_cache = Some(Vec4u8s::from(msg.bytes));
-                    }
-                    other => {
-                        warn!("termwiz-image: unsupported raw buffer kind: {other:?}");
-                    }
-                }
-            },
             RecvType::Object(Request::Surface(surface)) => {
                 use proto::wayland::BufferAssignment;
                 use proto::wayland::BufferData;
@@ -140,15 +133,9 @@ impl TerminalPresenter {
                     return Ok(());
                 }
 
-                let Some(BufferAssignment::New(mut buf)) = state.buffer.take() else {
+                let Some(BufferAssignment::New(buf)) = state.buffer.take() else {
                     return Ok(());
                 };
-                if buf.data.is_external() {
-                    if let Some(cache) = self.buffer_cache.take() {
-                        buf.data =
-                            BufferData::Uncompressed(proto::wayland::UncompressedBufferData(cache));
-                    }
-                }
                 let filtered = match buf.data {
                     BufferData::Uncompressed(data) => data.0,
                     _ => return Ok(()),
