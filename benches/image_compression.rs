@@ -28,13 +28,13 @@ use fallible_iterator::IteratorExt;
 use png::BitDepth;
 use png::ColorType;
 use png::Decoder;
-use wprs::arc_slice::ArcSlice;
-use wprs::buffer_pointer::BufferPointer;
-use wprs::filtering;
-use wprs::sharding_compression::CompressedShard;
-use wprs::sharding_compression::CompressedShards;
-use wprs::sharding_compression::ShardingCompressor;
-use wprs::sharding_compression::ShardingDecompressor;
+use wprs::utils::arc_slice::ArcSlice;
+use wprs::utils::buffer_pointer::BufferPointer;
+use wprs::utils::filtering;
+use wprs::utils::sharding_compression::CompressedShard;
+use wprs::utils::sharding_compression::CompressedShards;
+use wprs::utils::sharding_compression::ShardingCompressor;
+use wprs::utils::sharding_compression::ShardingDecompressor;
 
 fn reorder_channels(data: &mut [u8]) {
     for pixel in data.chunks_mut(4) {
