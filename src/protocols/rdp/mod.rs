@@ -20,7 +20,7 @@ use ironrdp_server::RdpServerInputHandler;
 use ironrdp_server::tokio;
 use tokio::sync::mpsc;
 
-use crate::filtering;
+use crate::utils::filtering;
 use crate::prelude::*;
 use crate::protocols::wprs::Endpoint;
 use crate::protocols::wprs::Event as ProtoEvent;

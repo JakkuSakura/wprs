@@ -37,8 +37,8 @@ use crate::client::coords;
 use crate::client::coords::ServerBufferScale;
 use crate::client::coords::UiScaleFactor;
 #[cfg(feature = "video-h264")]
-use crate::buffer_pointer::BufferPointer;
-use crate::filtering;
+use crate::utils::buffer_pointer::BufferPointer;
+use crate::utils::filtering;
 use crate::prelude::*;
 use crate::protocols::wprs as proto;
 use crate::protocols::wprs::ClientId;
@@ -91,7 +91,7 @@ pub struct DecodedFrame {
 struct DecodeJob {
     surface_id: WlSurfaceId,
     metadata: crate::protocols::wprs::wayland::BufferMetadata,
-    filtered: crate::vec4u8::Vec4u8s,
+    filtered: crate::utils::vec4u8::Vec4u8s,
 }
 
 #[derive(Clone)]
@@ -469,7 +469,7 @@ fn align_up(value: usize, alignment: usize) -> usize {
 
 fn decode_filtered_to_padded_bgra(
     metadata: &crate::protocols::wprs::wayland::BufferMetadata,
-    filtered: &crate::vec4u8::Vec4u8s,
+    filtered: &crate::utils::vec4u8::Vec4u8s,
 ) -> (u32, Vec<u8>) {
     let width = metadata.width as usize;
     let height = metadata.height as usize;
@@ -560,7 +560,7 @@ struct App {
     buffer_cache: Option<UncompressedBufferData>,
     transport_config: transport::TransportConfig,
     #[cfg(feature = "video-h264")]
-    h264_decoder: Option<crate::video::h264::H264Decoder>,
+    h264_decoder: Option<crate::protocols::video::h264::H264Decoder>,
     windows: HashMap<WlSurfaceId, WindowRenderer>,
     surface_by_window: HashMap<WindowId, WlSurfaceId>,
     outputs_sent: bool,
@@ -802,7 +802,7 @@ impl App {
         &self,
         surface_id: WlSurfaceId,
         metadata: crate::protocols::wprs::wayland::BufferMetadata,
-        filtered: crate::vec4u8::Vec4u8s,
+        filtered: crate::utils::vec4u8::Vec4u8s,
     ) {
         // If the receiver is gone, we are shutting down.
         let _ = self.decode_tx.send(DecodeJob {
@@ -1358,7 +1358,7 @@ impl App {
                     transport::TransportCodec::H264 => {
                         if self.h264_decoder.is_none() {
                             self.h264_decoder =
-                                Some(crate::video::h264::H264Decoder::new().location(loc!())?);
+                                Some(crate::protocols::video::h264::H264Decoder::new().location(loc!())?);
                         }
                         let decoded =
                             self.h264_decoder.as_mut().unwrap().decode(&buf).location(loc!())?;

@@ -77,7 +77,7 @@ use crate::protocols::wprs::wayland::UncompressedBufferData;
 use crate::protocols::wprs::wayland::ViewportState;
 use crate::protocols::wprs::wayland::WlSurfaceId;
 #[cfg(feature = "video-h264")]
-use crate::video::h264::H264Decoder;
+use crate::protocols::video::h264::H264Decoder;
 use crate::utils::client::SeatObject;
 use crate::utils::vec4u8::Vec4u8s;
 

@@ -77,15 +77,15 @@ mod tests {
     use super::*;
     use std::num::NonZeroUsize;
 
-    use crate::arc_slice::ArcSlice;
+    use crate::utils::arc_slice::ArcSlice;
     use crate::protocols::wprs::ClientId;
     use crate::protocols::wprs::wayland::BufferFormat;
     use crate::protocols::wprs::wayland::BufferMetadata;
     use crate::protocols::wprs::wayland::SurfaceRequestPayload;
     use crate::protocols::wprs::wayland::UncompressedBufferData;
     use crate::protocols::wprs::wayland::WlSurfaceId;
-    use crate::sharding_compression::CompressedShards;
-    use crate::sharding_compression::ShardingCompressor;
+    use crate::utils::sharding_compression::CompressedShards;
+    use crate::utils::sharding_compression::ShardingCompressor;
 
     fn make_compressed_shards(payload: &[u8]) -> Arc<CompressedShards> {
         let mut compressor = ShardingCompressor::new(NonZeroUsize::new(1).unwrap(), 1).unwrap();
@@ -274,7 +274,7 @@ mod tests {
         let surface = dummy_surface_state(Some(BufferAssignment::New(Buffer {
             metadata: dummy_metadata(),
             data: BufferData::Uncompressed(UncompressedBufferData(
-                crate::vec4u8::Vec4u8s::with_total_size(4),
+                crate::utils::vec4u8::Vec4u8s::with_total_size(4),
             )),
         })));
 

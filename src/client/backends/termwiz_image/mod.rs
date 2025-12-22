@@ -4,13 +4,13 @@ use anyhow::ensure;
 
 use crate::client::backend::ClientBackend;
 use crate::client::backend::ClientBackendConfig;
-use crate::filtering;
+use crate::utils::filtering;
 use crate::prelude::*;
 use crate::protocols::wprs as proto;
 use crate::protocols::wprs::RecvType;
 use crate::protocols::wprs::Request;
 use crate::protocols::wprs::Serializer;
-use crate::vec4u8::Vec4u8s;
+use crate::utils::vec4u8::Vec4u8s;
 
 use calloop::EventLoop as CalloopEventLoop;
 use calloop::channel::Event as CalloopChannelEvent;
@@ -152,7 +152,7 @@ impl TerminalPresenter {
                 bgra_to_rgba_in_place(&mut bgra);
 
                 let png =
-                    encode_png_rgba(&bgra, buf.metadata.width as u32, buf.metadata.height as u32)
+                    crate::protocols::image::png::encode_png_rgba(&bgra, buf.metadata.width as u32, buf.metadata.height as u32)
                         .location(loc!())?;
 
                 let cols = self.screen_size.cols;
@@ -211,19 +211,4 @@ fn run_event_loop(mut serializer: Serializer<proto::Event, proto::Request>) -> R
         .map_err(|e| anyhow!("insert_source(serializer reader) failed: {e:?}"))?;
 
     loop_.run(None, &mut state, |_| {}).location(loc!())
-}
-
-fn encode_png_rgba(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8>> {
-    use png::{BitDepth, ColorType, Encoder};
-
-    let mut buf = Vec::new();
-    {
-        let mut encoder = Encoder::new(&mut buf, width, height);
-        encoder.set_color(ColorType::Rgba);
-        encoder.set_depth(BitDepth::Eight);
-        let mut writer = encoder.write_header().location(loc!())?;
-        writer.write_image_data(rgba).location(loc!())?;
-        writer.finish().location(loc!())?;
-    }
-    Ok(buf)
 }

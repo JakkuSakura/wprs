@@ -607,7 +607,7 @@ impl WprsClientState {
             #[cfg(feature = "video-h264")]
             transport::TransportCodec::H264 => {
                 if self.h264_decoder.is_none() {
-                    self.h264_decoder = Some(crate::video::h264::H264Decoder::new().location(loc!())?);
+                    self.h264_decoder = Some(crate::protocols::video::h264::H264Decoder::new().location(loc!())?);
                 }
                 let decoder = self.h264_decoder.as_mut().unwrap();
                 let decoded = decoder.decode(&buffer).location(loc!())?;

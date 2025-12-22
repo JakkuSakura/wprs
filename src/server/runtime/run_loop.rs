@@ -8,8 +8,8 @@ use calloop::channel::Event as CalloopChannelEvent;
 use calloop::timer::TimeoutAction;
 use calloop::timer::Timer;
 
-use crate::buffer_pointer::BufferPointer;
-use crate::filtering;
+use crate::utils::buffer_pointer::BufferPointer;
+use crate::utils::filtering;
 use crate::prelude::*;
 use crate::protocols::wprs::Event;
 use crate::protocols::wprs::RecvType;
@@ -24,12 +24,12 @@ use crate::protocols::wprs::wayland::CompressedBufferData;
 use crate::protocols::wprs::wayland::SurfaceRequestPayload;
 use crate::server::runtime::backend::BackendObservation;
 use crate::server::runtime::backend::PollingBackend;
-use crate::sharding_compression::ShardingCompressor;
+use crate::utils::sharding_compression::ShardingCompressor;
 #[cfg(feature = "video-h264")]
-use crate::arc_slice::ArcSlice;
+use crate::utils::arc_slice::ArcSlice;
 
 #[cfg(feature = "video-h264")]
-use crate::video::h264::H264Encoder;
+use crate::protocols::video::h264::H264Encoder;
 
 #[cfg(feature = "video-h264")]
 struct H264EncodeState {

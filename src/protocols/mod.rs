@@ -9,3 +9,6 @@ pub mod wctl;
 
 #[cfg(feature = "rdp")]
 pub mod rdp;
+
+pub mod image;
+pub mod video;

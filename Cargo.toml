@@ -67,7 +67,7 @@ zstd = { version = "0.13.3" }
 ironrdp-server = { git = "https://github.com/Devolutions/IronRDP", branch = "master", optional = true }
 ironrdp-tokio = { git = "https://github.com/Devolutions/IronRDP", branch = "master", optional = true, features = ["reqwest-rustls-ring"] }
 base64 = "0.22.1"
-png = "0.17.16"
+png = "0.18.0"
 termwiz = "0.23.3"
 ffmpeg-next = { version = "6.1", optional = true }
 
