@@ -7,12 +7,11 @@ use crate::client::backend::ClientBackendConfig;
 use crate::utils::filtering;
 use crate::prelude::*;
 use crate::protocols::wprs as proto;
+use crate::client::message_backend::MessageClientBackend;
 use crate::protocols::wprs::RecvType;
 use crate::protocols::wprs::Request;
 use crate::protocols::wprs::Serializer;
 
-use calloop::EventLoop as CalloopEventLoop;
-use calloop::channel::Event as CalloopChannelEvent;
 use termwiz::render::RenderTty;
 use termwiz::render::terminfo::TerminfoRenderer;
 use termwiz::surface::Change;
@@ -21,11 +20,15 @@ use termwiz::terminal::Terminal as _;
 
 pub struct TermwizImageClientBackend {
     _config: ClientBackendConfig,
+    presenter: Option<TerminalPresenter>,
 }
 
 impl TermwizImageClientBackend {
     pub fn new(config: ClientBackendConfig) -> Self {
-        Self { _config: config }
+        Self {
+            _config: config,
+            presenter: None,
+        }
     }
 
     pub fn new_for_wrun() -> Self {
@@ -47,7 +50,8 @@ impl ClientBackend for TermwizImageClientBackend {
     }
 
     fn run(self: Box<Self>, serializer: Serializer<proto::Event, proto::Request>) -> Result<()> {
-        run_event_loop(serializer).location(loc!())
+        let _ = serializer;
+        bail!("TermwizImageClientBackend must be wrapped in SyncedClientBackend")
     }
 }
 
@@ -81,7 +85,6 @@ fn bgra_to_rgba_in_place(buf: &mut [u8]) {
 struct TerminalPresenter {
     renderer: TerminfoRenderer,
     screen_size: ScreenSize,
-    client_sync: crate::protocols::wprs::core::client_sync::ClientSync,
     selected_surface: Option<proto::wayland::WlSurfaceId>,
 }
 
@@ -103,16 +106,11 @@ impl TerminalPresenter {
                 xpixel: size.xpixel,
                 ypixel: size.ypixel,
             },
-            client_sync: crate::protocols::wprs::core::client_sync::ClientSync::new(),
             selected_surface: None,
         })
     }
 
     fn handle_message(&mut self, msg: RecvType<Request>) -> Result<()> {
-        let Some(msg) = self.client_sync.handle_message(msg).location(loc!())? else {
-            return Ok(());
-        };
-
         match msg {
             RecvType::Object(Request::Surface(surface)) => {
                 use proto::wayland::BufferAssignment;
@@ -183,26 +181,19 @@ impl TerminalPresenter {
     }
 }
 
-fn run_event_loop(mut serializer: Serializer<proto::Event, proto::Request>) -> Result<()> {
-    let reader = serializer.reader().location(loc!())?;
-
-    struct State {
-        presenter: TerminalPresenter,
+impl MessageClientBackend for TermwizImageClientBackend {
+    fn name(&self) -> &'static str {
+        "termwiz-image"
     }
 
-    let mut loop_: CalloopEventLoop<State> = CalloopEventLoop::try_new().location(loc!())?;
-    let mut state = State {
-        presenter: TerminalPresenter::new().location(loc!())?,
-    };
-
-    loop_
-        .handle()
-        .insert_source(reader, move |event, _metadata, state| {
-            if let CalloopChannelEvent::Msg(msg) = event {
-                state.presenter.handle_message(msg).log_and_ignore(loc!());
-            }
-        })
-        .map_err(|e| anyhow!("insert_source(serializer reader) failed: {e:?}"))?;
-
-    loop_.run(None, &mut state, |_| {}).location(loc!())
+    fn handle_message(&mut self, msg: RecvType<Request>) -> Result<()> {
+        if self.presenter.is_none() {
+            self.presenter = Some(TerminalPresenter::new().location(loc!())?);
+        }
+        self.presenter
+            .as_mut()
+            .unwrap()
+            .handle_message(msg)
+            .location(loc!())
+    }
 }

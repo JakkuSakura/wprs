@@ -29,6 +29,7 @@ use crate::protocols::wprs::wayland::WlSurfaceId;
 use crate::server::runtime::backend::BackendObservation;
 use crate::server::runtime::backend::BackendSurfaceRole;
 use crate::server::runtime::backend::PollingBackend;
+use crate::server::runtime::transport_policy;
 use crate::utils::sharding_compression::ShardingCompressor;
 use crate::utils::sharding_compression::CompressedShards;
 use crate::protocols::wprs::xdg_shell;
@@ -61,166 +62,6 @@ struct State<B> {
     h264: HashMap<WlSurfaceId, H264EncodeState>,
 }
 
-fn select_base_codec(hello: &transport::ClientHello) -> transport::TransportCodec {
-    let mut codec = transport::TransportCodec::ShardedZstd { level: 1 };
-    if let Some(found) = hello
-        .supported_codecs
-        .iter()
-        .find(|c| matches!(c, transport::TransportCodec::ShardedZstd { .. }))
-    {
-        codec = *found;
-    } else if hello
-        .supported_codecs
-        .contains(&transport::TransportCodec::ShardedLz4)
-    {
-        codec = transport::TransportCodec::ShardedLz4;
-    } else if hello
-        .supported_codecs
-        .contains(&transport::TransportCodec::ShardedRaw)
-    {
-        codec = transport::TransportCodec::ShardedRaw;
-    }
-
-    codec
-}
-
-fn select_global_transport_config(
-    hello: &transport::ClientHello,
-    observed_tx_kbps: Option<u32>,
-) -> transport::TransportConfig {
-    let mut codec = select_base_codec(hello);
-
-    // NOTE: H.264 support is compiled in by default, but it is intentionally
-    // not selected as the default negotiated codec unless the client indicates
-    // bandwidth pressure.
-    #[cfg(feature = "video-h264")]
-    {
-        let supports_h264 = hello
-            .supported_codecs
-            .contains(&transport::TransportCodec::H264);
-        let prefers_bandwidth = hello
-            .preferences
-            .bandwidth_weight
-            .saturating_sub(hello.preferences.clarity_weight)
-            >= 30;
-        let observed_bandwidth_pressure = observed_tx_kbps
-            .map(|tx| tx > hello.preferences.target_bitrate_kbps.unwrap_or(12_000) * 12 / 10)
-            .unwrap_or(false);
-        let low_target_bitrate = hello
-            .preferences
-            .target_bitrate_kbps
-            .map_or(false, |kbps| kbps < 8_000);
-
-        if supports_h264 && (prefers_bandwidth || observed_bandwidth_pressure || low_target_bitrate) {
-            codec = transport::TransportCodec::H264;
-        }
-    }
-
-    // Best-effort "clarity-first" policy for image payloads.
-    //
-    // This is intentionally conservative: we only switch away from the sharded
-    // filtered BGRA path when the client strongly prefers clarity.
-    let prefers_clarity = hello
-        .preferences
-        .clarity_weight
-        .saturating_sub(hello.preferences.bandwidth_weight)
-        >= 30;
-    if prefers_clarity && codec != transport::TransportCodec::H264 {
-        if hello.supported_codecs.contains(&transport::TransportCodec::Png)
-            && hello.preferences.bandwidth_weight < 50
-        {
-            codec = transport::TransportCodec::Png;
-        } else if hello.supported_codecs.contains(&transport::TransportCodec::Jpeg) {
-            codec = transport::TransportCodec::Jpeg;
-        }
-    }
-
-    transport::TransportConfig {
-        codec,
-        buffer_patches: transport::BufferPatchConfig {
-            enabled: hello.supports_buffer_patches,
-            ..Default::default()
-        },
-        max_fps: None,
-    }
-}
-
-fn select_surface_transport_config(
-    global: &transport::TransportConfig,
-    hello: Option<&transport::ClientHello>,
-    observed_tx_kbps: Option<u32>,
-    surface: WlSurfaceId,
-    metadata: &BufferMetadata,
-) -> transport::TransportConfig {
-    let mut cfg = global.clone();
-    let Some(hello) = hello else {
-        return cfg;
-    };
-
-    let surface_px = (metadata.width.max(1) as u64) * (metadata.height.max(1) as u64);
-    let large_surface = surface_px >= 1280 * 720;
-
-    #[cfg(feature = "video-h264")]
-    {
-        let supports_h264 = hello
-            .supported_codecs
-            .contains(&transport::TransportCodec::H264);
-        let prefers_bandwidth = hello
-            .preferences
-            .bandwidth_weight
-            .saturating_sub(hello.preferences.clarity_weight)
-            >= 20;
-        let low_target_bitrate = hello
-            .preferences
-            .target_bitrate_kbps
-            .map_or(false, |kbps| kbps < 10_000);
-        let observed_bandwidth_pressure = observed_tx_kbps
-            .map(|tx| tx > hello.preferences.target_bitrate_kbps.unwrap_or(12_000) * 12 / 10)
-            .unwrap_or(false);
-        let decode_is_plausible = hello.gpu.has_hw_video_decode
-            || hello
-                .gpu
-                .hw_decode_codecs
-                .iter()
-                .any(|c| c.eq_ignore_ascii_case("h264"))
-            || hello.cpu.avx2
-            || hello.cpu.neon;
-
-        if supports_h264
-            && decode_is_plausible
-            && large_surface
-            && (prefers_bandwidth || low_target_bitrate || observed_bandwidth_pressure)
-        {
-            cfg.codec = transport::TransportCodec::H264;
-            return cfg;
-        }
-
-        // If we previously selected H.264 globally but this surface is small, prefer sharded.
-        if cfg.codec == transport::TransportCodec::H264 && !large_surface {
-            cfg.codec = select_base_codec(hello);
-        }
-    }
-
-    // For small surfaces, allow clarity-first image codecs.
-    let prefers_clarity = hello
-        .preferences
-        .clarity_weight
-        .saturating_sub(hello.preferences.bandwidth_weight)
-        >= 30;
-    if prefers_clarity && cfg.codec != transport::TransportCodec::H264 {
-        if hello.supported_codecs.contains(&transport::TransportCodec::Png)
-            && hello.preferences.bandwidth_weight < 50
-        {
-            cfg.codec = transport::TransportCodec::Png;
-        } else if hello.supported_codecs.contains(&transport::TransportCodec::Jpeg) {
-            cfg.codec = transport::TransportCodec::Jpeg;
-        }
-    }
-
-    let _ = surface;
-    cfg
-}
-
 fn record_sent_bytes<B: PollingBackend>(state: &mut State<B>, surface: WlSurfaceId, bytes: usize) {
     state.sent_bytes_since_update = state.sent_bytes_since_update.saturating_add(bytes as u64);
     let entry = state
@@ -249,7 +90,10 @@ fn maybe_update_observed_bandwidth<B: PollingBackend>(state: &mut State<B>) {
     state.observed_tx_kbps_by_surface = new_by_surface;
 
     if let Some(hello) = state.client_hello.as_ref() {
-        let config = select_global_transport_config(hello, Some(state.observed_tx_kbps));
+        let config = transport_policy::select_global_transport_config(
+            hello,
+            Some(state.observed_tx_kbps),
+        );
         if state.transport_config != config {
             state.transport_config = config.clone();
             state.surface_transport_config.clear();
@@ -260,107 +104,6 @@ fn maybe_update_observed_bandwidth<B: PollingBackend>(state: &mut State<B>) {
                     transport::TransportRequest::Config(config),
                 )));
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn hello_with_codecs(codecs: Vec<transport::TransportCodec>) -> transport::ClientHello {
-        transport::ClientHello {
-            supported_codecs: codecs,
-            supports_buffer_patches: false,
-            cpu: transport::CpuFeatures::default(),
-            gpu: transport::GpuFeatures::default(),
-            preferences: transport::TransportPreferences::default(),
-        }
-    }
-
-    fn hello_bandwidth_h264() -> transport::ClientHello {
-        let mut hello = hello_with_codecs(vec![
-            transport::TransportCodec::ShardedZstd { level: 1 },
-            transport::TransportCodec::ShardedLz4,
-            transport::TransportCodec::ShardedRaw,
-            transport::TransportCodec::H264,
-        ]);
-        hello.preferences.bandwidth_weight = 80;
-        hello.preferences.clarity_weight = 10;
-        hello.preferences.target_bitrate_kbps = Some(5_000);
-        hello.gpu.has_hw_video_decode = true;
-        hello
-    }
-
-    fn hello_clarity_png() -> transport::ClientHello {
-        let mut hello = hello_with_codecs(vec![
-            transport::TransportCodec::ShardedZstd { level: 1 },
-            transport::TransportCodec::Png,
-        ]);
-        hello.preferences.bandwidth_weight = 10;
-        hello.preferences.clarity_weight = 80;
-        hello
-    }
-
-    #[test]
-    fn global_default_prefers_sharded_zstd() {
-        let hello = hello_with_codecs(vec![
-            transport::TransportCodec::ShardedZstd { level: 1 },
-            transport::TransportCodec::ShardedLz4,
-            transport::TransportCodec::ShardedRaw,
-        ]);
-        let cfg = select_global_transport_config(&hello, None);
-        assert_eq!(cfg.codec, transport::TransportCodec::ShardedZstd { level: 1 });
-    }
-
-    #[test]
-    fn global_can_pick_h264_under_bandwidth_pressure() {
-        let hello = hello_bandwidth_h264();
-        let cfg = select_global_transport_config(&hello, Some(20_000));
-        assert_eq!(cfg.codec, transport::TransportCodec::H264);
-    }
-
-    #[test]
-    fn surface_large_prefers_h264_if_supported_and_bandwidth_or_target_low() {
-        let hello = hello_bandwidth_h264();
-        let global = select_global_transport_config(&hello, None);
-        let meta = BufferMetadata {
-            width: 1920,
-            height: 1080,
-            stride: 1920 * 4,
-            format: crate::protocols::wprs::wayland::BufferFormat::Argb8888,
-        };
-        let cfg = select_surface_transport_config(&global, Some(&hello), None, WlSurfaceId(1), &meta);
-        assert_eq!(cfg.codec, transport::TransportCodec::H264);
-    }
-
-    #[test]
-    fn surface_small_avoids_h264_even_if_global_is_h264() {
-        let hello = hello_bandwidth_h264();
-        let mut global = select_global_transport_config(&hello, Some(20_000));
-        global.codec = transport::TransportCodec::H264;
-
-        let meta = BufferMetadata {
-            width: 320,
-            height: 240,
-            stride: 320 * 4,
-            format: crate::protocols::wprs::wayland::BufferFormat::Argb8888,
-        };
-        let cfg = select_surface_transport_config(&global, Some(&hello), None, WlSurfaceId(1), &meta);
-        assert_ne!(cfg.codec, transport::TransportCodec::H264);
-    }
-
-    #[test]
-    fn surface_small_can_use_png_for_clarity() {
-        let hello = hello_clarity_png();
-        let global = select_global_transport_config(&hello, None);
-        let meta = BufferMetadata {
-            width: 640,
-            height: 480,
-            stride: 640 * 4,
-            format: crate::protocols::wprs::wayland::BufferFormat::Argb8888,
-        };
-        let cfg = select_surface_transport_config(&global, Some(&hello), None, WlSurfaceId(1), &meta);
-        assert_eq!(cfg.codec, transport::TransportCodec::Png);
     }
 }
 
@@ -538,13 +281,13 @@ fn apply_observation<B: PollingBackend>(
 
             if let Some(frame) = frame {
                 let observed_surface_tx = state.observed_tx_kbps_by_surface.get(&surface.id).copied();
-                let desired = select_surface_transport_config(
-                    &state.transport_config,
-                    state.client_hello.as_ref(),
-                    observed_surface_tx,
-                    surface.id,
-                    &frame.metadata,
-                );
+    let desired = transport_policy::select_surface_transport_config(
+        &state.transport_config,
+        state.client_hello.as_ref(),
+        observed_surface_tx,
+        surface.id,
+        &frame.metadata,
+    );
                 let prior = state.surface_transport_config.get(&surface.id);
                 if prior != Some(&desired) {
                     state.surface_transport_config.insert(surface.id, desired.clone());
@@ -667,7 +410,10 @@ pub fn run<B: PollingBackend>(
                         hello,
                     ))) => {
                         state.client_hello = Some(hello.clone());
-                        let config = select_global_transport_config(&hello, Some(state.observed_tx_kbps));
+                        let config = transport_policy::select_global_transport_config(
+                            &hello,
+                            Some(state.observed_tx_kbps),
+                        );
                         if state.transport_config != config {
                             state.transport_config = config.clone();
                             state.surface_transport_config.clear();
@@ -684,7 +430,10 @@ pub fn run<B: PollingBackend>(
                         // observed tx-kbps for transport policy.
                         state.client_stats = Some(stats);
                         if let Some(hello) = state.client_hello.as_ref() {
-                            let config = select_global_transport_config(hello, Some(state.observed_tx_kbps));
+        let config = transport_policy::select_global_transport_config(
+            hello,
+            Some(state.observed_tx_kbps),
+        );
                             if state.transport_config != config {
                                 state.transport_config = config.clone();
                                 state.surface_transport_config.clear();
