@@ -24,8 +24,6 @@ use crate::protocols::wprs::xdg_shell::ToplevelRequest;
 use crate::protocols::wprs::xdg_shell::ToplevelRequestPayload;
 use crate::protocols::wprs::xdg_shell::XdgToplevelId;
 use crate::protocols::wprs::xdg_shell::XdgToplevelState;
-use crate::server::config::XwaylandMode;
-
 use super::LockedSurfaceState;
 use super::WprsServerState;
 
@@ -35,14 +33,11 @@ pub(crate) struct XwaylandSurfaceData {
 }
 
 impl WprsServerState {
-    pub fn start_xwayland_embedded(
+    pub fn start_xwayland(
         &mut self,
         wayland_debug: bool,
         preferred_display: Option<u32>,
     ) -> Result<()> {
-        if self.xwayland_mode != XwaylandMode::Embedded {
-            bail!("start_xwayland_embedded called when xwayland_mode != embedded");
-        }
         if self.xwm.is_some() {
             return Ok(());
         }

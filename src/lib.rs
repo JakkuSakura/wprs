@@ -31,9 +31,6 @@ pub mod video;
 #[cfg(feature = "rdp")]
 pub use crate::protocols::rdp;
 
-#[cfg(all(feature = "xwayland", feature = "wayland-client"))]
-pub use crate::server::backends::x11::xwayland_xdg_shell;
-
 #[cfg(all(
     feature = "wayland-client",
     any(target_os = "macos", target_os = "ios")

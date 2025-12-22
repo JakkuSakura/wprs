@@ -1,4 +1,3 @@
-use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -16,20 +15,13 @@ use crate::protocols::wprs::Event;
 use crate::protocols::wprs::Request;
 use crate::protocols::wprs::Serializer;
 use crate::server::backends::wayland::smithay_handlers::ClientState;
-use crate::server::config::XwaylandMode;
-
 use super::WprsServerState;
 
 #[derive(Debug, Clone)]
 pub struct WaylandSmithayBackendConfig {
     pub wayland_display: String,
     pub framerate: u32,
-    pub enable_xwayland: bool,
-    pub xwayland_mode: XwaylandMode,
-    pub xwayland_display: Option<u32>,
-    pub xwayland_xdg_shell_path: String,
-    pub xwayland_xdg_shell_wayland_debug: bool,
-    pub xwayland_xdg_shell_args: Vec<String>,
+    pub xwayland: Option<crate::server::config::XwaylandConfig>,
     pub kde_server_side_decorations: bool,
 }
 
@@ -80,42 +72,6 @@ fn init_wayland_listener(
     Ok(())
 }
 
-fn start_xwayland_xdg_shell(
-    wayland_display: &str,
-    xwayland_xdg_shell_path: &str,
-    xwayland_xdg_shell_wayland_debug: bool,
-    xwayland_xdg_shell_args: &[String],
-) {
-    info!(
-        "starting xwayland-xdg-shell: path={xwayland_xdg_shell_path:?} WAYLAND_DISPLAY={wayland_display:?} WAYLAND_DEBUG={wayland_debug} args={xwayland_xdg_shell_args:?}",
-        wayland_debug = if xwayland_xdg_shell_wayland_debug {
-            1
-        } else {
-            0
-        },
-    );
-
-    let mut child = Command::new(xwayland_xdg_shell_path)
-        .env("WAYLAND_DISPLAY", wayland_display)
-        .env(
-            "WAYLAND_DEBUG",
-            if xwayland_xdg_shell_wayland_debug {
-                "1"
-            } else {
-                "0"
-            },
-        )
-        .args(xwayland_xdg_shell_args)
-        .spawn()
-        .expect("failed executing xwayland-xdg-shell");
-
-    info!("xwayland-xdg-shell spawned pid={pid}", pid = child.id());
-
-    std::thread::spawn(move || {
-        child.wait().expect("failed waiting xwayland-xdg-shell");
-    });
-}
-
 impl crate::server::runtime::backend::ServerBackend for WaylandSmithayBackend {
     fn tick_mode(&self) -> crate::server::runtime::backend::TickMode {
         crate::server::runtime::backend::TickMode::EventDriven
@@ -143,8 +99,7 @@ impl crate::server::runtime::backend::ServerBackend for WaylandSmithayBackend {
             &dh,
             event_loop.handle(),
             serializer,
-            config.enable_xwayland,
-            config.xwayland_mode,
+            config.xwayland.is_some(),
             frame_interval,
             config.kde_server_side_decorations,
         );
@@ -152,30 +107,19 @@ impl crate::server::runtime::backend::ServerBackend for WaylandSmithayBackend {
         init_wayland_listener(&config.wayland_display, display, &mut state, &event_loop)
             .location(loc!())?;
 
-        if config.enable_xwayland {
-            match config.xwayland_mode {
-                XwaylandMode::Supervised => {
-                    start_xwayland_xdg_shell(
-                        &config.wayland_display,
-                        &config.xwayland_xdg_shell_path,
-                        config.xwayland_xdg_shell_wayland_debug,
-                        &config.xwayland_xdg_shell_args,
-                    );
-                }
-                #[cfg(feature = "xwayland")]
-                XwaylandMode::Embedded => {
-                    state
-                        .start_xwayland_embedded(
-                            config.xwayland_xdg_shell_wayland_debug,
-                            config.xwayland_display,
-                        )
-                        .location(loc!())?;
-                },
-                XwaylandMode::External => {
-                    info!(
-                        "xwayland_mode=external: not spawning Xwayland helper; expecting external management"
-                    );
-                },
+        if let Some(xwayland_cfg) = config.xwayland {
+            #[cfg(feature = "xwayland")]
+            {
+                state
+                    .start_xwayland(xwayland_cfg.wayland_debug, xwayland_cfg.display)
+                    .location(loc!())?;
+            }
+
+            #[cfg(not(feature = "xwayland"))]
+            {
+                let _ = xwayland_cfg;
+                let _ = &mut state;
+                bail!("wayland.xwayland is set but wprsd was built without `--features xwayland`");
             }
         }
 

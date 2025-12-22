@@ -222,10 +222,6 @@ rdp = ["dep:ironrdp-server", "dep:ironrdp-tokio", "dep:bytes", "dep:async-trait"
 name = "wprsd"
 
 [[bin]]
-name = "xwayland-xdg-shell"
-required-features = ["xwayland", "wayland-client"]
-
-[[bin]]
 name = "wprsc"
 
 [[bin]]

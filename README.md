@@ -90,8 +90,7 @@ Then connect to it with the cross-platform client backend:
 cargo run --bin wprsc -- --socket /path/printed/by/demo.sock
 ```
 
-Wayland-related components (`wprsc` Wayland backend, `wprsd` Wayland backend,
-and `xwayland-xdg-shell`) require:
+Wayland-related components (`wprsc` Wayland backend and `wprsd` Wayland backend) require:
 
 * libxkbcommon (-dev on debian)
 * libwayland (-dev on debian)
@@ -332,19 +331,11 @@ implementation for each Wayland protocol.
 
 ### XWayland
 
-XWayland support uses the helper `xwayland-xdg-shell` when
-`xwayland_mode = "supervised"` (the default unless built with the `xwayland`
-feature). The helper implements a Wayland compositor (but only for the protocol
-features used by Xwayland) and client, just like wprsd and wprsc, but in a
-single binary (so skipping the serialization/deserialization).
+XWayland support is provided only as a built-in integration in `wprsd`.
 
-For deployments that prefer fewer processes, set
-`xwayland_mode = "embedded"` (requires the `xwayland` feature) to run the
-Xwayland proxy inline inside `wprsd`.
-
-To run the helper without letting wprsd spawn it (e.g. if you want separate
-process supervision), set `xwayland_mode = "external"` and start
-`xwayland-xdg-shell` yourself with `WAYLAND_DISPLAY` pointing at wprsd.
+- Build with `--features xwayland`.
+- Configure it under the Wayland config:
+  - `wayland = { xwayland = {} }`
 
 ### HiDPI
 
@@ -374,24 +365,6 @@ Override knobs:
   in the `wprsc` config (or pass `--min-output-scale-factor 2`) to clamp the
   output scale reported to the server. On macOS, the default behavior is
   equivalent to `2` to avoid blurry rendering on Retina displays.
-
-The helper binary model is the same as
-[xwayland-proxy-virtwl](https://github.com/talex5/wayland-proxy-virtwl#xwayland-support),
-which is itself inspired by
-[sommelier](https://chromium.googlesource.com/chromiumos/platform2/+/main/vm_tools/sommelier/).
-xwayland-xdg-shell was primarily written (instead of just using
-xwayland-proxy-virtwl) so as to share a common design/codebase with wprsx and to
-make use of common wayland development in the form of Smithay and its wayland
-crates. Additionally, xwayland-xdg-shell is more narrowly focused and its sole
-purpose is xwayland support, not virtio-gpu or virtwl.
-
-Like xwayland-proxy-virtwl, xwayland-xdg-shell can be used to implement external
-xwayland support for any wayland compositor instead of re-implementing it inside
-the compositor. Aside from eliminating the need to implement xwayland support in
-every compositor, this approach has been reported to result in better xwayland
-scaling than native xwayland support in some compositor, and it allows xwayland
-applications to be treated more like regular wayland applications instead of
-getting special access.
 
 ### Security
 

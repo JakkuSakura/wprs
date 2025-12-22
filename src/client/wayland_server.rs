@@ -34,7 +34,6 @@ mod wayland_server_impl {
     use crate::protocols::wprs::transport;
     use crate::server::backends::wayland::backend::WaylandSmithayBackend;
     use crate::server::backends::wayland::backend::WaylandSmithayBackendConfig;
-    use crate::server::config::XwaylandMode;
     use crate::server::runtime::backend::ServerBackend as _;
 
     pub fn run(config: WprscConfig) -> Result<()> {
@@ -71,12 +70,7 @@ mod wayland_server_impl {
             let backend = WaylandSmithayBackend::new(WaylandSmithayBackendConfig {
                 wayland_display: server_wayland_display,
                 framerate: 60,
-                enable_xwayland: false,
-                xwayland_mode: XwaylandMode::External,
-                xwayland_display: None,
-                xwayland_xdg_shell_path: "xwayland-xdg-shell".to_string(),
-                xwayland_xdg_shell_wayland_debug: false,
-                xwayland_xdg_shell_args: Vec::new(),
+                xwayland: None,
                 kde_server_side_decorations: true,
             });
 

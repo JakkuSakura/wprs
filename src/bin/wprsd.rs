@@ -18,9 +18,15 @@ use std::process::Child;
 use std::process::Command;
 use std::time::Duration;
 
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::sync::Mutex;
+
 use clap::Parser;
 use wprs::config;
 use wprs::prelude::*;
+use wprs::protocols::wctl;
 #[cfg(feature = "rdp")]
 use wprs::protocols::wprs::Endpoint;
 use wprs::protocols::wprs::Event as ProtoEvent;
@@ -88,6 +94,8 @@ fn main() -> Result<()> {
         fs::create_dir_all(config.socket.parent().location(loc!())?).location(loc!())?;
     }
 
+    fs::create_dir_all(config.control_socket.parent().location(loc!())?).location(loc!())?;
+
     run_selected_backend(&config).location(loc!())
 }
 
@@ -103,7 +111,24 @@ fn run_selected_backend(config: &WprsdConfig) -> Result<()> {
     let _rdp_bridge = maybe_start_rdp_bridge(config).location(loc!())?;
 
     let backend_kind = infer_backend(config).location(loc!())?;
-    let backend = build_backend(&backend_kind, config).location(loc!())?;
+    let (backend, macos_target_pid) = build_backend(&backend_kind, config).location(loc!())?;
+
+    let wprs_endpoint = match &config.endpoint {
+        Some(endpoint) => endpoint.to_string(),
+        None => format!("unix://{}", config.socket.display()),
+    };
+
+    let server_info = wctl::ServerInfo {
+        wprs_endpoint: wprs_endpoint.clone(),
+        wayland_display: Some(config.wayland.display.clone()),
+        xwayland_display: config.wayland.xwayland.as_ref().and_then(|x| x.display),
+    };
+
+    let control_socket = config.control_socket.clone();
+    std::thread::spawn(move || {
+        let handler = Arc::new(ControlHandler::new(server_info, macos_target_pid));
+        wctl::unix::serve(&control_socket, handler).log_and_ignore(loc!());
+    });
 
     let tick_interval = match backend.tick_mode() {
         TickMode::Polling => Some(Duration::from_secs_f64(
@@ -177,49 +202,59 @@ fn maybe_start_rdp_bridge(config: &WprsdConfig) -> Result<Option<ChildGuard>> {
     }
 }
 
-fn build_backend(backend: &WprsdBackend, config: &WprsdConfig) -> Result<Box<dyn ServerBackend>> {
+fn build_backend(
+    backend: &WprsdBackend,
+    config: &WprsdConfig,
+) -> Result<(
+    Box<dyn ServerBackend>,
+    Option<backends::macos::MacosTargetPid>,
+)> {
     match backend {
-        WprsdBackend::X11Fullscreen => Ok(Box::new(
-            backends::x11::X11FullscreenBackend::connect(config.x11_title.clone())
-                .location(loc!())?,
+        WprsdBackend::X11Fullscreen => Ok((
+            Box::new(
+                backends::x11::X11FullscreenBackend::connect(config.x11_title.clone())
+                    .location(loc!())?,
+            ),
+            None,
         )),
-        WprsdBackend::WindowsFullscreen => {
-            Ok(Box::new(backends::windows::WindowsFullscreenBackend::new()))
-        },
-        WprsdBackend::MacosFullscreen => {
-            Ok(Box::new(backends::macos::MacosFullscreenBackend::new(
+        WprsdBackend::WindowsFullscreen => Ok((
+            Box::new(backends::windows::WindowsFullscreenBackend::new()),
+            None,
+        )),
+        WprsdBackend::MacosFullscreen => Ok((
+            Box::new(backends::macos::MacosFullscreenBackend::new(
                 backends::macos::MacosFullscreenBackendConfig {
                     dpi: config.display_dpi,
                 },
-            )))
+            )),
+            None,
+        )),
+        WprsdBackend::WindowsSeamless => Ok((
+            Box::new(backends::windows::WindowsWindowBackend::new()),
+            None,
+        )),
+        WprsdBackend::MacosSeamless => {
+            let backend = backends::macos::MacosWindowBackend::new(
+                backends::macos::MacosWindowBackendConfig {
+                    dpi: config.display_dpi,
+                },
+            );
+            let pid = backend.target_pid_handle();
+            Ok((Box::new(backend), Some(pid)))
         },
-        WprsdBackend::WindowsSeamless => {
-            Ok(Box::new(backends::windows::WindowsWindowBackend::new()))
-        },
-        WprsdBackend::MacosSeamless => Ok(Box::new(backends::macos::MacosWindowBackend::new(
-            backends::macos::MacosWindowBackendConfig {
-                dpi: config.display_dpi,
-                target_pid: None,
-            },
-        ))),
         WprsdBackend::Wayland => {
             #[cfg(feature = "wayland")]
             {
-                Ok(Box::new(
-                    backends::wayland::backend::WaylandSmithayBackend::new(
+                Ok((
+                    Box::new(backends::wayland::backend::WaylandSmithayBackend::new(
                         backends::wayland::backend::WaylandSmithayBackendConfig {
-                            wayland_display: config.wayland_display.clone(),
+                            wayland_display: config.wayland.display.clone(),
                             framerate: config.framerate,
-                            enable_xwayland: config.enable_xwayland,
-                            xwayland_mode: config.xwayland_mode,
-                            xwayland_display: config.xwayland_display,
-                            xwayland_xdg_shell_path: config.xwayland_xdg_shell_path.clone(),
-                            xwayland_xdg_shell_wayland_debug: config
-                                .xwayland_xdg_shell_wayland_debug,
-                            xwayland_xdg_shell_args: config.xwayland_xdg_shell_args.clone(),
-                            kde_server_side_decorations: config.kde_server_side_decorations,
+                            xwayland: config.wayland.xwayland.clone(),
+                            kde_server_side_decorations: config.wayland.kde_server_side_decorations,
                         },
-                    ),
+                    )),
+                    None,
                 ))
             }
             #[cfg(not(feature = "wayland"))]
@@ -228,5 +263,127 @@ fn build_backend(backend: &WprsdBackend, config: &WprsdConfig) -> Result<Box<dyn
                 bail!("wayland backend requires building wprsd with `--features wayland`")
             }
         },
+    }
+}
+
+struct Session {
+    id: u64,
+    child: Child,
+}
+
+struct ControlHandler {
+    server_info: wctl::ServerInfo,
+    macos_target_pid: Option<backends::macos::MacosTargetPid>,
+    next_session_id: AtomicU64,
+    session: Mutex<Option<Session>>,
+}
+
+impl ControlHandler {
+    fn new(
+        server_info: wctl::ServerInfo,
+        macos_target_pid: Option<backends::macos::MacosTargetPid>,
+    ) -> Self {
+        Self {
+            server_info,
+            macos_target_pid,
+            next_session_id: AtomicU64::new(1),
+            session: Mutex::new(None),
+        }
+    }
+
+    fn spawn_session(&self, argv: Vec<String>) -> wctl::Response {
+        if argv.is_empty() {
+            return wctl::Response::Error {
+                message: "spawn requires non-empty argv".to_string(),
+            };
+        }
+        let Some(pid_handle) = self.macos_target_pid.clone() else {
+            return wctl::Response::Error {
+                message: "spawn is not supported by the current backend".to_string(),
+            };
+        };
+
+        let mut guard = self.session.lock().expect("mutex poisoned");
+        if guard.is_some() {
+            return wctl::Response::Error {
+                message: "session already running".to_string(),
+            };
+        }
+
+        let program = &argv[0];
+        let args = &argv[1..];
+        let mut cmd = Command::new(program);
+        cmd.args(args);
+
+        let child = match cmd.spawn() {
+            Ok(child) => child,
+            Err(err) => {
+                return wctl::Response::Error {
+                    message: format!("failed to spawn {program:?}: {err}"),
+                };
+            },
+        };
+
+        let id = self.next_session_id.fetch_add(1, Ordering::Relaxed);
+        pid_handle.set(Some(child.id()));
+        *guard = Some(Session { id, child });
+
+        wctl::Response::Spawned {
+            session_id: id,
+            wprs_endpoint: self.server_info.wprs_endpoint.clone(),
+        }
+    }
+
+    fn wait_session(&self, session_id: u64) -> wctl::Response {
+        let session = {
+            let mut guard = self.session.lock().expect("mutex poisoned");
+            match guard.take() {
+                Some(s) if s.id == session_id => s,
+                Some(s) => {
+                    *guard = Some(s);
+                    return wctl::Response::Error {
+                        message: format!("unknown session id {session_id}"),
+                    };
+                },
+                None => {
+                    return wctl::Response::Error {
+                        message: "no running session".to_string(),
+                    };
+                },
+            }
+        };
+
+        let mut child = session.child;
+        let status = match child.wait() {
+            Ok(status) => status,
+            Err(err) => {
+                if let Some(pid) = &self.macos_target_pid {
+                    pid.set(None);
+                }
+                return wctl::Response::Error {
+                    message: format!("wait failed: {err}"),
+                };
+            },
+        };
+
+        if let Some(pid) = &self.macos_target_pid {
+            pid.set(None);
+        }
+
+        wctl::Response::Exited {
+            session_id,
+            exit_code: status.code().unwrap_or(1),
+        }
+    }
+}
+
+impl wctl::unix::Handler for ControlHandler {
+    fn handle(&self, req: wctl::Request) -> wctl::Response {
+        match req {
+            wctl::Request::Ping => wctl::Response::Pong,
+            wctl::Request::ServerInfo => wctl::Response::ServerInfo(self.server_info.clone()),
+            wctl::Request::Spawn { argv } => self.spawn_session(argv),
+            wctl::Request::Wait { session_id } => self.wait_session(session_id),
+        }
     }
 }

@@ -109,7 +109,6 @@ pub struct WprsServerState {
     pub data_device_state: DataDeviceState,
     pub primary_selection_state: PrimarySelectionState,
     pub viewporter_state: ViewporterState,
-    pub xwayland_mode: crate::server::config::XwaylandMode,
     #[cfg(feature = "xwayland")]
     pub xwayland_shell_state: XWaylandShellState,
     #[cfg(feature = "xwayland")]
@@ -146,7 +145,6 @@ impl WprsServerState {
         lh: LoopHandle<'static, Self>,
         serializer: Serializer<Request, Event>,
         xwayland_enabled: bool,
-        xwayland_mode: crate::server::config::XwaylandMode,
         frame_interval: Duration,
         kde_server_side_decorations: bool,
     ) -> Self {
@@ -174,7 +172,6 @@ impl WprsServerState {
             data_device_state: DataDeviceState::new::<Self>(&dh),
             primary_selection_state: PrimarySelectionState::new::<Self>(&dh),
             viewporter_state: ViewporterState::new::<Self>(&dh),
-            xwayland_mode,
             #[cfg(feature = "xwayland")]
             xwayland_shell_state: XWaylandShellState::new::<Self>(&dh),
             #[cfg(feature = "xwayland")]
