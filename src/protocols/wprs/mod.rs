@@ -73,14 +73,14 @@ use smithay::reexports::wayland_server::backend;
 use sysctl::Ctl;
 use sysctl::Sysctl;
 
-use crate::utils::arc_slice::ArcSlice;
 use crate::prelude::*;
+use crate::utils;
+use crate::utils::arc_slice::ArcSlice;
+use crate::utils::channel::DiscardingSender;
+use crate::utils::channel::InfallibleSender;
 use crate::utils::sharding_compression::CompressedShards;
 use crate::utils::sharding_compression::ShardingCompressor;
 use crate::utils::sharding_compression::ShardingDecompressor;
-use crate::utils;
-use crate::utils::channel::DiscardingSender;
-use crate::utils::channel::InfallibleSender;
 
 #[derive(Debug, Clone, Eq, PartialEq, serde_derive::Serialize, serde_derive::Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
@@ -840,7 +840,16 @@ where
         + for<'a> bytecheck::CheckBytes<HighValidator<'a, RancorError>>,
 {
     Object(ST),
-    RawBuffer(Arc<CompressedShards>),
+    RawBuffer(RawBufferPayload),
+}
+
+/// Payload sent over the WPRS transport plane as a `MessageType::RawBuffer` frame.
+///
+/// This is intentionally *not* rkyv-serialized. It uses the custom `Framed`
+/// encoding implemented by `CompressedShards` for efficient streaming.
+#[derive(Clone)]
+pub struct RawBufferPayload {
+    pub shards: Arc<CompressedShards>,
 }
 
 impl<ST> fmt::Debug for SendType<ST>
@@ -852,9 +861,11 @@ where
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Object(obj) => write!(f, "Object({obj:?})"),
-            Self::RawBuffer(shards) => {
-                write!(f, "RawBuffer([{:?}])", shards.uncompressed_size())
-            },
+            Self::RawBuffer(payload) => write!(
+                f,
+                "RawBuffer(uncompressed_bytes={})",
+                payload.shards.uncompressed_size()
+            ),
         }
     }
 }
@@ -1044,7 +1055,7 @@ where
                 let shards = compressor.compress(NonZeroUsize::new(1).unwrap(), serialized_data);
                 (Arc::new(shards), MessageType::Object)
             },
-            SendType::RawBuffer(compressed_shards) => (compressed_shards, MessageType::RawBuffer),
+            SendType::RawBuffer(payload) => (payload.shards, MessageType::RawBuffer),
         };
 
         message_type.framed_write(&mut stream).location(loc!())?;
@@ -1421,9 +1432,9 @@ where
                     compressed_shards: Arc::new(shards),
                 })
             },
-            SendType::RawBuffer(compressed_shards) => Ok(OnConnectFrame {
+            SendType::RawBuffer(payload) => Ok(OnConnectFrame {
                 message_type: MessageType::RawBuffer,
-                compressed_shards,
+                compressed_shards: payload.shards,
             }),
         }
     }

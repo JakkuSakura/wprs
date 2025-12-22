@@ -17,6 +17,7 @@ use std::sync::Arc;
 use crate::prelude::*;
 use crate::protocols::wprs::Capabilities;
 use crate::protocols::wprs::DisplayConfig;
+use crate::protocols::wprs::RawBufferPayload;
 use crate::protocols::wprs::Request;
 use crate::protocols::wprs::SendType;
 use crate::protocols::wprs::wayland::Buffer;
@@ -32,7 +33,9 @@ fn externalize_compressed_buffer(state: &mut SurfaceState) -> Option<SendType<Re
 
     match data {
         BufferData::Compressed(CompressedBufferData(shards)) => {
-            let msg = SendType::RawBuffer(Arc::clone(shards));
+            let msg = SendType::RawBuffer(RawBufferPayload {
+                shards: Arc::clone(shards),
+            });
             *data = BufferData::External;
             Some(msg)
         },
@@ -77,13 +80,13 @@ mod tests {
     use super::*;
     use std::num::NonZeroUsize;
 
-    use crate::utils::arc_slice::ArcSlice;
     use crate::protocols::wprs::ClientId;
     use crate::protocols::wprs::wayland::BufferFormat;
     use crate::protocols::wprs::wayland::BufferMetadata;
     use crate::protocols::wprs::wayland::SurfaceRequestPayload;
     use crate::protocols::wprs::wayland::UncompressedBufferData;
     use crate::protocols::wprs::wayland::WlSurfaceId;
+    use crate::utils::arc_slice::ArcSlice;
     use crate::utils::sharding_compression::CompressedShards;
     use crate::utils::sharding_compression::ShardingCompressor;
 
