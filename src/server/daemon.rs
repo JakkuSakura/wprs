@@ -290,14 +290,16 @@ impl wctl::server::Handler for ControlHandler {
         match req {
             wctl::Request::Ping => wctl::Response::Pong,
             wctl::Request::ServerInfo => wctl::Response::ServerInfo(self.server_info.clone()),
-            wctl::Request::SetCaptureTargetPid { pid } => {
-                let Some(handle) = &self.macos_target_pid else {
-                    return wctl::Response::Error {
-                        message: "capture target pid is not supported by the current backend"
-                            .to_string(),
-                    };
-                };
-                handle.set(pid);
+            wctl::Request::StartSession { child_pid } => {
+                if let Some(handle) = &self.macos_target_pid {
+                    handle.set(Some(child_pid));
+                }
+                wctl::Response::Ok
+            },
+            wctl::Request::StopSession => {
+                if let Some(handle) = &self.macos_target_pid {
+                    handle.set(None);
+                }
                 wctl::Response::Ok
             },
         }

@@ -7,13 +7,18 @@ use rkyv::Serialize;
 pub enum Request {
     Ping,
     ServerInfo,
-    /// Best-effort capture filtering.
+    /// Starts a wrun-managed session.
     ///
-    /// For macOS window/seamless capture, this limits capture to windows owned
-    /// by `pid`.
-    SetCaptureTargetPid {
-        pid: Option<u32>,
+    /// This is a generic hook for server backends that need to bind themselves
+    /// to the lifecycle of the launched child process.
+    ///
+    /// Example: the macOS seamless capture backend uses this to filter capture
+    /// to the launched app.
+    StartSession {
+        child_pid: u32,
     },
+    /// Stops a wrun-managed session.
+    StopSession,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Archive, Serialize, Deserialize)]

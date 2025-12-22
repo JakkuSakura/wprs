@@ -18,9 +18,9 @@ pub fn run_wprsc(config: WprscConfig) -> Result<()> {
     }
 }
 
-pub fn run_viewer_for_endpoint(
+pub fn run_client_for_endpoint(
     endpoint: proto::Endpoint,
-    present_backend: ClientBackend,
+    client_backend: ClientBackend,
     backend_config: ClientBackendConfig,
 ) -> Result<()> {
     let serializer_options = proto::SerializerClientOptions {
@@ -32,7 +32,7 @@ pub fn run_viewer_for_endpoint(
         Serializer::new_client_endpoint_with_options(endpoint, serializer_options)
             .location(loc!())?;
 
-    let backend = build_client_backend(present_backend, backend_config).location(loc!())?;
+    let backend = build_client_backend(client_backend, backend_config).location(loc!())?;
 
     info!("viewer using backend: {}", backend.name());
 

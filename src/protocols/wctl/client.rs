@@ -8,6 +8,7 @@ use crate::prelude::*;
 use crate::protocols::wctl;
 use crate::protocols::wctl::Endpoint;
 
+#[derive(Clone, Debug)]
 pub struct Client {
     endpoint: Endpoint,
 }
@@ -35,13 +36,26 @@ impl Client {
         }
     }
 
-    pub fn set_capture_target_pid(&self, pid: Option<u32>) -> Result<()> {
+    pub fn start_session(&self, child_pid: u32) -> Result<()> {
         let resp = self
-            .request(wctl::Request::SetCaptureTargetPid { pid })
+            .request(wctl::Request::StartSession { child_pid })
             .location(loc!())?;
         match resp {
             wctl::Response::Ok => Ok(()),
-            wctl::Response::Error { message } => bail!("wctl set capture pid failed: {message}"),
+            wctl::Response::Error { message } => {
+                bail!("wctl start session failed: {message}")
+            },
+            other => bail!("unexpected wctl response: {other:?}"),
+        }
+    }
+
+    pub fn stop_session(&self) -> Result<()> {
+        let resp = self.request(wctl::Request::StopSession).location(loc!())?;
+        match resp {
+            wctl::Response::Ok => Ok(()),
+            wctl::Response::Error { message } => {
+                bail!("wctl stop session failed: {message}")
+            },
             other => bail!("unexpected wctl response: {other:?}"),
         }
     }

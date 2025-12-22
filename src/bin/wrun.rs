@@ -21,13 +21,6 @@ struct Args {
     #[arg(long, value_name = "BACKEND")]
     client_backend: Option<ClientBackend>,
 
-    /// Optional control-plane endpoint used to detect/target an external `wprsd`.
-    ///
-    /// If not set, `wrun` checks `$WPRS_WCTL_ENDPOINT` and then falls back to the
-    /// `wprsd` config's `control_endpoint` / `control_socket`.
-    #[arg(long, value_name = "ENDPOINT")]
-    wctl_endpoint: Option<String>,
-
     /// Disable setting `WAYLAND_DISPLAY` for the wrapped command.
     #[arg(long, default_value_t = false, action = clap::ArgAction::SetTrue)]
     no_wayland: bool,
@@ -45,7 +38,6 @@ fn main() -> Result<()> {
     let args = Args::parse();
     let exit_code = launcher::run(launcher::RunConfig {
         wprsd_config_file: args.config_file,
-        wctl_endpoint: args.wctl_endpoint,
         client_backend: args.client_backend,
         no_wayland: args.no_wayland,
         no_x11: args.no_x11,
