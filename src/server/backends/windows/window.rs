@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU32;
+use std::sync::atomic::Ordering;
 
 use crate::prelude::*;
 use crate::protocols::wprs::Capabilities;
@@ -42,11 +44,34 @@ struct TrackedWindow {
     rect: Rect,
 }
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug)]
+pub struct WindowsTargetPid {
+    pid: Arc<AtomicU32>,
+}
+
+impl WindowsTargetPid {
+    pub fn new() -> Self {
+        Self {
+            pid: Arc::new(AtomicU32::new(0)),
+        }
+    }
+
+    pub fn get(&self) -> Option<u32> {
+        let pid = self.pid.load(Ordering::Relaxed);
+        if pid == 0 { None } else { Some(pid) }
+    }
+
+    pub fn set(&self, pid: Option<u32>) {
+        self.pid.store(pid.unwrap_or(0), Ordering::Relaxed);
+    }
+}
+
+#[derive(Debug)]
 pub struct WindowsWindowBackend {
     display_config: DisplayConfig,
     windows: HashMap<u64, TrackedWindow>,
     pressed_buttons: u32,
+    target_pid: WindowsTargetPid,
 }
 
 impl WindowsWindowBackend {
@@ -55,7 +80,12 @@ impl WindowsWindowBackend {
             display_config: DisplayConfig::default(),
             windows: HashMap::new(),
             pressed_buttons: 0,
+            target_pid: WindowsTargetPid::new(),
         }
+    }
+
+    pub fn target_pid_handle(&self) -> WindowsTargetPid {
+        self.target_pid.clone()
     }
 
     fn surface_state_for_window(
@@ -165,6 +195,13 @@ impl PollingBackend for WindowsWindowBackend {
     }
 
     fn poll(&mut self) -> Result<Vec<BackendObservation>> {
+        // Skeleton for per-session filtering.
+        //
+        // For now, we expose the target pid via wctl StartSession/StopSession,
+        // but the Windows capture implementation does not yet retrieve per-
+        // window owner pid, so we cannot filter the enumeration.
+        let _ = self.target_pid.get();
+
         let mut out = Vec::new();
         let windows = list_windows().location(loc!())?;
         let mut seen = std::collections::HashSet::new();
@@ -209,6 +246,12 @@ impl PollingBackend for WindowsWindowBackend {
             _ => {},
         }
         Ok(())
+    }
+}
+
+impl Default for WindowsWindowBackend {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

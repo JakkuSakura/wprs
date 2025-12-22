@@ -100,7 +100,8 @@ pub fn run(config: &WprsdConfig) -> Result<()> {
     let _rdp_bridge = maybe_start_rdp_bridge(config).location(loc!())?;
 
     let backend_kind = infer_backend(config).location(loc!())?;
-    let (backend, macos_target_pid) = build_backend(&backend_kind, config).location(loc!())?;
+    let (backend, macos_target_pid, windows_target_pid) =
+        build_backend(&backend_kind, config).location(loc!())?;
 
     let wprs_endpoint = match &config.endpoint {
         Some(endpoint) => endpoint.to_string(),
@@ -123,7 +124,11 @@ pub fn run(config: &WprsdConfig) -> Result<()> {
 
     {
         std::thread::spawn(move || {
-            let handler = Arc::new(ControlHandler::new(server_info, macos_target_pid));
+            let handler = Arc::new(ControlHandler::new(
+                server_info,
+                macos_target_pid,
+                windows_target_pid,
+            ));
             wctl::server::serve(&control_endpoint, handler).log_and_ignore(loc!());
         });
     }
@@ -209,6 +214,7 @@ fn build_backend(
 ) -> Result<(
     Box<dyn ServerBackend>,
     Option<backends::macos::MacosTargetPid>,
+    Option<backends::windows::WindowsTargetPid>,
 )> {
     match backend {
         WprsdBackend::X11Fullscreen => Ok((
@@ -217,9 +223,11 @@ fn build_backend(
                     .location(loc!())?,
             ),
             None,
+            None,
         )),
         WprsdBackend::WindowsFullscreen => Ok((
             Box::new(backends::windows::WindowsFullscreenBackend::new()),
+            None,
             None,
         )),
         WprsdBackend::MacosFullscreen => Ok((
@@ -229,11 +237,13 @@ fn build_backend(
                 },
             )),
             None,
-        )),
-        WprsdBackend::WindowsSeamless => Ok((
-            Box::new(backends::windows::WindowsWindowBackend::new()),
             None,
         )),
+        WprsdBackend::WindowsSeamless => {
+            let backend = backends::windows::WindowsWindowBackend::new();
+            let pid = backend.target_pid_handle();
+            Ok((Box::new(backend), None, Some(pid)))
+        },
         WprsdBackend::MacosSeamless => {
             let backend = backends::macos::MacosWindowBackend::new(
                 backends::macos::MacosWindowBackendConfig {
@@ -242,7 +252,7 @@ fn build_backend(
                 },
             );
             let pid = backend.target_pid_handle();
-            Ok((Box::new(backend), Some(pid)))
+            Ok((Box::new(backend), Some(pid), None))
         },
         WprsdBackend::Wayland => {
             #[cfg(feature = "wayland")]
@@ -256,6 +266,7 @@ fn build_backend(
                             kde_server_side_decorations: config.wayland.kde_server_side_decorations,
                         },
                     )),
+                    None,
                     None,
                 ))
             }
@@ -271,16 +282,19 @@ fn build_backend(
 struct ControlHandler {
     server_info: wctl::ServerInfo,
     macos_target_pid: Option<backends::macos::MacosTargetPid>,
+    windows_target_pid: Option<backends::windows::WindowsTargetPid>,
 }
 
 impl ControlHandler {
     fn new(
         server_info: wctl::ServerInfo,
         macos_target_pid: Option<backends::macos::MacosTargetPid>,
+        windows_target_pid: Option<backends::windows::WindowsTargetPid>,
     ) -> Self {
         Self {
             server_info,
             macos_target_pid,
+            windows_target_pid,
         }
     }
 }
@@ -294,10 +308,16 @@ impl wctl::server::Handler for ControlHandler {
                 if let Some(handle) = &self.macos_target_pid {
                     handle.set(Some(child_pid));
                 }
+                if let Some(handle) = &self.windows_target_pid {
+                    handle.set(Some(child_pid));
+                }
                 wctl::Response::Ok
             },
             wctl::Request::StopSession => {
                 if let Some(handle) = &self.macos_target_pid {
+                    handle.set(None);
+                }
+                if let Some(handle) = &self.windows_target_pid {
                     handle.set(None);
                 }
                 wctl::Response::Ok
