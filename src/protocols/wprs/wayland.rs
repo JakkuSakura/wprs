@@ -17,7 +17,6 @@ use std::fmt::Debug;
 use std::num::NonZeroU32;
 #[cfg(any(feature = "wayland", feature = "wayland-client"))]
 use anyhow::Error;
-use enum_as_inner::EnumAsInner;
 use rkyv::Archive;
 use rkyv::Deserialize;
 use rkyv::Serialize;
@@ -79,7 +78,6 @@ use smithay_client_toolkit::seat::pointer::PointerEventKind as SctkPointerEventK
 
 use super::ClientId;
 use super::geometry::Point;
-use super::geometry::Rectangle;
 use super::geometry::Size;
 use super::tuple::Tuple2;
 use super::xdg_shell;
@@ -89,13 +87,30 @@ use crate::config;
 #[cfg(feature = "wayland")]
 use crate::utils::filtering;
 use crate::prelude::*;
+#[cfg(feature = "wayland")]
 use crate::utils::sharding_compression::CompressedShards;
 #[cfg(feature = "wayland")]
 use crate::utils::sharding_compression::ShardingCompressor;
-use crate::utils::vec4u8::Vec4u8s;
 
-#[derive(Archive, Deserialize, Serialize, Debug, Copy, Clone, Hash, Eq, PartialEq)]
-pub struct WlSurfaceId(pub u64);
+pub use crate::models::surface::Buffer;
+pub use crate::models::surface::BufferAssignment;
+pub use crate::models::surface::BufferData;
+pub use crate::models::surface::BufferFormat;
+pub use crate::models::surface::BufferMetadata;
+pub use crate::models::surface::BufferUpdate;
+pub use crate::models::surface::ClientSurface;
+pub use crate::models::surface::CompressedBufferData;
+pub use crate::models::surface::RectangleKind;
+pub use crate::models::surface::Region;
+pub use crate::models::surface::Role;
+pub use crate::models::surface::SubSurfaceId;
+pub use crate::models::surface::SubSurfaceState;
+pub use crate::models::surface::SubsurfacePosition;
+pub use crate::models::surface::SurfaceState;
+pub use crate::models::surface::Transform;
+pub use crate::models::surface::UncompressedBufferData;
+pub use crate::models::surface::ViewportState;
+pub use crate::models::surface::WlSurfaceId;
 
 impl WlSurfaceId {
     #[cfg(feature = "wayland")]
@@ -111,13 +126,6 @@ impl From<&backend::ObjectId> for WlSurfaceId {
     }
 }
 
-// TODO: consider removing
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Archive, Deserialize, Serialize)]
-pub struct ClientSurface {
-    pub client: ClientId,
-    pub surface: WlSurfaceId,
-}
-
 impl ClientSurface {
     #[cfg(feature = "wayland")]
     pub fn new(wl_surface: &WlSurface) -> Result<Self> {
@@ -128,27 +136,10 @@ impl ClientSurface {
     }
 }
 
-#[derive(Archive, Deserialize, Serialize, Debug, Copy, Clone, Hash, Eq, PartialEq)]
-pub struct SubSurfaceId(pub u64);
-
 impl SubSurfaceId {
     pub fn new(subsurface_id: &WlSurfaceId) -> Self {
         Self(super::hash(&subsurface_id))
     }
-}
-
-#[derive(Debug, Copy, Clone, Eq, PartialEq, EnumAsInner, Archive, Deserialize, Serialize)]
-pub enum BufferFormat {
-    Argb8888,
-    Xrgb8888,
-}
-
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Archive, Deserialize, Serialize)]
-pub struct BufferMetadata {
-    pub width: i32,
-    pub height: i32,
-    pub stride: i32,
-    pub format: BufferFormat,
 }
 
 #[cfg(feature = "wayland")]
@@ -196,56 +187,6 @@ impl BufferMetadata {
             format: spec.format.try_into().location(loc!())?,
         })
     }
-
-    pub fn pixel_bytes(&self) -> i32 {
-        self.stride / self.width
-    }
-
-    pub fn len(&self) -> usize {
-        (self.height * self.stride) as usize
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-}
-
-#[derive(Clone, Eq, PartialEq, Archive, Deserialize, Serialize)]
-pub struct UncompressedBufferData(pub Vec4u8s);
-
-impl fmt::Debug for UncompressedBufferData {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("UncompressedBufferData")
-            .field(&format_args!("Vec4u8s[{}]", self.0.len()))
-            .finish()
-    }
-}
-
-#[derive(Clone, Eq, PartialEq, Archive, Deserialize, Serialize)]
-pub struct CompressedBufferData(pub CompressedShards);
-
-impl fmt::Debug for CompressedBufferData {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("CompressedBufferData")
-            .field(&format_args!(
-                "CompressedShards[{:?}]",
-                self.0.uncompressed_size()
-            ))
-            .finish()
-    }
-}
-
-#[derive(Debug, Clone, Eq, PartialEq, EnumAsInner, Archive, Deserialize, Serialize)]
-pub enum BufferData {
-    External,
-    Uncompressed(UncompressedBufferData),
-    Compressed(CompressedBufferData),
-}
-
-#[derive(Debug, Clone, Eq, PartialEq, Archive, Deserialize, Serialize)]
-pub struct Buffer {
-    pub metadata: BufferMetadata,
-    pub data: BufferData,
 }
 
 impl Buffer {
@@ -287,14 +228,6 @@ impl Buffer {
         ));
         Ok(())
     }
-}
-
-// TODO: consider splitting SurfaceState, this only really makes sense for the
-// surface state we're sending, not the one we're storing.
-#[derive(Debug, Clone, Eq, PartialEq, EnumAsInner, Archive, Deserialize, Serialize)]
-pub enum BufferAssignment {
-    New(Buffer),
-    Removed,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Archive, Deserialize, Serialize)]
@@ -589,13 +522,6 @@ impl PointerEvent {
     }
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Archive, Deserialize, Serialize)]
-pub struct SubSurfaceState {
-    pub parent: WlSurfaceId,
-    pub location: Point<i32>,
-    pub sync: bool,
-}
-
 impl SubSurfaceState {
     #[cfg(feature = "wayland")]
     pub fn new(parent: &WlSurface) -> Self {
@@ -607,20 +533,6 @@ impl SubSurfaceState {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, EnumAsInner, Archive, Deserialize, Serialize)]
-pub enum Role {
-    Cursor(Point<i32>),
-    SubSurface(SubSurfaceState),
-    XdgToplevel(xdg_shell::XdgToplevelState),
-    XdgPopup(xdg_shell::XdgPopupState),
-}
-
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Archive, Deserialize, Serialize)]
-pub enum RectangleKind {
-    Add,
-    Subtract,
-}
-
 #[cfg(feature = "wayland")]
 impl From<&SmithayRectangleKind> for RectangleKind {
     fn from(kind: &SmithayRectangleKind) -> Self {
@@ -629,11 +541,6 @@ impl From<&SmithayRectangleKind> for RectangleKind {
             SmithayRectangleKind::Subtract => Self::Subtract,
         }
     }
-}
-
-#[derive(Debug, Clone, Eq, PartialEq, Archive, Deserialize, Serialize)]
-pub struct Region {
-    rects: Vec<Tuple2<RectangleKind, Rectangle<i32>>>,
 }
 
 #[cfg(feature = "wayland")]
@@ -650,10 +557,6 @@ impl From<&RegionAttributes> for Region {
 }
 
 impl Region {
-    pub fn new() -> Self {
-        Self { rects: Vec::new() }
-    }
-
     #[cfg(feature = "wayland-client")]
     pub fn create_compositor_region(
         &self,
@@ -670,24 +573,6 @@ impl Region {
         });
         Ok(region)
     }
-}
-
-impl Default for Region {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Archive, Deserialize, Serialize)]
-pub enum Transform {
-    Normal,
-    _90,
-    _180,
-    _270,
-    Flipped,
-    Flipped90,
-    Flipped180,
-    Flipped270,
 }
 
 #[cfg(feature = "wayland-client")]
@@ -776,52 +661,6 @@ impl From<Transform> for SmithayTransform {
             Transform::Flipped270 => Self::Flipped270,
         }
     }
-}
-
-/// An entry for a vector of child surfaces. The (x, y) position is stored
-/// explicitly, the z position (stacking order) is stored implicitly based on
-/// the index of the item in the vector.
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Archive, Deserialize, Serialize)]
-pub struct SubsurfacePosition {
-    pub id: WlSurfaceId,
-    pub position: Point<i32>,
-}
-
-#[derive(Debug, Clone, PartialEq, Archive, Deserialize, Serialize)]
-pub struct SurfaceState {
-    pub client: ClientId,
-    pub id: WlSurfaceId,
-    pub buffer: Option<BufferAssignment>,
-    /// How to interpret the externalized buffer payload (if any).
-    ///
-    /// When `None`, the external buffer payload represents a full-frame update.
-    pub buffer_update: Option<BufferUpdate>,
-    pub role: Option<Role>,
-    // TODO: include buffer_delta, transform from SurfaceAttributes
-    pub buffer_scale: i32,
-    pub buffer_transform: Option<Transform>,
-    pub opaque_region: Option<Region>,
-    pub input_region: Option<Region>,
-    pub z_ordered_children: Vec<SubsurfacePosition>,
-    pub damage: Option<Vec<Rectangle<i32>>>,
-    // server-side only
-    pub output_ids: Vec<u32>,
-    pub viewport_state: Option<ViewportState>,
-
-    // Interfaces
-    pub xdg_surface_state: Option<xdg_shell::XdgSurfaceState>,
-}
-
-#[derive(Debug, Clone, Eq, PartialEq, Archive, Deserialize, Serialize)]
-pub enum BufferUpdate {
-    /// The external buffer payload describes a sub-rectangle update.
-    Patch {
-        x: i32,
-        y: i32,
-        width: i32,
-        height: i32,
-        stride: i32,
-    },
 }
 
 impl SurfaceState {
@@ -1231,12 +1070,6 @@ pub enum SurfaceEventPayload {
 pub struct SurfaceEvent {
     pub surface_id: WlSurfaceId,
     pub payload: SurfaceEventPayload,
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Archive, Deserialize, Serialize)]
-pub struct ViewportState {
-    pub src: Option<Rectangle<f64>>,
-    pub dst: Option<Size<i32>>,
 }
 
 #[cfg(feature = "wayland")]

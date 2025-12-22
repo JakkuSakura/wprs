@@ -16,6 +16,7 @@ pub mod client;
 pub mod config;
 pub mod constants;
 pub mod launcher;
+pub mod models;
 pub mod prelude;
 pub mod protocols;
 pub mod server;
