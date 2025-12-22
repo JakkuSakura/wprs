@@ -20,6 +20,9 @@ pub enum ClientBackend {
     Wayland,
     WinitWgpu,
 
+    #[cfg(unix)]
+    TermwizImage,
+
     // --- Smithay feature bundle aliases ---
     //
     // These variants exist so users can reference the same `smithay_*` feature

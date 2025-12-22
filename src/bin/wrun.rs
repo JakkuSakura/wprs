@@ -8,52 +8,29 @@ use clap::ValueEnum;
 use serde_derive::Deserialize;
 use serde_derive::Serialize;
 
-#[cfg(all(unix, feature = "wayland"))]
-use std::io::Write;
-
-#[cfg(all(unix, feature = "wayland"))]
-use calloop::EventLoop as CalloopEventLoop;
-#[cfg(all(unix, feature = "wayland"))]
-use calloop::channel::Event as CalloopChannelEvent;
-#[cfg(all(unix, feature = "wayland"))]
-use termwiz::render::RenderTty;
-#[cfg(all(unix, feature = "wayland"))]
-use termwiz::render::terminfo::TerminfoRenderer;
-#[cfg(all(unix, feature = "wayland"))]
-use termwiz::surface::Change;
-#[cfg(all(unix, feature = "wayland"))]
-use termwiz::terminal::ScreenSize;
-#[cfg(all(unix, feature = "wayland"))]
-use termwiz::terminal::Terminal as _;
-
 use wprs::config;
-#[cfg(all(unix, feature = "wayland"))]
-use wprs::filtering;
 use wprs::prelude::*;
+use wprs::server::config::WprsdConfig;
 
 #[cfg(any(all(unix, feature = "wayland"), target_os = "macos"))]
 use wprs::protocols::wprs::Serializer;
 
+#[cfg(all(unix, feature = "wayland"))]
+use wprs::client::ClientBackend as _;
+#[cfg(all(unix, feature = "wayland"))]
+use wprs::client::backends::termwiz_image::TermwizImageClientBackend;
 #[cfg(all(unix, feature = "wayland"))]
 use wprs::protocols::wprs as proto;
 #[cfg(all(unix, feature = "wayland"))]
 use wprs::protocols::wprs::SendType;
 #[cfg(all(unix, feature = "wayland"))]
 use wprs::protocols::wprs::transport;
-#[cfg(all(unix, feature = "wayland"))]
-use wprs::protocols::wprs::wayland::{BufferAssignment, BufferData, Role, SurfaceRequestPayload};
-#[cfg(all(unix, feature = "wayland"))]
-use wprs::protocols::wprs::{RecvType, Request};
-use wprs::server::config::WprsdConfig;
-#[cfg(all(unix, feature = "wayland"))]
-use wprs::vec4u8::Vec4u8s;
 
 #[cfg(feature = "wayland")]
 use wprs::server::backends::wayland::backend::WaylandSmithayBackend;
 #[cfg(feature = "wayland")]
 use wprs::server::backends::wayland::backend::WaylandSmithayBackendConfig;
 #[cfg(feature = "wayland")]
-use wprs::server::config::XwaylandMode;
 #[cfg(feature = "wayland")]
 use wprs::server::runtime::backend::ServerBackend as _;
 
@@ -153,7 +130,8 @@ fn load_wrun_embedded_instance() -> Result<Option<WrunEmbeddedInstance>> {
 fn save_wrun_embedded_instance(state: &WrunEmbeddedInstance) -> Result<()> {
     let path = wrun_instance_state_file();
     std::fs::create_dir_all(path.parent().location(loc!())?).location(loc!())?;
-    let s = ron::ser::to_string_pretty(state, ron::ser::PrettyConfig::default()).location(loc!())?;
+    let s =
+        ron::ser::to_string_pretty(state, ron::ser::PrettyConfig::default()).location(loc!())?;
     std::fs::write(&path, s).location(loc!())?;
     Ok(())
 }
@@ -203,8 +181,8 @@ fn load_wprsd_config(config_file: Option<PathBuf>) -> Result<WprsdConfig> {
 fn apply_linux_env(cmd: &mut Command, cfg: &WprsdConfig, no_wayland: bool, no_x11: bool) {
     apply_linux_env_values(
         cmd,
-        &cfg.wayland_display,
-        cfg.xwayland_display,
+        &cfg.wayland.display,
+        cfg.wayland.xwayland.as_ref().and_then(|x| x.display),
         no_wayland,
         no_x11,
     );
@@ -393,8 +371,11 @@ fn resolve_compositor(mode: CompositorMode, cfg: &WprsdConfig) -> Result<(String
                 "external mode requested, but wprsd is not listening on socket={:?}",
                 cfg.socket
             );
-            Ok((cfg.wayland_display.clone(), cfg.xwayland_display))
-        }
+            Ok((
+                cfg.wayland.display.clone(),
+                cfg.wayland.xwayland.as_ref().and_then(|x| x.display),
+            ))
+        },
         CompositorMode::Embedded => {
             let mut state = load_wrun_embedded_instance()
                 .location(loc!())?
@@ -409,7 +390,7 @@ fn resolve_compositor(mode: CompositorMode, cfg: &WprsdConfig) -> Result<(String
                 );
             }
             Ok((state.wayland_display, state.xwayland_display))
-        }
+        },
         CompositorMode::Inherited => {
             if let Some(state) = load_wrun_embedded_instance().location(loc!())? {
                 if unix_socket_is_listening(&state.socket) {
@@ -424,193 +405,20 @@ fn resolve_compositor(mode: CompositorMode, cfg: &WprsdConfig) -> Result<(String
             if unix_socket_is_listening(&cfg.socket) {
                 info!(
                     "wrun: using external wprsd from config: socket={:?} wayland_display={:?}",
-                    cfg.socket, cfg.wayland_display
+                    cfg.socket, cfg.wayland.display
                 );
-                return Ok((cfg.wayland_display.clone(), cfg.xwayland_display));
+                return Ok((
+                    cfg.wayland.display.clone(),
+                    cfg.wayland.xwayland.as_ref().and_then(|x| x.display),
+                ));
             }
 
             let mut state = default_embedded_instance();
             start_embedded_wprsd_persistent(&mut state).location(loc!())?;
             save_wrun_embedded_instance(&state).location(loc!())?;
             Ok((state.wayland_display, state.xwayland_display))
-        }
+        },
     }
-}
-
-#[cfg(all(unix, feature = "wayland"))]
-struct StdoutRenderTty<'a> {
-    out: &'a mut dyn Write,
-    size: ScreenSize,
-}
-
-#[cfg(all(unix, feature = "wayland"))]
-impl Write for StdoutRenderTty<'_> {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.out.write(buf)
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        self.out.flush()
-    }
-}
-
-#[cfg(all(unix, feature = "wayland"))]
-impl RenderTty for StdoutRenderTty<'_> {
-    fn get_size_in_cells(&mut self) -> termwiz::Result<(usize, usize)> {
-        Ok((self.size.cols, self.size.rows))
-    }
-}
-
-#[cfg(all(unix, feature = "wayland"))]
-fn bgra_to_rgba_in_place(buf: &mut [u8]) {
-    for p in buf.chunks_exact_mut(4) {
-        p.swap(0, 2);
-    }
-}
-
-#[cfg(all(unix, feature = "wayland"))]
-struct TerminalPresenter {
-    renderer: TerminfoRenderer,
-    screen_size: ScreenSize,
-    buffer_cache: Option<Vec4u8s>,
-    selected_surface: Option<proto::wayland::WlSurfaceId>,
-}
-
-#[cfg(all(unix, feature = "wayland"))]
-impl TerminalPresenter {
-    fn new() -> Result<Self> {
-        let termwiz_caps = termwiz::caps::Capabilities::new_from_env().location(loc!())?;
-        let mut term = termwiz::terminal::new_terminal(termwiz_caps.clone()).location(loc!())?;
-        let size = term.get_screen_size().location(loc!())?;
-        ensure!(
-            size.cols > 0 && size.rows > 0,
-            "terminal reported zero size"
-        );
-
-        Ok(Self {
-            renderer: TerminfoRenderer::new(termwiz_caps),
-            screen_size: ScreenSize {
-                rows: size.rows,
-                cols: size.cols,
-                xpixel: size.xpixel,
-                ypixel: size.ypixel,
-            },
-            buffer_cache: None,
-            selected_surface: None,
-        })
-    }
-
-    fn handle_message(&mut self, msg: RecvType<Request>) -> Result<()> {
-        match msg {
-            RecvType::RawBuffer(buf) => {
-                self.buffer_cache = Some(Vec4u8s::from(buf));
-            },
-            RecvType::Object(Request::Surface(surface)) => {
-                let SurfaceRequestPayload::Commit(mut state) = surface.payload else {
-                    return Ok(());
-                };
-
-                if self.selected_surface.is_none() {
-                    if matches!(state.role.as_ref(), Some(Role::XdgToplevel(_))) {
-                        self.selected_surface = Some(surface.surface);
-                    }
-                }
-                if Some(surface.surface) != self.selected_surface {
-                    return Ok(());
-                }
-
-                let Some(BufferAssignment::New(mut buf)) = state.buffer.take() else {
-                    return Ok(());
-                };
-                if buf.data.is_external() {
-                    if let Some(cache) = self.buffer_cache.take() {
-                        buf.data =
-                            BufferData::Uncompressed(proto::wayland::UncompressedBufferData(cache));
-                    }
-                }
-                let filtered = match buf.data {
-                    BufferData::Uncompressed(data) => data.0,
-                    _ => return Ok(()),
-                };
-
-                let mut bgra = vec![0u8; buf.metadata.len()];
-                filtering::unfilter(&filtered, &mut bgra);
-                bgra_to_rgba_in_place(&mut bgra);
-
-                let png =
-                    encode_png_rgba(&bgra, buf.metadata.width as u32, buf.metadata.height as u32)
-                        .location(loc!())?;
-                let cols = self.screen_size.cols;
-                let rows = self.screen_size.rows;
-                let image = termwiz::surface::Image {
-                    width: cols,
-                    height: rows,
-                    top_left: termwiz::image::TextureCoordinate::new_f32(0.0, 0.0),
-                    bottom_right: termwiz::image::TextureCoordinate::new_f32(1.0, 1.0),
-                    image: std::sync::Arc::new(termwiz::image::ImageData::with_data(
-                        termwiz::image::ImageDataType::EncodedFile(png),
-                    )),
-                };
-
-                let mut out = std::io::stdout().lock();
-                let mut tty = StdoutRenderTty {
-                    out: &mut out,
-                    size: self.screen_size,
-                };
-                self.renderer
-                    .render_to(
-                        &[
-                            Change::ClearScreen(Default::default()),
-                            Change::Image(image),
-                        ],
-                        &mut tty,
-                    )
-                    .location(loc!())?;
-                tty.flush().location(loc!())?;
-            },
-            _ => {},
-        }
-        Ok(())
-    }
-}
-
-#[cfg(all(unix, feature = "wayland"))]
-fn render_termwiz(mut serializer: Serializer<proto::Event, proto::Request>) -> Result<()> {
-    let reader = serializer.reader().location(loc!())?;
-
-    struct State {
-        presenter: TerminalPresenter,
-    }
-
-    let mut loop_: CalloopEventLoop<State> = CalloopEventLoop::try_new().location(loc!())?;
-    let mut state = State {
-        presenter: TerminalPresenter::new().location(loc!())?,
-    };
-    loop_
-        .handle()
-        .insert_source(reader, move |event, _metadata, state| {
-            if let CalloopChannelEvent::Msg(msg) = event {
-                state.presenter.handle_message(msg).log_and_ignore(loc!());
-            }
-        })
-        .map_err(|e| anyhow!("insert_source(serializer reader) failed: {e:?}"))?;
-    loop_.run(None, &mut state, |_| {}).location(loc!())
-}
-
-#[cfg(all(unix, feature = "wayland"))]
-fn encode_png_rgba(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8>> {
-    use png::{BitDepth, ColorType, Encoder};
-
-    let mut buf = Vec::new();
-    {
-        let mut encoder = Encoder::new(&mut buf, width, height);
-        encoder.set_color(ColorType::Rgba);
-        encoder.set_depth(BitDepth::Eight);
-        let mut writer = encoder.write_header().location(loc!())?;
-        writer.write_image_data(rgba).location(loc!())?;
-        writer.finish().location(loc!())?;
-    }
-    Ok(buf)
 }
 
 #[cfg(all(unix, feature = "wayland"))]
@@ -651,12 +459,7 @@ fn run_termwiz_embedded(cmd: &[OsString]) -> Result<()> {
             let backend = WaylandSmithayBackend::new(WaylandSmithayBackendConfig {
                 wayland_display: server_wayland_display,
                 framerate: 60,
-                enable_xwayland: false,
-                xwayland_mode: XwaylandMode::External,
-                xwayland_display: None,
-                xwayland_xdg_shell_path: "xwayland-xdg-shell".to_string(),
-                xwayland_xdg_shell_wayland_debug: false,
-                xwayland_xdg_shell_args: Vec::new(),
+                xwayland: None,
                 kde_server_side_decorations: false,
             });
 
@@ -708,7 +511,12 @@ fn run_termwiz_embedded(cmd: &[OsString]) -> Result<()> {
             }),
         )));
 
-    let render_thread = std::thread::spawn(move || render_termwiz(serializer));
+    let render_thread = std::thread::spawn(move || {
+        let backend = TermwizImageClientBackend::new_for_wrun();
+        if let Err(err) = Box::new(backend).run(serializer) {
+            warn!("termwiz-image backend terminated: {err:?}");
+        }
+    });
 
     let status = child.wait().location(loc!())?;
     warn!("wrapped app exited: {status}");
