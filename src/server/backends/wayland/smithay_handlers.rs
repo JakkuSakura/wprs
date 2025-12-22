@@ -873,11 +873,12 @@ pub fn commit_impl(
                 .update_with_external_buffer(&surface_state.buffer)
                 .location(loc!())?;
 
-            state.serializer.writer().send(SendType::RawBuffer(
-                crate::protocols::wprs::RawBufferPayload {
+            state
+                .serializer
+                .writer()
+                .send(SendType::RawBuffer(crate::protocols::wprs::RawBufferPayload {
                     shards: raw_buffer_to_send,
-                },
-            ));
+                }));
         },
         Some(SmithayBufferAssignment::Removed) => {
             surface_state.buffer = None;

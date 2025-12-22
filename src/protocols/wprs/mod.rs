@@ -849,7 +849,7 @@ where
 /// encoding implemented by `CompressedShards` for efficient streaming.
 #[derive(Clone)]
 pub struct RawBufferPayload {
-    pub shards: Arc<CompressedShards>,
+    pub shards: CompressedShards,
 }
 
 impl<ST> fmt::Debug for SendType<ST>
@@ -974,7 +974,7 @@ where
 #[derive(Clone)]
 struct OnConnectFrame {
     message_type: MessageType,
-    compressed_shards: Arc<CompressedShards>,
+    compressed_shards: CompressedShards,
 }
 
 fn write_loop<W, ST>(
@@ -1044,7 +1044,7 @@ where
             compression_ratio = field::Empty
         )
         .entered();
-        let (compressed_shards, message_type): (Arc<CompressedShards>, MessageType) = match obj {
+        let (compressed_shards, message_type): (CompressedShards, MessageType) = match obj {
             SendType::Object(obj) => {
                 let serialized_data = ArcSlice::new(
                     debug_span!("serialize")
@@ -1053,15 +1053,13 @@ where
                 );
 
                 let shards = compressor.compress(NonZeroUsize::new(1).unwrap(), serialized_data);
-                (Arc::new(shards), MessageType::Object)
+                (shards, MessageType::Object)
             },
             SendType::RawBuffer(payload) => (payload.shards, MessageType::RawBuffer),
         };
 
         message_type.framed_write(&mut stream).location(loc!())?;
-        compressed_shards
-            .framed_write(&mut stream)
-            .location(loc!())?;
+        compressed_shards.framed_write(&mut stream).location(loc!())?;
         stream.flush().location(loc!())?;
 
         // metrics
@@ -1429,13 +1427,12 @@ where
 
                 Ok(OnConnectFrame {
                     message_type: MessageType::Object,
-                    compressed_shards: Arc::new(shards),
+                    compressed_shards: shards,
                 })
             },
-            SendType::RawBuffer(payload) => Ok(OnConnectFrame {
-                message_type: MessageType::RawBuffer,
-                compressed_shards: payload.shards,
-            }),
+            SendType::RawBuffer(_) => {
+                bail!("RawBuffer payloads are not allowed in on_connect frames")
+            }
         }
     }
 

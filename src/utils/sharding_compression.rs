@@ -114,6 +114,18 @@ impl CompressedShards {
         Self { shards }
     }
 
+    pub fn single_uncompressed(data: Vec<u8>) -> Self {
+        let len = data.len();
+        Self {
+            shards: vec![CompressedShard {
+                idx: 0,
+                uncompressed_size: len,
+                compression: false,
+                data,
+            }],
+        }
+    }
+
     pub fn len(&self) -> usize {
         self.shards.len()
     }

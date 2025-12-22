@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use crate::prelude::*;
 use crate::protocols::wprs::Capabilities;
 use crate::protocols::wprs::ClientId;
@@ -23,7 +21,7 @@ pub enum BackendObservation {
     /// and send a `Surface(Commit)` with buffer data externalized.
     SurfaceCommit {
         state: SurfaceState,
-        bgra: Option<Arc<[u8]>>,
+        bgra: Option<Vec<u8>>,
     },
 
     /// Destroy a previously-advertised surface.

@@ -1,5 +1,4 @@
 use std::num::NonZeroUsize;
-use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::ensure;
@@ -20,11 +19,11 @@ use crate::protocols::wprs::core::handshake;
 use crate::protocols::wprs::transport;
 use crate::protocols::wprs::wayland::BufferAssignment;
 use crate::protocols::wprs::wayland::BufferData;
-use crate::protocols::wprs::wayland::CompressedBufferData;
 use crate::protocols::wprs::wayland::SurfaceRequestPayload;
 use crate::server::runtime::backend::BackendObservation;
 use crate::server::runtime::backend::PollingBackend;
 use crate::utils::sharding_compression::ShardingCompressor;
+use crate::utils::sharding_compression::CompressedShards;
 #[cfg(feature = "video-h264")]
 use crate::utils::arc_slice::ArcSlice;
 
@@ -130,7 +129,8 @@ fn apply_observation<B: PollingBackend>(
                 let bgra_ptr = bgra.as_ptr();
                 // SAFETY: `bgra_ptr` points to `bgra.len()` bytes for the duration of this call.
                 let data = unsafe { BufferPointer::new(&bgra_ptr, bgra.len()) };
-                let shards = match state.transport_config.codec {
+
+                let shards: CompressedShards = match state.transport_config.codec {
                     #[cfg(feature = "video-h264")]
                     transport::TransportCodec::H264 => {
                         let metadata = buf.metadata;
@@ -147,17 +147,22 @@ fn apply_observation<B: PollingBackend>(
                             });
                         }
                         let h264 = state.h264.as_mut().unwrap();
-                        let encoded = h264
-                            .encoder
-                            .encode(&bgra, metadata.stride as usize)
-                            .location(loc!())?;
-                        state
-                            .compressor
-                            .compress(NonZeroUsize::new(1).unwrap(), ArcSlice::new(encoded))
+                        let encoded =
+                            h264.encoder.encode(&bgra, metadata.stride as usize).location(loc!())?;
+                        // Video bitstreams are already compressed; do not zstd-compress again.
+                        CompressedShards::single_uncompressed(encoded)
+                    }
+                    transport::TransportCodec::ShardedRaw => {
+                        let filtered = filtering::filter_to_vec4u8s(data);
+                        CompressedShards::single_uncompressed(filtered.into())
                     }
                     _ => filtering::filter_and_compress(data, &mut state.compressor),
                 };
-                buf.data = BufferData::Compressed(CompressedBufferData(Arc::new(shards)));
+
+                buf.data = BufferData::External;
+                state.serializer.writer().send(SendType::RawBuffer(
+                    crate::protocols::wprs::RawBufferPayload { shards },
+                ));
             }
 
             for msg in handshake::surface_messages(s).location(loc!())? {

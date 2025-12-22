@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use crate::prelude::*;
 use crate::protocols::wprs::Capabilities;
 use crate::protocols::wprs::ClientId;
@@ -114,7 +112,7 @@ impl PollingBackend for MacosFullscreenBackend {
 
         Ok(vec![BackendObservation::SurfaceCommit {
             state: self.surface_state.clone(),
-            bgra: Some(Arc::from(bgra.into_boxed_slice())),
+            bgra: Some(bgra),
         }])
     }
 

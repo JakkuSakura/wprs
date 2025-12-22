@@ -232,7 +232,7 @@ impl PollingBackend for MacosWindowBackend {
 
             out.push(BackendObservation::SurfaceCommit {
                 state,
-                bgra: Some(Arc::from(bgra.into_boxed_slice())),
+                bgra: Some(bgra),
             });
         }
 

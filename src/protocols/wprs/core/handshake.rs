@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use crate::prelude::*;
 use crate::protocols::wprs::Capabilities;
 use crate::protocols::wprs::DisplayConfig;
@@ -31,16 +29,13 @@ fn externalize_compressed_buffer(state: &mut SurfaceState) -> Option<SendType<Re
         return None;
     };
 
-    match data {
-        BufferData::Compressed(CompressedBufferData(shards)) => {
-            let msg = SendType::RawBuffer(RawBufferPayload {
-                shards: Arc::clone(shards),
-            });
-            *data = BufferData::External;
-            Some(msg)
-        },
-        BufferData::External | BufferData::Uncompressed(_) => None,
-    }
+    let BufferData::Compressed(CompressedBufferData(shards)) = data else {
+        return None;
+    };
+
+    let shards = std::mem::take(shards);
+    *data = BufferData::External;
+    Some(SendType::RawBuffer(RawBufferPayload { shards }))
 }
 
 pub fn surface_messages(state: SurfaceState) -> Result<Vec<SendType<Request>>> {

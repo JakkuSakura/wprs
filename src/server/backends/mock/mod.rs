@@ -1,6 +1,4 @@
 use std::path::PathBuf;
-use std::sync::Arc;
-
 use clap::Parser;
 
 use crate::prelude::*;
@@ -226,7 +224,7 @@ impl PollingBackend for MockBackend {
                 );
                 BackendObservation::SurfaceCommit {
                     state: surface.base_state(),
-                    bgra: Some(Arc::from(bgra.into_boxed_slice())),
+                    bgra: Some(bgra),
                 }
             })
             .collect())

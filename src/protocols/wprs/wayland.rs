@@ -15,8 +15,6 @@
 use std::fmt;
 use std::fmt::Debug;
 use std::num::NonZeroU32;
-use std::sync::Arc;
-
 #[cfg(any(feature = "wayland", feature = "wayland-client"))]
 use anyhow::Error;
 use enum_as_inner::EnumAsInner;
@@ -224,7 +222,7 @@ impl fmt::Debug for UncompressedBufferData {
 }
 
 #[derive(Clone, Eq, PartialEq, Archive, Deserialize, Serialize)]
-pub struct CompressedBufferData(pub Arc<CompressedShards>);
+pub struct CompressedBufferData(pub CompressedShards);
 
 impl fmt::Debug for CompressedBufferData {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -258,9 +256,9 @@ impl Buffer {
         compressor: &mut ShardingCompressor,
     ) -> Result<Self> {
         let metadata = BufferMetadata::from_buffer_data(metadata).location(loc!())?;
-        let compressed_data = BufferData::Compressed(CompressedBufferData(Arc::new(
+        let compressed_data = BufferData::Compressed(CompressedBufferData(
             filtering::filter_and_compress(data, compressor),
-        )));
+        ));
         debug!(
             "New Buffer: size {:?}, width {:?}, height {:?}, stride {:?}, data {:?} ",
             &data.len(),
@@ -284,9 +282,9 @@ impl Buffer {
         compressor: &mut ShardingCompressor,
     ) -> Result<()> {
         self.metadata = BufferMetadata::from_buffer_data(metadata).location(loc!())?;
-        self.data = BufferData::Compressed(CompressedBufferData(Arc::new(
+        self.data = BufferData::Compressed(CompressedBufferData(
             filtering::filter_and_compress(data, compressor),
-        )));
+        ));
         Ok(())
     }
 }
@@ -875,31 +873,25 @@ impl SurfaceState {
     pub fn update_with_external_buffer(
         &mut self,
         buffer: &Option<BufferAssignment>,
-    ) -> Result<Arc<CompressedShards>> {
+    ) -> Result<CompressedShards> {
         self.buffer.clone_from(buffer);
         // set_buffer (found above) sets buffer to
         // Some(BufferAssignment::New(...)), so the 4 unwraps below should
         // never fail.
 
-        let raw_buffer_to_send = buffer
-            .as_ref()
-            .location(loc!())?
-            .as_new()
-            .location(loc!())?
-            .data
-            .as_compressed()
-            .location(loc!())?
-            .0
-            .clone();
-
-        self.buffer
+        let assignment = self
+            .buffer
             .as_mut()
             .location(loc!())?
             .as_new_mut()
-            .location(loc!())?
-            .data = BufferData::External;
+            .location(loc!())?;
 
-        Ok(raw_buffer_to_send)
+        let data = std::mem::replace(&mut assignment.data, BufferData::External);
+        let BufferData::Compressed(CompressedBufferData(shards)) = data else {
+            bail!("expected compressed buffer data")
+        };
+
+        Ok(shards)
     }
 
     #[instrument(skip_all, level = "debug")]

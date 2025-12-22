@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use anyhow::ensure;
 
 use crate::prelude::*;
@@ -387,7 +385,7 @@ impl PollingBackend for X11FullscreenBackend {
             let bgra = self.capture_root_bgra().location(loc!())?;
             return Ok(vec![BackendObservation::SurfaceCommit {
                 state: self.surface_state(),
-                bgra: Some(Arc::from(bgra.into_boxed_slice())),
+                bgra: Some(bgra),
             }]);
         }
 

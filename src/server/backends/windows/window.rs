@@ -228,10 +228,7 @@ impl PollingBackend for WindowsWindowBackend {
             self.windows
                 .insert(w.hwnd_key, TrackedWindow { rect: w.rect });
             let state = self.surface_state_for_window(w.hwnd_key, &w.title, metadata);
-            out.push(BackendObservation::SurfaceCommit {
-                state,
-                bgra: Some(Arc::from(bgra.into_boxed_slice())),
-            });
+            out.push(BackendObservation::SurfaceCommit { state, bgra: Some(bgra) });
         }
         Ok(out)
     }
