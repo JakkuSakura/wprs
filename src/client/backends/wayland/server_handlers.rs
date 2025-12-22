@@ -30,10 +30,10 @@ use super::subsurface::RemoteSubSurface;
 use crate::client::backends::wayland::xdg_shell::RemoteXdgPopup;
 use crate::client::backends::wayland::xdg_shell::RemoteXdgToplevel;
 #[cfg(feature = "video-h264")]
-use crate::buffer_pointer::BufferPointer;
-use crate::fallible_entry::FallibleEntryExt;
+use crate::utils::buffer_pointer::BufferPointer;
+use crate::utils::fallible_entry::FallibleEntryExt;
 #[cfg(feature = "video-h264")]
-use crate::filtering;
+use crate::utils::filtering;
 use crate::prelude::*;
 use crate::protocols::wprs::Capabilities;
 use crate::protocols::wprs::ClientId;

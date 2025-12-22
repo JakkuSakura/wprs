@@ -56,7 +56,7 @@ use smithay_client_toolkit::shm::slot::SlotPool;
 use smithay::reexports::wayland_protocols::wp::pointer_gestures::zv1::client::zwp_pointer_gestures_v1::ZwpPointerGesturesV1;
 
 use crate::constants;
-use crate::filtering;
+use crate::utils::filtering;
 use crate::prelude::*;
 use crate::protocols::wprs::Capabilities;
 use crate::protocols::wprs::ClientId;
@@ -79,7 +79,7 @@ use crate::protocols::wprs::wayland::WlSurfaceId;
 #[cfg(feature = "video-h264")]
 use crate::video::h264::H264Decoder;
 use crate::utils::client::SeatObject;
-use crate::vec4u8::Vec4u8s;
+use crate::utils::vec4u8::Vec4u8s;
 
 use super::smithay_handlers;
 use super::subsurface;

@@ -12,21 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod arc_slice;
-pub mod buffer_pointer;
 pub mod client;
 pub mod config;
 pub mod constants;
-pub mod fallible_entry;
-pub mod filtering;
-pub mod launcher;
+pub mod control_server;
 pub mod prelude;
 pub mod protocols;
 pub mod server;
-pub mod sharding_compression;
 pub mod utils;
-pub mod vec4u8;
-pub mod video;
+
+// Backward-compatible re-export for existing code/tests.
+pub use crate::utils::buffer_pointer;
 
 #[cfg(feature = "rdp")]
 pub use crate::protocols::rdp;
@@ -38,6 +34,3 @@ pub use crate::protocols::rdp;
 compile_error!(
     "The `wayland-client` feature (SCTK/Wayland backend) is not supported on Apple platforms. Use `--features winit-wgpu-client` instead."
 );
-
-#[cfg(feature = "tracy-allocator")]
-pub mod tracy_allocator;
