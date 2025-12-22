@@ -7,6 +7,8 @@ use anyhow::ensure;
 
 use crate::prelude::*;
 
+use super::wayland::WlSurfaceId;
+
 /// Client-reported CPU features.
 ///
 /// This is intentionally conservative: it is best-effort metadata that the server can
@@ -298,6 +300,12 @@ pub struct TransportConfig {
     pub max_fps: Option<u32>,
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Archive, Deserialize, Serialize)]
+pub enum TransportScope {
+    Global,
+    Surface(WlSurfaceId),
+}
+
 impl Default for TransportConfig {
     fn default() -> Self {
         Self {
@@ -370,6 +378,7 @@ pub struct TransportStats {
 #[derive(Debug, Clone, PartialEq, Archive, Deserialize, Serialize)]
 pub enum TransportRequest {
     Config(TransportConfig),
+    ConfigScoped { scope: TransportScope, config: TransportConfig },
     Pong(Pong),
 }
 

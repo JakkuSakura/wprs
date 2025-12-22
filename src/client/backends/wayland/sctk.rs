@@ -161,6 +161,7 @@ pub struct WprsClientState {
 
     pub(super) client_sync: crate::protocols::wprs::core::client_sync::ClientSync,
     pub(super) transport_config: transport::TransportConfig,
+    pub(super) transport_config_by_surface: std::collections::HashMap<WlSurfaceId, transport::TransportConfig>,
 }
 
 impl WprsClientState {
@@ -238,6 +239,7 @@ impl WprsClientState {
             title_prefix: options.title_prefix,
             client_sync: crate::protocols::wprs::core::client_sync::ClientSync::new(),
             transport_config: transport::TransportConfig::default(),
+            transport_config_by_surface: std::collections::HashMap::new(),
         })
     }
 }

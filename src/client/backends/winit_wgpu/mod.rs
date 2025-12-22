@@ -557,6 +557,7 @@ struct App {
     decoded_frame_rx: std::sync::mpsc::Receiver<DecodedFrame>,
     client_sync: crate::protocols::wprs::core::client_sync::ClientSync,
     transport_config: transport::TransportConfig,
+    transport_config_by_surface: HashMap<WlSurfaceId, transport::TransportConfig>,
     windows: HashMap<WlSurfaceId, WindowRenderer>,
     surface_by_window: HashMap<WindowId, WlSurfaceId>,
     outputs_sent: bool,
@@ -1367,6 +1368,20 @@ impl App {
                 self.transport_config = cfg;
                 Ok(())
             },
+            RecvType::Object(Request::Transport(transport::TransportRequest::ConfigScoped {
+                scope,
+                config,
+            })) => {
+                match scope {
+                    transport::TransportScope::Global => {
+                        self.transport_config = config;
+                    }
+                    transport::TransportScope::Surface(surface) => {
+                        self.transport_config_by_surface.insert(surface, config);
+                    }
+                }
+                Ok(())
+            }
             RecvType::Object(Request::Transport(transport::TransportRequest::Pong(_))) => Ok(()),
             RecvType::Object(Request::CursorImage(cursor)) => {
                 self.handle_cursor_image(event_loop, cursor);
@@ -2204,15 +2219,16 @@ pub fn run(
         queue: Arc::new(queue),
     };
 
-    let app = App {
+        let app = App {
         shared,
         serializer,
         decode_tx,
         server_rx,
         decoded_frame_rx,
-        client_sync: crate::protocols::wprs::core::client_sync::ClientSync::new(),
-        transport_config: transport::TransportConfig::default(),
-        windows: HashMap::new(),
+            client_sync: crate::protocols::wprs::core::client_sync::ClientSync::new(),
+            transport_config: transport::TransportConfig::default(),
+            transport_config_by_surface: HashMap::new(),
+            windows: HashMap::new(),
         surface_by_window: HashMap::new(),
         outputs_sent: false,
 

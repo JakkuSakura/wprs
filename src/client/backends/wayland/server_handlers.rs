@@ -614,6 +614,25 @@ impl WprsClientState {
                 self.transport_config = cfg;
                 Ok(())
             },
+            transport::TransportRequest::ConfigScoped { scope, config } => {
+                match scope {
+                    transport::TransportScope::Global => {
+                        info!(
+                            "server transport config (global): codec={:?} max_fps={:?}",
+                            config.codec, config.max_fps
+                        );
+                        self.transport_config = config;
+                    }
+                    transport::TransportScope::Surface(surface) => {
+                        debug!(
+                            "server transport config (surface={surface:?}): codec={:?} max_fps={:?}",
+                            config.codec, config.max_fps
+                        );
+                        self.transport_config_by_surface.insert(surface, config);
+                    }
+                }
+                Ok(())
+            }
             transport::TransportRequest::Pong(_) => Ok(()),
         }
     }

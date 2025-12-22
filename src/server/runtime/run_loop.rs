@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::time::Duration;
+use std::time::Instant;
 
 use anyhow::ensure;
 use calloop::EventLoop as CalloopEventLoop;
@@ -47,12 +48,20 @@ struct State<B> {
     serializer: Serializer<Request, Event>,
     compressor: ShardingCompressor,
     transport_config: transport::TransportConfig,
+    surface_transport_config: HashMap<WlSurfaceId, transport::TransportConfig>,
+    client_hello: Option<transport::ClientHello>,
+    client_stats: Option<transport::TransportStats>,
+    observed_tx_kbps: u32,
+    observed_tx_kbps_by_surface: HashMap<WlSurfaceId, u32>,
+    sent_bytes_since_update: u64,
+    sent_bytes_by_surface_since_update: HashMap<WlSurfaceId, u64>,
+    last_stats_update: Instant,
     tick_fps: u32,
     #[cfg(feature = "video-h264")]
     h264: HashMap<WlSurfaceId, H264EncodeState>,
 }
 
-fn select_transport_config(hello: &transport::ClientHello) -> transport::TransportConfig {
+fn select_base_codec(hello: &transport::ClientHello) -> transport::TransportCodec {
     let mut codec = transport::TransportCodec::ShardedZstd { level: 1 };
     if let Some(found) = hello
         .supported_codecs
@@ -72,8 +81,18 @@ fn select_transport_config(hello: &transport::ClientHello) -> transport::Transpo
         codec = transport::TransportCodec::ShardedRaw;
     }
 
+    codec
+}
+
+fn select_global_transport_config(
+    hello: &transport::ClientHello,
+    observed_tx_kbps: Option<u32>,
+) -> transport::TransportConfig {
+    let mut codec = select_base_codec(hello);
+
     // NOTE: H.264 support is compiled in by default, but it is intentionally
-    // not selected as the default negotiated codec.
+    // not selected as the default negotiated codec unless the client indicates
+    // bandwidth pressure.
     #[cfg(feature = "video-h264")]
     {
         let supports_h264 = hello
@@ -84,12 +103,15 @@ fn select_transport_config(hello: &transport::ClientHello) -> transport::Transpo
             .bandwidth_weight
             .saturating_sub(hello.preferences.clarity_weight)
             >= 30;
+        let observed_bandwidth_pressure = observed_tx_kbps
+            .map(|tx| tx > hello.preferences.target_bitrate_kbps.unwrap_or(12_000) * 12 / 10)
+            .unwrap_or(false);
         let low_target_bitrate = hello
             .preferences
             .target_bitrate_kbps
             .map_or(false, |kbps| kbps < 8_000);
 
-        if supports_h264 && (prefers_bandwidth || low_target_bitrate) {
+        if supports_h264 && (prefers_bandwidth || observed_bandwidth_pressure || low_target_bitrate) {
             codec = transport::TransportCodec::H264;
         }
     }
@@ -120,6 +142,124 @@ fn select_transport_config(hello: &transport::ClientHello) -> transport::Transpo
             ..Default::default()
         },
         max_fps: None,
+    }
+}
+
+fn select_surface_transport_config(
+    global: &transport::TransportConfig,
+    hello: Option<&transport::ClientHello>,
+    observed_tx_kbps: Option<u32>,
+    surface: WlSurfaceId,
+    metadata: &BufferMetadata,
+) -> transport::TransportConfig {
+    let mut cfg = global.clone();
+    let Some(hello) = hello else {
+        return cfg;
+    };
+
+    let surface_px = (metadata.width.max(1) as u64) * (metadata.height.max(1) as u64);
+    let large_surface = surface_px >= 1280 * 720;
+
+    #[cfg(feature = "video-h264")]
+    {
+        let supports_h264 = hello
+            .supported_codecs
+            .contains(&transport::TransportCodec::H264);
+        let prefers_bandwidth = hello
+            .preferences
+            .bandwidth_weight
+            .saturating_sub(hello.preferences.clarity_weight)
+            >= 20;
+        let low_target_bitrate = hello
+            .preferences
+            .target_bitrate_kbps
+            .map_or(false, |kbps| kbps < 10_000);
+        let observed_bandwidth_pressure = observed_tx_kbps
+            .map(|tx| tx > hello.preferences.target_bitrate_kbps.unwrap_or(12_000) * 12 / 10)
+            .unwrap_or(false);
+        let decode_is_plausible = hello.gpu.has_hw_video_decode
+            || hello
+                .gpu
+                .hw_decode_codecs
+                .iter()
+                .any(|c| c.eq_ignore_ascii_case("h264"))
+            || hello.cpu.avx2
+            || hello.cpu.neon;
+
+        if supports_h264
+            && decode_is_plausible
+            && large_surface
+            && (prefers_bandwidth || low_target_bitrate || observed_bandwidth_pressure)
+        {
+            cfg.codec = transport::TransportCodec::H264;
+            return cfg;
+        }
+
+        // If we previously selected H.264 globally but this surface is small, prefer sharded.
+        if cfg.codec == transport::TransportCodec::H264 && !large_surface {
+            cfg.codec = select_base_codec(hello);
+        }
+    }
+
+    // For small surfaces, allow clarity-first image codecs.
+    let prefers_clarity = hello
+        .preferences
+        .clarity_weight
+        .saturating_sub(hello.preferences.bandwidth_weight)
+        >= 30;
+    if prefers_clarity && cfg.codec != transport::TransportCodec::H264 {
+        if hello.supported_codecs.contains(&transport::TransportCodec::Png)
+            && hello.preferences.bandwidth_weight < 50
+        {
+            cfg.codec = transport::TransportCodec::Png;
+        } else if hello.supported_codecs.contains(&transport::TransportCodec::Jpeg) {
+            cfg.codec = transport::TransportCodec::Jpeg;
+        }
+    }
+
+    let _ = surface;
+    cfg
+}
+
+fn record_sent_bytes<B: PollingBackend>(state: &mut State<B>, surface: WlSurfaceId, bytes: usize) {
+    state.sent_bytes_since_update = state.sent_bytes_since_update.saturating_add(bytes as u64);
+    let entry = state
+        .sent_bytes_by_surface_since_update
+        .entry(surface)
+        .or_insert(0);
+    *entry = entry.saturating_add(bytes as u64);
+}
+
+fn maybe_update_observed_bandwidth<B: PollingBackend>(state: &mut State<B>) {
+    let elapsed = state.last_stats_update.elapsed();
+    if elapsed < Duration::from_secs(1) {
+        return;
+    }
+
+    let secs = elapsed.as_secs_f64().max(0.001);
+    state.observed_tx_kbps = ((state.sent_bytes_since_update as f64) * 8.0 / 1000.0 / secs) as u32;
+    state.sent_bytes_since_update = 0;
+    state.last_stats_update = Instant::now();
+
+    let mut new_by_surface = HashMap::new();
+    for (surface, bytes) in std::mem::take(&mut state.sent_bytes_by_surface_since_update) {
+        let kbps = ((bytes as f64) * 8.0 / 1000.0 / secs) as u32;
+        new_by_surface.insert(surface, kbps);
+    }
+    state.observed_tx_kbps_by_surface = new_by_surface;
+
+    if let Some(hello) = state.client_hello.as_ref() {
+        let config = select_global_transport_config(hello, Some(state.observed_tx_kbps));
+        if state.transport_config != config {
+            state.transport_config = config.clone();
+            state.surface_transport_config.clear();
+            state
+                .serializer
+                .writer()
+                .send(SendType::Object(Request::Transport(
+                    transport::TransportRequest::Config(config),
+                )));
+        }
     }
 }
 
@@ -296,9 +436,38 @@ fn apply_observation<B: PollingBackend>(
             let state_to_send = surface_state_for_descriptor(&surface, buffer);
 
             if let Some(frame) = frame {
+                let observed_surface_tx = state.observed_tx_kbps_by_surface.get(&surface.id).copied();
+                let desired = select_surface_transport_config(
+                    &state.transport_config,
+                    state.client_hello.as_ref(),
+                    observed_surface_tx,
+                    surface.id,
+                    &frame.metadata,
+                );
+                let prior = state.surface_transport_config.get(&surface.id);
+                if prior != Some(&desired) {
+                    state.surface_transport_config.insert(surface.id, desired.clone());
+
+                    // Best-effort: inform the client of the per-surface policy.
+                    state
+                        .serializer
+                        .writer()
+                        .send(SendType::Object(Request::Transport(
+                            transport::TransportRequest::ConfigScoped {
+                                scope: transport::TransportScope::Surface(surface.id),
+                                config: desired.clone(),
+                            },
+                        )));
+
+                    #[cfg(feature = "video-h264")]
+                    if desired.codec != transport::TransportCodec::H264 {
+                        state.h264.remove(&surface.id);
+                    }
+                }
+
                 let (kind, shards) = encode_bgra_frame(
                     surface.id,
-                    &state.transport_config,
+                    &desired,
                     &mut state.compressor,
                     #[cfg(feature = "video-h264")]
                     &mut state.h264,
@@ -307,6 +476,8 @@ fn apply_observation<B: PollingBackend>(
                     &frame.bgra,
                 )
                 .location(loc!())?;
+                record_sent_bytes(state, surface.id, shards.size());
+                maybe_update_observed_bandwidth(state);
                 state
                     .serializer
                     .writer()
@@ -327,6 +498,7 @@ fn apply_observation<B: PollingBackend>(
             {
                 state.h264.remove(&surface);
             }
+            state.surface_transport_config.remove(&surface);
             state
                 .serializer
                 .writer()
@@ -362,6 +534,14 @@ pub fn run<B: PollingBackend>(
         serializer,
         compressor: ShardingCompressor::new(NonZeroUsize::new(16).unwrap(), 1).location(loc!())?,
         transport_config: transport::TransportConfig::default(),
+        surface_transport_config: HashMap::new(),
+        client_hello: None,
+        client_stats: None,
+        observed_tx_kbps: 0,
+        observed_tx_kbps_by_surface: HashMap::new(),
+        sent_bytes_since_update: 0,
+        sent_bytes_by_surface_since_update: HashMap::new(),
+        last_stats_update: Instant::now(),
         tick_fps,
         #[cfg(feature = "video-h264")]
         h264: HashMap::new(),
@@ -385,8 +565,12 @@ pub fn run<B: PollingBackend>(
                     RecvType::Object(Event::Transport(transport::TransportEvent::ClientHello(
                         hello,
                     ))) => {
-                        let config = select_transport_config(&hello);
-                        state.transport_config = config.clone();
+                        state.client_hello = Some(hello.clone());
+                        let config = select_global_transport_config(&hello, Some(state.observed_tx_kbps));
+                        if state.transport_config != config {
+                            state.transport_config = config.clone();
+                            state.surface_transport_config.clear();
+                        }
                         state
                             .serializer
                             .writer()
@@ -394,7 +578,24 @@ pub fn run<B: PollingBackend>(
                                 transport::TransportRequest::Config(config),
                             )));
                     },
-                    RecvType::Object(Event::Transport(transport::TransportEvent::Stats(_))) => {},
+                    RecvType::Object(Event::Transport(transport::TransportEvent::Stats(stats))) => {
+                        // Client-reported stats are best-effort. The server still uses its own
+                        // observed tx-kbps for transport policy.
+                        state.client_stats = Some(stats);
+                        if let Some(hello) = state.client_hello.as_ref() {
+                            let config = select_global_transport_config(hello, Some(state.observed_tx_kbps));
+                            if state.transport_config != config {
+                                state.transport_config = config.clone();
+                                state.surface_transport_config.clear();
+                                state
+                                    .serializer
+                                    .writer()
+                                    .send(SendType::Object(Request::Transport(
+                                        transport::TransportRequest::Config(config),
+                                    )));
+                            }
+                        }
+                    }
                     RecvType::Object(Event::Transport(transport::TransportEvent::Ping(_))) => {},
                     RecvType::Object(other) => {
                         state
