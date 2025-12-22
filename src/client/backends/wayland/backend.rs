@@ -9,7 +9,6 @@ use crate::client::backend::ClientBackend;
 use crate::client::backend::ClientBackendConfig;
 use crate::client::backends::wayland::ClientOptions;
 use crate::client::backends::wayland::WprsClientState;
-use crate::control_server;
 use crate::prelude::*;
 use crate::protocols::wprs as proto;
 use crate::protocols::wprs::Serializer;
@@ -82,20 +81,6 @@ fn run_wayland(
         state.wp_viewporter.is_some(),
         state.wp_pointer_gestures.is_some()
     );
-
-    {
-        let capabilities = state.capabilities.clone();
-        control_server::start(config.control_socket, move |input: &str| {
-            Ok(match input {
-                "caps" => serde_json::to_string(&capabilities.get())
-                    .expect("a map with non-string keys was added to Capabilities"),
-                _ => {
-                    bail!("Unknown command: {input:?}")
-                },
-            })
-        })
-        .location(loc!())?;
-    }
 
     let mut event_loop = EventLoop::try_new()?;
     event_loop

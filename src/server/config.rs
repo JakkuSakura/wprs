@@ -8,6 +8,7 @@ use tracing::Level;
 use crate::config;
 use crate::config::SerializableLevel;
 use crate::prelude::*;
+use crate::protocols::wctl;
 use crate::protocols::wprs::Endpoint;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -84,6 +85,8 @@ impl std::str::FromStr for WprsdBackend {
 pub struct WprsdConfig {
     pub socket: PathBuf,
     pub control_socket: PathBuf,
+    #[serde(default)]
+    pub control_endpoint: Option<wctl::Endpoint>,
     pub endpoint: Option<Endpoint>,
     pub backend: Option<WprsdBackend>,
     pub framerate: u32,
@@ -167,9 +170,10 @@ fn default_rdp_bridge_path() -> String {
 
 impl Default for WprsdConfig {
     fn default() -> Self {
-        Self {
+        let mut cfg = Self {
             socket: config::default_socket_path(),
             control_socket: config::default_control_socket_path("wprsd"),
+            control_endpoint: None,
             endpoint: None,
             backend: None,
             framerate: 60,
@@ -185,7 +189,18 @@ impl Default for WprsdConfig {
             rdp_bridge_path: default_rdp_bridge_path(),
             rdp_bridge_args: Vec::new(),
             display_dpi: None,
+        };
+
+        if !cfg!(unix) {
+            cfg.endpoint = Some(Endpoint::Tcp {
+                addr: std::net::SocketAddr::from(([127, 0, 0, 1], 48199)),
+            });
+            cfg.control_endpoint = Some(wctl::Endpoint::Tcp {
+                addr: std::net::SocketAddr::from(([127, 0, 0, 1], 48200)),
+            });
         }
+
+        cfg
     }
 }
 
@@ -206,6 +221,9 @@ pub struct WprsdArgs {
 
     #[arg(long, value_name = "PATH")]
     pub control_socket: Option<PathBuf>,
+
+    #[arg(long, value_name = "ENDPOINT")]
+    pub control_endpoint: Option<wctl::Endpoint>,
 
     #[arg(long, value_name = "ENDPOINT")]
     pub endpoint: Option<Endpoint>,
@@ -284,6 +302,9 @@ impl WprsdArgs {
         }
         if let Some(v) = self.control_socket {
             cfg.control_socket = v;
+        }
+        if let Some(v) = self.control_endpoint {
+            cfg.control_endpoint = Some(v);
         }
         if let Some(v) = self.endpoint {
             cfg.endpoint = Some(v);

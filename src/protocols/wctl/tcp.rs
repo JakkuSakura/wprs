@@ -1,21 +1,27 @@
-use std::os::unix::net::UnixListener;
-use std::os::unix::net::UnixStream;
-use std::path::Path;
+use std::net::SocketAddr;
+use std::net::TcpListener;
+use std::net::TcpStream;
 use std::sync::Arc;
+
+use anyhow::ensure;
 
 use crate::prelude::*;
 use crate::protocols::wctl::Request;
 use crate::protocols::wctl::codec;
 use crate::protocols::wctl::server::Handler;
-use crate::utils;
 
-pub fn serve(socket: &Path, handler: Arc<dyn Handler>) -> Result<()> {
-    let listener: UnixListener = utils::bind_user_socket(socket).location(loc!())?;
+pub fn serve(addr: SocketAddr, handler: Arc<dyn Handler>) -> Result<()> {
+    ensure!(
+        addr.ip().is_loopback(),
+        "wctl tcp endpoint must use a loopback address: {addr}"
+    );
+
+    let listener = TcpListener::bind(addr).location(loc!())?;
     for conn in listener.incoming() {
         let stream = match conn {
             Ok(s) => s,
             Err(err) => {
-                warn!("wctl: accept failed: {err}");
+                warn!("wctl(tcp): accept failed: {err}");
                 continue;
             },
         };
@@ -28,12 +34,12 @@ pub fn serve(socket: &Path, handler: Arc<dyn Handler>) -> Result<()> {
     Ok(())
 }
 
-fn handle_connection(mut stream: UnixStream, handler: Arc<dyn Handler>) -> Result<()> {
+fn handle_connection(mut stream: TcpStream, handler: Arc<dyn Handler>) -> Result<()> {
     loop {
         let req = match codec::recv::<Request>(&mut stream) {
             Ok(req) => req,
             Err(err) => {
-                debug!("wctl: recv failed: {err}");
+                debug!("wctl(tcp): recv failed: {err}");
                 return Ok(());
             },
         };

@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use crate::client::ClientBackendConfig;
 use crate::client::build_client_backend;
+use crate::client::config::ClientBackend;
 use crate::client::config::WprscConfig;
 use crate::client::config::WprscRole;
 use crate::prelude::*;
@@ -15,6 +16,64 @@ pub fn run_wprsc(config: WprscConfig) -> Result<()> {
         WprscRole::Viewer => run_viewer(config).location(loc!()),
         WprscRole::WaylandServer => crate::client::wayland_server::run(config).location(loc!()),
     }
+}
+
+pub fn run_viewer_for_endpoint(
+    endpoint: proto::Endpoint,
+    present_backend: ClientBackend,
+    backend_config: ClientBackendConfig,
+) -> Result<()> {
+    let serializer_options = proto::SerializerClientOptions {
+        auto_reconnect: false,
+        on_connect: vec![proto::SendType::Object(proto::Event::WprsClientConnect)],
+    };
+
+    let serializer: Serializer<proto::Event, proto::Request> =
+        Serializer::new_client_endpoint_with_options(endpoint, serializer_options)
+            .location(loc!())?;
+
+    let backend = build_client_backend(present_backend, backend_config).location(loc!())?;
+
+    info!("viewer using backend: {}", backend.name());
+
+    // Send a best-effort transport hello so the server can tune compression.
+    {
+        let supports_buffer_patches = backend.name() == "winit-wgpu";
+        let cpu = transport::CpuFeatures {
+            #[cfg(all(target_arch = "x86_64"))]
+            avx2: std::arch::is_x86_feature_detected!("avx2"),
+            #[cfg(not(target_arch = "x86_64"))]
+            avx2: false,
+            #[cfg(all(target_arch = "aarch64"))]
+            neon: std::arch::is_aarch64_feature_detected!("neon"),
+            #[cfg(not(target_arch = "aarch64"))]
+            neon: false,
+        };
+        let supported_codecs = {
+            let mut codecs = vec![
+                transport::TransportCodec::ShardedZstd { level: 1 },
+                transport::TransportCodec::ShardedLz4,
+                transport::TransportCodec::ShardedRaw,
+            ];
+            #[cfg(feature = "video-h264")]
+            codecs.insert(0, transport::TransportCodec::H264);
+            codecs
+        };
+        let hello = transport::ClientHello {
+            supported_codecs,
+            supports_buffer_patches,
+            cpu,
+            gpu: transport::GpuFeatures::default(),
+            preferences: transport::TransportPreferences::default(),
+        };
+        serializer
+            .writer()
+            .send(proto::SendType::Object(proto::Event::Transport(
+                transport::TransportEvent::ClientHello(hello),
+            )));
+    }
+
+    backend.run(serializer).location(loc!())
 }
 
 fn run_viewer(config: WprscConfig) -> Result<()> {

@@ -1,5 +1,6 @@
 pub mod backends;
 pub mod config;
+pub mod daemon;
 pub mod runtime;
 
 #[cfg(feature = "wayland")]

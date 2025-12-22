@@ -33,7 +33,14 @@ pub struct ServerInfo {
     pub xwayland_display: Option<u32>,
 }
 
+pub mod client;
 pub mod codec;
+pub mod endpoint;
+pub mod server;
+
+pub use endpoint::Endpoint;
 
 #[cfg(unix)]
 pub mod unix;
+
+pub mod tcp;
