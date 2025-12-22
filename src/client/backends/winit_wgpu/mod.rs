@@ -1588,12 +1588,6 @@ impl App {
                 if let Some(BufferAssignment::New(buf)) = state.buffer.take() {
                     let filtered = match buf.data {
                         BufferData::Uncompressed(data) => data.0,
-                        BufferData::Compressed(_) => {
-                            warn!(
-                                "Received buffer commit with inline Compressed data; skipping frame for {surface_id:?}"
-                            );
-                            return Ok(());
-                        },
                         BufferData::External => {
                             if self.surfaces_with_frame.contains(&surface_id) {
                                 warn!(

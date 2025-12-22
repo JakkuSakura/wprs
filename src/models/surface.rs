@@ -9,7 +9,6 @@ use crate::protocols::wprs::geometry::Rectangle;
 use crate::protocols::wprs::geometry::Size;
 use crate::protocols::wprs::tuple::Tuple2;
 use crate::protocols::wprs::xdg_shell;
-use crate::utils::sharding_compression::CompressedShards;
 use crate::utils::vec4u8::Vec4u8s;
 
 /// Stable surface identifier.
@@ -65,22 +64,10 @@ impl std::fmt::Debug for UncompressedBufferData {
     }
 }
 
-#[derive(Clone, Eq, PartialEq, Archive, Deserialize, Serialize)]
-pub struct CompressedBufferData(pub CompressedShards);
-
-impl std::fmt::Debug for CompressedBufferData {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("CompressedBufferData")
-            .field(&format_args!("CompressedShards[{}]", self.0.uncompressed_size()))
-            .finish()
-    }
-}
-
 #[derive(Debug, Clone, Eq, PartialEq, EnumAsInner, Archive, Deserialize, Serialize)]
 pub enum BufferData {
     External,
     Uncompressed(UncompressedBufferData),
-    Compressed(CompressedBufferData),
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Archive, Deserialize, Serialize)]

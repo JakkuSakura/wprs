@@ -16,7 +16,7 @@ use crate::utils::filtering;
 /// association logic out of presentation backends.
 #[derive(Default)]
 pub struct ClientSync {
-    buffer_cache: std::collections::HashMap<crate::models::surface::WlSurfaceId, UncompressedBufferData>,
+    buffer_cache: std::collections::HashMap<crate::protocols::wprs::wayland::WlSurfaceId, UncompressedBufferData>,
     legacy_last_buffer: Option<UncompressedBufferData>,
     #[cfg(feature = "video-h264")]
     h264_decoder: Option<crate::protocols::video::h264::H264Decoder>,

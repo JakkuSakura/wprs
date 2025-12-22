@@ -15,45 +15,19 @@
 use crate::prelude::*;
 use crate::protocols::wprs::Capabilities;
 use crate::protocols::wprs::DisplayConfig;
-use crate::protocols::wprs::RawBufferKind;
-use crate::protocols::wprs::RawBufferPayload;
 use crate::protocols::wprs::Request;
 use crate::protocols::wprs::SendType;
-use crate::protocols::wprs::wayland::Buffer;
-use crate::protocols::wprs::wayland::BufferAssignment;
-use crate::protocols::wprs::wayland::BufferData;
-use crate::protocols::wprs::wayland::CompressedBufferData;
 use crate::protocols::wprs::wayland::SurfaceState;
 
-fn externalize_compressed_buffer(state: &mut SurfaceState) -> Option<SendType<Request>> {
-    let Some(BufferAssignment::New(Buffer { data, .. })) = state.buffer.as_mut() else {
-        return None;
-    };
-
-    let BufferData::Compressed(CompressedBufferData(shards)) = data else {
-        return None;
-    };
-
-    let shards = std::mem::take(shards);
-    *data = BufferData::External;
-    Some(SendType::RawBuffer(RawBufferPayload {
-        surface: state.id,
-        kind: RawBufferKind::FilteredBgra,
-        shards,
-    }))
-}
-
+/// Builds messages to represent a surface snapshot.
+///
+/// Note: buffer payloads are intentionally not produced here. Frame data is
+/// transported via `RawBuffer` messages and associated to surfaces by the
+/// transport layer.
 pub fn surface_messages(state: SurfaceState) -> Result<Vec<SendType<Request>>> {
-    let mut out = Vec::new();
-    let mut state = state;
-
-    if let Some(raw) = externalize_compressed_buffer(&mut state) {
-        out.push(raw);
-    }
-    out.push(SendType::Object(Request::Surface(
+    Ok(vec![SendType::Object(Request::Surface(
         super::surface_request_from_state(state),
-    )));
-    Ok(out)
+    ))])
 }
 
 pub fn initial_messages(
@@ -65,11 +39,7 @@ pub fn initial_messages(
     out.push(SendType::Object(Request::Capabilities(capabilities)));
     out.push(SendType::Object(Request::DisplayConfig(display_config)));
 
-    for mut surface in surfaces {
-        if let Some(raw) = externalize_compressed_buffer(&mut surface) {
-            out.push(raw);
-        }
-
+    for surface in surfaces {
         out.extend(surface_messages(surface).location(loc!())?);
     }
     Ok(out)
@@ -78,31 +48,15 @@ pub fn initial_messages(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::num::NonZeroUsize;
 
     use crate::protocols::wprs::ClientId;
-    use crate::protocols::wprs::wayland::BufferFormat;
-    use crate::protocols::wprs::wayland::BufferMetadata;
-    use crate::protocols::wprs::wayland::SurfaceRequestPayload;
-    use crate::protocols::wprs::wayland::UncompressedBufferData;
     use crate::protocols::wprs::wayland::WlSurfaceId;
-    use crate::utils::arc_slice::ArcSlice;
-    use crate::utils::sharding_compression::CompressedShards;
-    use crate::utils::sharding_compression::ShardingCompressor;
 
-    fn make_compressed_shards(payload: &[u8]) -> Arc<CompressedShards> {
-        let mut compressor = ShardingCompressor::new(NonZeroUsize::new(1).unwrap(), 1).unwrap();
-        Arc::new(compressor.compress(
-            NonZeroUsize::new(1).unwrap(),
-            ArcSlice::new(payload.to_vec()),
-        ))
-    }
-
-    fn dummy_surface_state(buffer: Option<BufferAssignment>) -> SurfaceState {
+    fn dummy_surface_state(id: u64) -> SurfaceState {
         SurfaceState {
             client: ClientId(1),
-            id: WlSurfaceId(2),
-            buffer,
+            id: WlSurfaceId(id),
+            buffer: None,
             buffer_update: None,
             role: None,
             buffer_scale: 1,
@@ -117,139 +71,20 @@ mod tests {
         }
     }
 
-    fn dummy_metadata() -> BufferMetadata {
-        BufferMetadata {
-            width: 1,
-            height: 1,
-            stride: 4,
-            format: BufferFormat::Argb8888,
-        }
-    }
-
-    fn assert_surface_commit_has_external_buffer(msg: &SendType<Request>) {
-        let SendType::Object(Request::Surface(req)) = msg else {
-            panic!("expected surface request");
-        };
-
-        let SurfaceRequestPayload::Commit(st) = &req.payload else {
-            panic!("expected commit");
-        };
-
-        let Some(BufferAssignment::New(buf)) = &st.buffer else {
-            panic!("expected a buffer assignment");
-        };
-
-        assert!(matches!(buf.data, BufferData::External));
-    }
-
     #[test]
-    fn initial_messages_externalize_compressed_buffers() {
-        let compressed = make_compressed_shards(&[1, 2, 3, 4]);
-
-        let surface = dummy_surface_state(Some(BufferAssignment::New(Buffer {
-            metadata: dummy_metadata(),
-            data: BufferData::Compressed(CompressedBufferData(compressed)),
-        })));
-
-        let msgs = initial_messages(
-            Capabilities { xwayland: false },
-            DisplayConfig::default(),
-            [surface],
-        )
-        .unwrap();
-        assert!(matches!(
-            msgs[0],
-            SendType::Object(Request::Capabilities(_))
-        ));
-        assert!(matches!(
-            msgs[1],
-            SendType::Object(Request::DisplayConfig(_))
-        ));
-        assert!(matches!(msgs[2], SendType::RawBuffer(_)));
-        assert_surface_commit_has_external_buffer(&msgs[3]);
-    }
-
-    #[test]
-    fn surface_messages_externalize_compressed_buffers() {
-        let compressed = make_compressed_shards(&[1, 2, 3, 4]);
-
-        let surface = dummy_surface_state(Some(BufferAssignment::New(Buffer {
-            metadata: dummy_metadata(),
-            data: BufferData::Compressed(CompressedBufferData(compressed)),
-        })));
-
+    fn surface_messages_send_only_surface_commit() {
+        let surface = dummy_surface_state(2);
         let msgs = surface_messages(surface).unwrap();
-        assert!(matches!(msgs[0], SendType::RawBuffer(_)));
-        assert_surface_commit_has_external_buffer(&msgs[1]);
-    }
-
-    #[test]
-    fn initial_messages_without_buffer_sends_only_surface_commit() {
-        let surface = dummy_surface_state(None);
-        let msgs = initial_messages(
-            Capabilities { xwayland: false },
-            DisplayConfig::default(),
-            [surface],
-        )
-        .unwrap();
-
         assert!(matches!(
             msgs.as_slice(),
-            [_, _, SendType::Object(Request::Surface(_))]
+            [SendType::Object(Request::Surface(_))]
         ));
     }
 
     #[test]
-    fn initial_messages_with_removed_buffer_sends_only_surface_commit() {
-        let surface = dummy_surface_state(Some(BufferAssignment::Removed));
-        let msgs = initial_messages(
-            Capabilities { xwayland: false },
-            DisplayConfig::default(),
-            [surface],
-        )
-        .unwrap();
-
-        assert!(matches!(
-            msgs.as_slice(),
-            [_, _, SendType::Object(Request::Surface(_))]
-        ));
-    }
-
-    #[test]
-    fn initial_messages_with_external_buffer_does_not_send_raw_buffer() {
-        let surface = dummy_surface_state(Some(BufferAssignment::New(Buffer {
-            metadata: dummy_metadata(),
-            data: BufferData::External,
-        })));
-
-        let msgs = initial_messages(
-            Capabilities { xwayland: false },
-            DisplayConfig::default(),
-            [surface],
-        )
-        .unwrap();
-        assert!(matches!(
-            msgs.as_slice(),
-            [_, _, SendType::Object(Request::Surface(_))]
-        ));
-    }
-
-    #[test]
-    fn initial_messages_multiple_surfaces_preserve_per_surface_order() {
-        let compressed1 = make_compressed_shards(&[1, 2, 3, 4]);
-        let compressed2 = make_compressed_shards(&[5, 6, 7, 8]);
-
-        let mut s1 = dummy_surface_state(Some(BufferAssignment::New(Buffer {
-            metadata: dummy_metadata(),
-            data: BufferData::Compressed(CompressedBufferData(compressed1)),
-        })));
-        s1.id = WlSurfaceId(10);
-
-        let mut s2 = dummy_surface_state(Some(BufferAssignment::New(Buffer {
-            metadata: dummy_metadata(),
-            data: BufferData::Compressed(CompressedBufferData(compressed2)),
-        })));
-        s2.id = WlSurfaceId(20);
+    fn initial_messages_include_caps_display_and_commits() {
+        let s1 = dummy_surface_state(10);
+        let s2 = dummy_surface_state(20);
 
         let msgs = initial_messages(
             Capabilities { xwayland: false },
@@ -258,38 +93,10 @@ mod tests {
         )
         .unwrap();
 
-        assert!(matches!(
-            msgs[0],
-            SendType::Object(Request::Capabilities(_))
-        ));
-        assert!(matches!(
-            msgs[1],
-            SendType::Object(Request::DisplayConfig(_))
-        ));
-        assert!(matches!(msgs[2], SendType::RawBuffer(_)));
-        assert_surface_commit_has_external_buffer(&msgs[3]);
-        assert!(matches!(msgs[4], SendType::RawBuffer(_)));
-        assert_surface_commit_has_external_buffer(&msgs[5]);
-    }
-
-    #[test]
-    fn initial_messages_keep_uncompressed_buffers_inline() {
-        let surface = dummy_surface_state(Some(BufferAssignment::New(Buffer {
-            metadata: dummy_metadata(),
-            data: BufferData::Uncompressed(UncompressedBufferData(
-                crate::utils::vec4u8::Vec4u8s::with_total_size(4),
-            )),
-        })));
-
-        let msgs = initial_messages(
-            Capabilities { xwayland: false },
-            DisplayConfig::default(),
-            [surface],
-        )
-        .unwrap();
-        assert!(matches!(
-            msgs.as_slice(),
-            [_, _, SendType::Object(Request::Surface(_))]
-        ));
+        assert!(matches!(msgs[0], SendType::Object(Request::Capabilities(_))));
+        assert!(matches!(msgs[1], SendType::Object(Request::DisplayConfig(_))));
+        assert!(matches!(msgs[2], SendType::Object(Request::Surface(_))));
+        assert!(matches!(msgs[3], SendType::Object(Request::Surface(_))));
     }
 }
+

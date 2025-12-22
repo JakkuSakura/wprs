@@ -81,16 +81,8 @@ use super::geometry::Point;
 use super::geometry::Size;
 use super::tuple::Tuple2;
 use super::xdg_shell;
-#[cfg(feature = "wayland")]
-use crate::utils::buffer_pointer::BufferPointer;
 use crate::config;
-#[cfg(feature = "wayland")]
-use crate::utils::filtering;
 use crate::prelude::*;
-#[cfg(feature = "wayland")]
-use crate::utils::sharding_compression::CompressedShards;
-#[cfg(feature = "wayland")]
-use crate::utils::sharding_compression::ShardingCompressor;
 
 pub use crate::models::surface::Buffer;
 pub use crate::models::surface::BufferAssignment;
@@ -99,7 +91,6 @@ pub use crate::models::surface::BufferFormat;
 pub use crate::models::surface::BufferMetadata;
 pub use crate::models::surface::BufferUpdate;
 pub use crate::models::surface::ClientSurface;
-pub use crate::models::surface::CompressedBufferData;
 pub use crate::models::surface::RectangleKind;
 pub use crate::models::surface::Region;
 pub use crate::models::surface::Role;
@@ -186,47 +177,6 @@ impl BufferMetadata {
             stride: spec.stride,
             format: spec.format.try_into().location(loc!())?,
         })
-    }
-}
-
-impl Buffer {
-    #[cfg(feature = "wayland")]
-    pub fn new(
-        metadata: &SmithayBufferData,
-        data: BufferPointer<u8>,
-        compressor: &mut ShardingCompressor,
-    ) -> Result<Self> {
-        let metadata = BufferMetadata::from_buffer_data(metadata).location(loc!())?;
-        let compressed_data = BufferData::Compressed(CompressedBufferData(
-            filtering::filter_and_compress(data, compressor),
-        ));
-        debug!(
-            "New Buffer: size {:?}, width {:?}, height {:?}, stride {:?}, data {:?} ",
-            &data.len(),
-            metadata.width,
-            metadata.height,
-            metadata.stride,
-            compressed_data,
-        );
-        Ok(Self {
-            metadata,
-            data: compressed_data,
-        })
-    }
-
-    #[allow(clippy::missing_panics_doc)]
-    #[cfg(feature = "wayland")]
-    pub fn update(
-        &mut self,
-        metadata: &SmithayBufferData,
-        data: BufferPointer<u8>,
-        compressor: &mut ShardingCompressor,
-    ) -> Result<()> {
-        self.metadata = BufferMetadata::from_buffer_data(metadata).location(loc!())?;
-        self.data = BufferData::Compressed(CompressedBufferData(
-            filtering::filter_and_compress(data, compressor),
-        ));
-        Ok(())
     }
 }
 
@@ -684,53 +634,6 @@ impl SurfaceState {
             viewport_state: None,
             xdg_surface_state: None,
         })
-    }
-
-    #[instrument(skip(data, compressor), level = "debug")]
-    #[cfg(feature = "wayland")]
-    pub fn set_buffer(
-        &mut self,
-        metadata: &SmithayBufferData,
-        data: BufferPointer<u8>,
-        compressor: &mut ShardingCompressor,
-    ) -> Result<()> {
-        match &mut self.buffer {
-            // Only buffer data was updated, we can reuse the buffer.
-            Some(BufferAssignment::New(buffer)) => {
-                buffer.update(metadata, data, compressor).location(loc!())?;
-            },
-            Some(BufferAssignment::Removed) | None => {
-                self.buffer = Some(BufferAssignment::New(
-                    Buffer::new(metadata, data, compressor).location(loc!())?,
-                ));
-            },
-        }
-        Ok(())
-    }
-
-    #[cfg(feature = "wayland")]
-    pub fn update_with_external_buffer(
-        &mut self,
-        buffer: &Option<BufferAssignment>,
-    ) -> Result<CompressedShards> {
-        self.buffer.clone_from(buffer);
-        // set_buffer (found above) sets buffer to
-        // Some(BufferAssignment::New(...)), so the 4 unwraps below should
-        // never fail.
-
-        let assignment = self
-            .buffer
-            .as_mut()
-            .location(loc!())?
-            .as_new_mut()
-            .location(loc!())?;
-
-        let data = std::mem::replace(&mut assignment.data, BufferData::External);
-        let BufferData::Compressed(CompressedBufferData(shards)) = data else {
-            bail!("expected compressed buffer data")
-        };
-
-        Ok(shards)
     }
 
     #[instrument(skip_all, level = "debug")]

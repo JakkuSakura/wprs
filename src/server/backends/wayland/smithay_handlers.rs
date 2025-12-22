@@ -109,6 +109,9 @@ use crate::protocols::wprs::SendType;
 use crate::protocols::wprs::core;
 use crate::protocols::wprs::tuple::Tuple2;
 use crate::protocols::wprs::wayland::BufferAssignment;
+use crate::protocols::wprs::wayland::Buffer;
+use crate::protocols::wprs::wayland::BufferData;
+use crate::protocols::wprs::wayland::BufferMetadata;
 use crate::protocols::wprs::wayland::ClientSurface;
 use crate::protocols::wprs::wayland::CursorImage;
 use crate::protocols::wprs::wayland::CursorImageStatus;
@@ -123,6 +126,7 @@ use crate::protocols::wprs::wayland::SubsurfacePosition;
 use crate::protocols::wprs::wayland::SurfaceState;
 use crate::protocols::wprs::wayland::Transform;
 use crate::protocols::wprs::wayland::WlSurfaceId;
+use crate::utils::filtering;
 use crate::protocols::wprs::xdg_shell::DecorationMode;
 use crate::protocols::wprs::xdg_shell::Move;
 use crate::protocols::wprs::xdg_shell::PopupRequest;
@@ -863,15 +867,24 @@ pub fn commit_impl(
     debug!("buffer assignment: {:?}", &surface_attributes.buffer);
     match &surface_attributes.buffer {
         Some(SmithayBufferAssignment::NewBuffer(buffer)) if !skip_buffer => {
+            let mut metadata: Option<BufferMetadata> = None;
+            let mut raw_buffer_to_send = None;
             compositor_utils::with_buffer_contents(buffer, |data, spec| {
-                surface_state.set_buffer(&spec, data, &mut state.compressor)
+                metadata = Some(BufferMetadata::from_buffer_data(&spec).location(loc!())?);
+                raw_buffer_to_send = Some(filtering::filter_and_compress(data, &mut state.compressor));
+                Ok(())
             })
             .location(loc!())?
             .location(loc!())?;
 
-            let raw_buffer_to_send = surface_state_to_send
-                .update_with_external_buffer(&surface_state.buffer)
-                .location(loc!())?;
+            let metadata = metadata.ok_or_else(|| anyhow!("missing buffer metadata"))?;
+            let raw_buffer_to_send =
+                raw_buffer_to_send.ok_or_else(|| anyhow!("missing raw buffer payload"))?;
+
+            surface_state_to_send.buffer = Some(BufferAssignment::New(Buffer {
+                metadata,
+                data: BufferData::External,
+            }));
 
             state
                 .serializer
