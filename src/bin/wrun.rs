@@ -15,11 +15,11 @@ struct Args {
     #[arg(long, value_name = "PATH")]
     config_file: Option<PathBuf>,
 
-    /// How to present the remote surfaces.
+    /// Which client backend to use for presenting remote surfaces.
     ///
     /// If omitted, `wrun` will print the WPRS endpoint to stdout.
     #[arg(long, value_name = "BACKEND")]
-    present_backend: Option<ClientBackend>,
+    client_backend: Option<ClientBackend>,
 
     /// Optional control-plane endpoint used to detect/target an external `wprsd`.
     ///
@@ -46,7 +46,7 @@ fn main() -> Result<()> {
     let exit_code = launcher::run(launcher::RunConfig {
         wprsd_config_file: args.config_file,
         wctl_endpoint: args.wctl_endpoint,
-        present_backend: args.present_backend,
+        client_backend: args.client_backend,
         no_wayland: args.no_wayland,
         no_x11: args.no_x11,
         cmd: args.cmd,

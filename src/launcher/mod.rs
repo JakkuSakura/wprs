@@ -24,7 +24,7 @@ const ENV_WCTL_ENDPOINT: &str = "WPRS_WCTL_ENDPOINT";
 pub struct RunConfig {
     pub wprsd_config_file: Option<PathBuf>,
     pub wctl_endpoint: Option<String>,
-    pub present_backend: Option<ClientBackend>,
+    pub client_backend: Option<ClientBackend>,
     pub no_wayland: bool,
     pub no_x11: bool,
     pub cmd: Vec<OsString>,
@@ -46,7 +46,7 @@ pub fn run(cfg: RunConfig) -> Result<i32> {
         maybe_load_wprsd_config(cfg.wprsd_config_file.clone()).location(loc!())?;
     let daemon = connect_or_start_daemon(&cfg, wprsd_config_from_file.clone()).location(loc!())?;
     let server_info = daemon.client.server_info().location(loc!())?;
-    if cfg.present_backend.is_none() {
+    if cfg.client_backend.is_none() {
         println!("{}", server_info.wprs_endpoint);
     } else {
         info!("wrun: wprs_endpoint={}", server_info.wprs_endpoint);
@@ -85,7 +85,7 @@ pub fn run(cfg: RunConfig) -> Result<i32> {
             .log_and_ignore(loc!());
     }
 
-    if let Some(present_backend) = cfg.present_backend {
+    if let Some(present_backend) = cfg.client_backend {
         let (cancel_tx, cancel_rx) = std::sync::mpsc::channel::<()>();
         let wait_endpoint = daemon.control_endpoint.clone();
 
