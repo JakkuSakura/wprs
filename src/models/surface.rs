@@ -21,7 +21,7 @@ pub struct WlSurfaceId(pub u64);
 #[derive(Archive, Deserialize, Serialize, Debug, Copy, Clone, Hash, Eq, PartialEq)]
 pub struct SubSurfaceId(pub u64);
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Archive, Deserialize, Serialize)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Archive, Deserialize, Serialize)]
 pub struct ClientSurface {
     pub client: ClientId,
     pub surface: WlSurfaceId,

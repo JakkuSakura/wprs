@@ -107,6 +107,7 @@ impl ClientSync {
                         self.buffer_cache.remove(&surface.surface);
                         #[cfg(feature = "video-h264")]
                         self.h264_decoder.remove(&surface.surface);
+                        crate::client::surface_registry::record_surface(&surface);
                         return Ok(Some(RecvType::Object(Request::Surface(surface))));
                     }
                     SurfaceRequestPayload::Commit(_) => {}
@@ -128,6 +129,7 @@ impl ClientSync {
                 }
 
                 surface.payload = SurfaceRequestPayload::Commit(state);
+                crate::client::surface_registry::record_surface(&surface);
                 Ok(Some(RecvType::Object(Request::Surface(surface))))
             }
             other => Ok(Some(other)),

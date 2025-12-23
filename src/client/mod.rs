@@ -4,6 +4,7 @@ pub mod config;
 pub mod coords;
 pub mod runner;
 pub mod wayland_server;
+pub mod surface_registry;
 
 #[cfg(feature = "wayland-client")]
 pub use backends::wayland::*;
