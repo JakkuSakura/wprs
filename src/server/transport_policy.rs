@@ -98,7 +98,10 @@ pub fn select_global_transport_config(
         .preferences
         .target_bitrate_kbps
         .map_or(false, |kbps| kbps < 8_000);
-    if profile.latency_weight >= 30
+    let avoid_raw = profile.drop_tolerance == transport::DropTolerance::Avoid
+        || profile.retransmit_policy == transport::RetransmitPolicy::Avoid;
+    if !avoid_raw
+        && profile.latency_weight >= 30
         && !bandwidth_pressure
         && !low_target_bitrate
         && hello.supported_codecs.contains(&transport::TransportCodec::ShardedRaw)
@@ -291,7 +294,14 @@ fn select_codec_for_surface(
     let mut best = select_base_codec(hello);
     let mut best_score = i32::MIN;
 
+    let has_non_h264 = candidates
+        .iter()
+        .any(|codec| *codec != transport::TransportCodec::H264);
+
     for codec in candidates {
+        if codec == transport::TransportCodec::H264 && !surface.large_surface && has_non_h264 {
+            continue;
+        }
         if !codec_allowed_by_network(network, codec) {
             continue;
         }

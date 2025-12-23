@@ -362,7 +362,9 @@ pub fn run_bridge(
                     if let calloop::channel::Event::Msg(msg) = event {
                         match msg {
                             RecvType::RawBuffer(buf) => {
-                                buffer_cache = Some(UncompressedBufferData(buf.into()));
+                                buffer_cache = Some(UncompressedBufferData::from(
+                                    crate::utils::vec4u8::Vec4u8s::from(buf.bytes),
+                                ));
                             }
                             RecvType::Object(ProtoRequest::Surface(surface)) => {
                                 if let crate::protocols::wprs::wayland::SurfaceRequestPayload::Commit(
@@ -396,7 +398,7 @@ pub fn run_bridge(
                                         }
 
                                         let filtered = match buf.data {
-                                            BufferData::Uncompressed(data) => data.0,
+                                            BufferData::Uncompressed(data) => data.as_ref(),
                                             _ => return,
                                         };
 
@@ -406,7 +408,7 @@ pub fn run_bridge(
                                         let dst_stride = width * 4;
 
                                         let mut unfiltered = vec![0u8; buf.metadata.len()];
-                                        filtering::unfilter(&filtered, &mut unfiltered);
+                                        filtering::unfilter(filtered, &mut unfiltered);
 
                                         let mut pixels = vec![0u8; dst_stride * height];
                                         for y in 0..height {

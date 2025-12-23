@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use calloop::EventLoop as CalloopEventLoop;
@@ -6,12 +8,12 @@ use calloop::timer::TimeoutAction;
 use calloop::timer::Timer;
 
 use crate::prelude::*;
+use crate::protocols::wprs::handshake;
 use crate::protocols::wprs::serializer::RecvType;
 use crate::protocols::wprs::serializer::SendType;
 use crate::protocols::wprs::serializer::Serializer;
 use crate::protocols::wprs::types::Event;
 use crate::protocols::wprs::types::Request;
-use crate::protocols::wprs::handshake;
 use crate::protocols::wprs::wayland::Buffer;
 use crate::protocols::wprs::wayland::BufferAssignment;
 use crate::protocols::wprs::wayland::BufferData;
@@ -19,16 +21,58 @@ use crate::protocols::wprs::wayland::Role;
 use crate::protocols::wprs::wayland::SurfaceRequestPayload;
 use crate::protocols::wprs::wayland::SurfaceState;
 use crate::protocols::wprs::wayland::UncompressedBufferData;
+use crate::protocols::wprs::wayland::WlSurfaceId;
 use crate::protocols::wprs::xdg_shell;
 use crate::server::backend::BackendObservation;
 use crate::server::backend::BackendSurfaceRole;
 use crate::server::backend::PollingBackend;
 use crate::utils::buffer_pointer::BufferPointer;
 use crate::utils::filtering;
+use crate::utils::vec4u8::Vec4u8s;
 
 struct State<B> {
     backend: B,
     serializer: Serializer<Request, Event>,
+    buffers: HashMap<WlSurfaceId, SurfaceBufferPool>,
+}
+
+struct SurfaceBufferPool {
+    slots: [Arc<Vec4u8s>; 3],
+    next_slot: usize,
+    size_bytes: usize,
+}
+
+impl SurfaceBufferPool {
+    fn new(size_bytes: usize) -> Self {
+        let make = || Arc::new(Vec4u8s::with_total_size(size_bytes));
+        Self {
+            slots: [make(), make(), make()],
+            next_slot: 0,
+            size_bytes,
+        }
+    }
+
+    fn write_slot<F>(&mut self, size_bytes: usize, fill: F) -> Arc<Vec4u8s>
+    where
+        F: FnOnce(&mut Vec4u8s),
+    {
+        if size_bytes != self.size_bytes {
+            *self = Self::new(size_bytes);
+        }
+
+        let idx = self.next_slot;
+        self.next_slot = (self.next_slot + 1) % self.slots.len();
+
+        let slot = &mut self.slots[idx];
+        if Arc::strong_count(slot) > 1 {
+            *slot = Arc::new(Vec4u8s::with_total_size(size_bytes));
+        }
+
+        let slot_mut = Arc::get_mut(slot).expect("buffer slot should be uniquely owned");
+        fill(slot_mut);
+
+        slot.clone()
+    }
 }
 
 fn send_initial_snapshot<B: PollingBackend>(state: &mut State<B>) -> Result<()> {
@@ -92,13 +136,22 @@ fn apply_observation<B: PollingBackend>(state: &mut State<B>, obs: BackendObserv
     match obs {
         BackendObservation::SurfaceCommit { surface, frame } => {
             let buffer = frame.as_ref().map(|frame| {
+                let size_bytes = frame.metadata.len();
                 let bgra_ptr = frame.bgra.as_ptr();
                 // SAFETY: `bgra_ptr` points to `bgra.len()` bytes for the duration of this call.
                 let data = unsafe { BufferPointer::new(&bgra_ptr, frame.bgra.len()) };
-                let filtered = filtering::filter_to_vec4u8s(data);
+                let pool = state
+                    .buffers
+                    .entry(surface.id)
+                    .or_insert_with(|| SurfaceBufferPool::new(size_bytes));
+                let slot =
+                    pool.write_slot(size_bytes, |slot_mut| {
+                        filtering::filter_to_vec4u8s_in_place(data, slot_mut);
+                    });
+
                 BufferAssignment::New(Buffer {
                     metadata: frame.metadata,
-                    data: BufferData::Uncompressed(UncompressedBufferData(filtered)),
+                    data: BufferData::Uncompressed(UncompressedBufferData::from(slot)),
                 })
             });
 
@@ -109,6 +162,7 @@ fn apply_observation<B: PollingBackend>(state: &mut State<B>, obs: BackendObserv
         }
 
         BackendObservation::SurfaceDestroyed { client, surface } => {
+            state.buffers.remove(&surface);
             state
                 .serializer
                 .writer()
@@ -138,7 +192,11 @@ pub fn run<B: PollingBackend>(
 ) -> Result<()> {
     let mut event_loop = CalloopEventLoop::<State<B>>::try_new().location(loc!())?;
 
-    let mut state = State { backend, serializer };
+    let mut state = State {
+        backend,
+        serializer,
+        buffers: HashMap::new(),
+    };
 
     let reader = state
         .serializer

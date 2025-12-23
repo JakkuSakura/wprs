@@ -2,6 +2,8 @@ use enum_as_inner::EnumAsInner;
 use rkyv::Archive;
 use rkyv::Deserialize;
 use rkyv::Serialize;
+use rkyv::rancor::Fallible;
+use std::sync::Arc;
 
 use crate::protocols::wprs::types::ClientId;
 use crate::protocols::wprs::geometry::Point;
@@ -53,14 +55,66 @@ impl BufferMetadata {
     }
 }
 
-#[derive(Clone, Eq, PartialEq, Archive, Deserialize, Serialize)]
-pub struct UncompressedBufferData(pub Vec4u8s);
+#[derive(Clone, Eq, PartialEq)]
+pub struct UncompressedBufferData(pub Arc<Vec4u8s>);
 
 impl std::fmt::Debug for UncompressedBufferData {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("UncompressedBufferData")
             .field(&format_args!("Vec4u8s[{}]", self.0.len()))
             .finish()
+    }
+}
+
+impl AsRef<Vec4u8s> for UncompressedBufferData {
+    fn as_ref(&self) -> &Vec4u8s {
+        self.0.as_ref()
+    }
+}
+
+impl From<Vec4u8s> for UncompressedBufferData {
+    fn from(value: Vec4u8s) -> Self {
+        Self(Arc::new(value))
+    }
+}
+
+impl From<Arc<Vec4u8s>> for UncompressedBufferData {
+    fn from(value: Arc<Vec4u8s>) -> Self {
+        Self(value)
+    }
+}
+
+impl Archive for UncompressedBufferData {
+    type Archived = <Vec4u8s as Archive>::Archived;
+    type Resolver = <Vec4u8s as Archive>::Resolver;
+
+    fn resolve(
+        &self,
+        resolver: Self::Resolver,
+        out: rkyv::Place<Self::Archived>,
+    ) {
+        self.0.as_ref().resolve(resolver, out);
+    }
+}
+
+impl<S> Serialize<S> for UncompressedBufferData
+where
+    S: Fallible,
+    Vec4u8s: Serialize<S>,
+{
+    fn serialize(&self, serializer: &mut S) -> Result<Self::Resolver, S::Error> {
+        self.0.as_ref().serialize(serializer)
+    }
+}
+
+impl<D> Deserialize<UncompressedBufferData, D> for <Vec4u8s as Archive>::Archived
+where
+    D: Fallible,
+    <Vec4u8s as Archive>::Archived: Deserialize<Vec4u8s, D>,
+{
+    fn deserialize(&self, deserializer: &mut D) -> Result<UncompressedBufferData, D::Error> {
+        let data = <Vec4u8s as Archive>::Archived::deserialize(self, deserializer)?;
+        Ok(UncompressedBufferData(Arc::new(data)))
     }
 }
 

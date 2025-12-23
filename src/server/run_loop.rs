@@ -281,13 +281,13 @@ fn apply_observation<B: PollingBackend>(
 
             if let Some(frame) = frame {
                 let observed_surface_tx = state.observed_tx_kbps_by_surface.get(&surface.id).copied();
-    let desired = transport_policy::select_surface_transport_config(
-        &state.transport_config,
-        state.client_hello.as_ref(),
-        observed_surface_tx,
-        surface.id,
-        &frame.metadata,
-    );
+                let desired = transport_policy::select_surface_transport_config(
+                    &state.transport_config,
+                    state.client_hello.as_ref(),
+                    observed_surface_tx,
+                    surface.id,
+                    &frame.metadata,
+                );
                 let prior = state.surface_transport_config.get(&surface.id);
                 if prior != Some(&desired) {
                     state.surface_transport_config.insert(surface.id, desired.clone());

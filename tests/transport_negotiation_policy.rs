@@ -178,7 +178,7 @@ fn usage_goal_media_prefers_png_over_jpeg() {
 
 #[test]
 fn gaming_with_bandwidth_pressure_prefers_h264() {
-    let hello = hello_with_goal(
+    let mut hello = hello_with_goal(
         transport::UsageGoal::Gaming,
         vec![
             transport::TransportCodec::ShardedRaw,
@@ -186,6 +186,7 @@ fn gaming_with_bandwidth_pressure_prefers_h264() {
             transport::TransportCodec::H264,
         ],
     );
+    hello.gpu.has_hw_video_decode = true;
     let cfg = transport_policy::select_global_transport_config(&hello, Some(20_000));
     assert_eq!(cfg.codec, transport::TransportCodec::H264);
 }

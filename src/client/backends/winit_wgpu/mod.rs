@@ -89,7 +89,7 @@ pub struct DecodedFrame {
 struct DecodeJob {
     surface_id: WlSurfaceId,
     metadata: crate::protocols::wprs::wayland::BufferMetadata,
-    filtered: crate::utils::vec4u8::Vec4u8s,
+    filtered: std::sync::Arc<crate::utils::vec4u8::Vec4u8s>,
 }
 
 #[derive(Clone)]
@@ -799,7 +799,7 @@ impl App {
         &self,
         surface_id: WlSurfaceId,
         metadata: crate::protocols::wprs::wayland::BufferMetadata,
-        filtered: crate::utils::vec4u8::Vec4u8s,
+        filtered: std::sync::Arc<crate::utils::vec4u8::Vec4u8s>,
     ) {
         // If the receiver is gone, we are shutting down.
         let _ = self.decode_tx.send(DecodeJob {
@@ -1600,7 +1600,7 @@ impl App {
                 // Apply buffer if present.
                 if let Some(BufferAssignment::New(buf)) = state.buffer.take() {
                     let filtered = match buf.data {
-                        BufferData::Uncompressed(data) => data.0,
+                        BufferData::Uncompressed(data) => data.0.clone(),
                         BufferData::External => {
                             if self.surfaces_with_frame.contains(&surface_id) {
                                 warn!(
@@ -2152,7 +2152,7 @@ pub fn run(
         thread::spawn(move || {
             while let Ok(job) = decode_rx.recv() {
                 let (padded_row_bytes, padded) =
-                    decode_filtered_to_padded_bgra(&job.metadata, &job.filtered);
+                    decode_filtered_to_padded_bgra(&job.metadata, job.filtered.as_ref());
                 if decoded_frame_tx
                     .send(DecodedFrame {
                         surface_id: job.surface_id,

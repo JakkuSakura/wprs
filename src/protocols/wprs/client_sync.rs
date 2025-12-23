@@ -41,7 +41,9 @@ impl ClientSync {
                 let surface = msg.header.surface;
                 match msg.header.kind {
                     RawBufferKind::FilteredBgra => {
-                        let data = UncompressedBufferData(msg.bytes.into());
+                        let data = UncompressedBufferData::from(
+                            crate::utils::vec4u8::Vec4u8s::from(msg.bytes),
+                        );
                         if let Some(surface) = surface {
                             self.buffer_cache.insert(surface, data);
                         } else {
@@ -70,7 +72,7 @@ impl ClientSync {
                         let ptr = decoded.bgra.as_ptr();
                         let data = unsafe { BufferPointer::new(&ptr, decoded.bgra.len()) };
                         let filtered = filtering::filter_to_vec4u8s(data);
-                        let data = UncompressedBufferData(filtered);
+                        let data = UncompressedBufferData::from(filtered);
                         self.buffer_cache.insert(surface, data);
                     }
                     #[cfg(not(feature = "video-h264"))]
@@ -84,7 +86,7 @@ impl ClientSync {
                         let ptr = bgra.as_ptr();
                         let data = unsafe { BufferPointer::new(&ptr, bgra.len()) };
                         let filtered = filtering::filter_to_vec4u8s(data);
-                        let data = UncompressedBufferData(filtered);
+                        let data = UncompressedBufferData::from(filtered);
                         if let Some(surface) = surface {
                             self.buffer_cache.insert(surface, data);
                         } else {
@@ -98,7 +100,7 @@ impl ClientSync {
                         let ptr = bgra.as_ptr();
                         let data = unsafe { BufferPointer::new(&ptr, bgra.len()) };
                         let filtered = filtering::filter_to_vec4u8s(data);
-                        let data = UncompressedBufferData(filtered);
+                        let data = UncompressedBufferData::from(filtered);
                         if let Some(surface) = surface {
                             self.buffer_cache.insert(surface, data);
                         } else {

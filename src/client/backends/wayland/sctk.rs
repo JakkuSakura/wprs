@@ -247,7 +247,7 @@ impl WprsClientState {
 #[derive(Debug)]
 pub struct RemoteBuffer {
     pub metadata: BufferMetadata,
-    pub data: Vec4u8s,
+    pub data: std::sync::Arc<Vec4u8s>,
     pub active_buffer: SlotBuffer,
     pub dirty: bool,
 }
@@ -300,7 +300,7 @@ impl RemoteBuffer {
                 pool.canvas(&self.active_buffer).location(loc!())?
             },
         };
-        filtering::unfilter(&self.data, canvas);
+        filtering::unfilter(self.data.as_ref(), canvas);
         Ok(())
     }
 }

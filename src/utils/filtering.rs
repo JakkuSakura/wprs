@@ -814,6 +814,45 @@ pub fn filter_to_vec4u8s(data: BufferPointer<u8>) -> Vec4u8s {
     soa
 }
 
+pub fn filter_to_vec4u8s_in_place(data: BufferPointer<u8>, out: &mut Vec4u8s) {
+    assert!(data.len().is_multiple_of(4));
+    let aos = unsafe { data.cast::<Vec4u8>() };
+    let len = aos.len();
+    let lim = (len / 32) * 32;
+
+    out.resize(len);
+    let (soa0, soa1, soa2, soa3) = out.parts_mut();
+
+    let mut prev0 = 0u8;
+    let mut prev1 = 0u8;
+    let mut prev2 = 0u8;
+    let mut prev3 = 0u8;
+
+    for (idx, Vec4u8(c0, c1, c2, c3)) in (&aos).into_iter().enumerate() {
+        if idx < lim {
+            let adj0 = c0.wrapping_sub(c1);
+            let adj1 = c1;
+            let adj2 = c2.wrapping_sub(c1);
+            let adj3 = c3;
+
+            soa0[idx] = adj0.wrapping_sub(prev0);
+            soa1[idx] = adj1.wrapping_sub(prev1);
+            soa2[idx] = adj2.wrapping_sub(prev2);
+            soa3[idx] = adj3.wrapping_sub(prev3);
+
+            prev0 = adj0;
+            prev1 = adj1;
+            prev2 = adj2;
+            prev3 = adj3;
+        } else {
+            soa0[idx] = c0;
+            soa1[idx] = c1;
+            soa2[idx] = c2;
+            soa3[idx] = c3;
+        }
+    }
+}
+
 pub fn unfilter(data: &Vec4u8s, output_buf: &mut [u8]) {
     vec4u8_soa_to_aos(data, bytemuck::cast_slice_mut(output_buf));
 }

@@ -128,12 +128,12 @@ impl TerminalPresenter {
                     return Ok(());
                 };
                 let filtered = match buf.data {
-                    BufferData::Uncompressed(data) => data.0,
+                    BufferData::Uncompressed(data) => data.0.clone(),
                     _ => return Ok(()),
                 };
 
                 let mut rgba = vec![0u8; buf.metadata.len()];
-                filtering::unfilter(&filtered, &mut rgba);
+                filtering::unfilter(filtered.as_ref(), &mut rgba);
                 bgra_to_rgba_in_place(&mut rgba);
 
                 self.refresh_size().location(loc!())?;
