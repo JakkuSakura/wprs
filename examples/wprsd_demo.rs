@@ -23,5 +23,5 @@ fn main() -> Result<()> {
 
     let backend = mock::MockBackend::new(opts);
     let tick_interval = backend.tick_interval();
-    server::runtime::run_loop::run(backend, serializer, tick_interval).location(loc!())
+    server::run_loop::run(backend, serializer, tick_interval).location(loc!())
 }

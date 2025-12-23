@@ -57,7 +57,7 @@ pub enum TickMode {
 
 /// Polling-style backend.
 ///
-/// These backends are driven by the shared `server::runtime::run_loop` and are
+/// These backends are driven by the shared `server::run_loop` and are
 /// polled on a fixed interval.
 pub trait PollingBackend {
     fn capabilities(&self) -> Capabilities;
@@ -101,6 +101,6 @@ impl<T: PollingBackend + 'static> ServerBackend for T {
         let tick_interval = tick_interval
             .ok_or_else(|| anyhow!("polling backend requires tick_interval"))
             .location(loc!())?;
-        crate::server::runtime::run_loop::run(*self, serializer, tick_interval).location(loc!())
+        crate::server::run_loop::run(*self, serializer, tick_interval).location(loc!())
     }
 }

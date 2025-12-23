@@ -72,9 +72,9 @@ fn init_wayland_listener(
     Ok(())
 }
 
-impl crate::server::runtime::backend::ServerBackend for WaylandSmithayBackend {
-    fn tick_mode(&self) -> crate::server::runtime::backend::TickMode {
-        crate::server::runtime::backend::TickMode::EventDriven
+impl crate::server::backend::ServerBackend for WaylandSmithayBackend {
+    fn tick_mode(&self) -> crate::server::backend::TickMode {
+        crate::server::backend::TickMode::EventDriven
     }
 
     fn run(

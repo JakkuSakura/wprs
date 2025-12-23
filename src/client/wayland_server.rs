@@ -35,7 +35,7 @@ mod wayland_server_impl {
     use crate::protocols::wprs::transport;
     use crate::server::backends::wayland::backend::WaylandSmithayBackend;
     use crate::server::backends::wayland::backend::WaylandSmithayBackendConfig;
-    use crate::server::runtime::backend::ServerBackend as _;
+    use crate::server::backend::ServerBackend as _;
 
     pub fn run(config: WprscConfig) -> Result<()> {
         let runtime_dir = env::var_os("XDG_RUNTIME_DIR")

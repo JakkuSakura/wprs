@@ -16,8 +16,8 @@ use crate::server::backends;
 use crate::server::config::IntegrationMode;
 use crate::server::config::WprsdBackend;
 use crate::server::config::WprsdConfig;
-use crate::server::runtime::backend::ServerBackend;
-use crate::server::runtime::backend::TickMode;
+use crate::server::backend::ServerBackend;
+use crate::server::backend::TickMode;
 
 struct ChildGuard(Child);
 

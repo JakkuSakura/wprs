@@ -26,10 +26,10 @@ use crate::protocols::wprs::wayland::Role;
 use crate::protocols::wprs::wayland::SurfaceRequestPayload;
 use crate::protocols::wprs::wayland::SurfaceState;
 use crate::protocols::wprs::wayland::WlSurfaceId;
-use crate::server::runtime::backend::BackendObservation;
-use crate::server::runtime::backend::BackendSurfaceRole;
-use crate::server::runtime::backend::PollingBackend;
-use crate::server::runtime::transport_policy;
+use crate::server::backend::BackendObservation;
+use crate::server::backend::BackendSurfaceRole;
+use crate::server::backend::PollingBackend;
+use crate::server::transport_policy;
 use crate::utils::sharding_compression::ShardingCompressor;
 use crate::utils::sharding_compression::CompressedShards;
 use crate::protocols::wprs::xdg_shell;
@@ -129,7 +129,7 @@ fn send_initial_snapshot<B: PollingBackend>(state: &mut State<B>) -> Result<()> 
 }
 
 fn surface_state_for_descriptor(
-    surface: &crate::server::runtime::backend::BackendSurfaceDescriptor,
+    surface: &crate::server::backend::BackendSurfaceDescriptor,
     buffer: Option<BufferAssignment>,
 ) -> SurfaceState {
     let role = match &surface.role {

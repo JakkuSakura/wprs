@@ -2,7 +2,7 @@ use wprs::protocols::wprs::transport;
 use wprs::protocols::wprs::wayland::BufferFormat;
 use wprs::protocols::wprs::wayland::BufferMetadata;
 use wprs::protocols::wprs::wayland::WlSurfaceId;
-use wprs::server::runtime::transport_policy;
+use wprs::server::transport_policy;
 
 fn hello_with_codecs(codecs: Vec<transport::TransportCodec>) -> transport::ClientHello {
     transport::ClientHello {

@@ -10,11 +10,11 @@ use crate::protocols::wprs::wayland::PointerEventKind;
 use crate::protocols::wprs::wayland::PointerGestureEvent;
 use crate::protocols::wprs::wayland::WlSurfaceId;
 use crate::protocols::wprs::xdg_shell;
-use crate::server::runtime::backend::BackendObservation;
-use crate::server::runtime::backend::BackendBgraFrame;
-use crate::server::runtime::backend::BackendSurfaceDescriptor;
-use crate::server::runtime::backend::BackendSurfaceRole;
-use crate::server::runtime::backend::PollingBackend;
+use crate::server::backend::BackendObservation;
+use crate::server::backend::BackendBgraFrame;
+use crate::server::backend::BackendSurfaceDescriptor;
+use crate::server::backend::BackendSurfaceRole;
+use crate::server::backend::PollingBackend;
 
 #[derive(Debug)]
 pub struct MacosFullscreenBackend {
