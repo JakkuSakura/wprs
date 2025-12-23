@@ -3,6 +3,7 @@ pub mod backends;
 pub mod config;
 pub mod coords;
 pub mod runner;
+pub mod state;
 pub mod wayland_server;
 pub mod surface_registry;
 

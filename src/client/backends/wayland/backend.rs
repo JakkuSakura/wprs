@@ -1,5 +1,4 @@
 use calloop::EventLoop;
-use calloop::channel::Event as CalloopChannelEvent;
 use smithay_client_toolkit::reexports::calloop_wayland_source::WaylandSource;
 use smithay_client_toolkit::reexports::client::ConnectError;
 use smithay_client_toolkit::reexports::client::Connection;
@@ -7,6 +6,7 @@ use smithay_client_toolkit::reexports::client::globals::registry_queue_init;
 
 use crate::client::backend::ClientBackend;
 use crate::client::backend::ClientBackendConfig;
+use crate::client::backend::ClientContext;
 use crate::client::backends::wayland::ClientOptions;
 use crate::client::backends::wayland::WprsClientState;
 use crate::prelude::*;
@@ -45,18 +45,13 @@ impl ClientBackend for WaylandClientBackend {
         "wayland"
     }
 
-    fn run(self: Box<Self>, serializer: Serializer<proto::types::Event, proto::types::Request>) -> Result<()> {
-        run_wayland(serializer, self.config, self.conn).location(loc!())
+    fn run(self: Box<Self>, ctx: ClientContext) -> Result<()> {
+        run_wayland(ctx, self.config, self.conn).location(loc!())
     }
 }
 
-fn run_wayland(
-    mut serializer: Serializer<proto::types::Event, proto::types::Request>,
-    config: ClientBackendConfig,
-    conn: Connection,
-) -> Result<()> {
+fn run_wayland(ctx: ClientContext, config: ClientBackendConfig, conn: Connection) -> Result<()> {
     let (globals, event_queue) = registry_queue_init(&conn)?;
-    let reader = serializer.reader().location(loc!())?;
 
     info!(
         "wprsc(wayland): starting (title_prefix={:?} ui_scale_factor={})",
@@ -71,8 +66,10 @@ fn run_wayland(
         event_queue.handle(),
         globals,
         conn.clone(),
-        serializer,
+        ctx.serializer,
         options,
+        ctx.state,
+        ctx.notify_rx,
     )
     .location(loc!())?;
 
@@ -83,14 +80,14 @@ fn run_wayland(
     );
 
     let mut event_loop = EventLoop::try_new()?;
+    let mut timer = calloop::timer::Timer::from_duration(std::time::Duration::from_millis(50));
     event_loop
         .handle()
-        .insert_source(reader, |event, _metadata, state: &mut WprsClientState| {
-            if let CalloopChannelEvent::Msg(msg) = event {
-                state.handle_request(msg)
-            }
+        .insert_source(timer, |_, _, state: &mut WprsClientState| {
+            state.apply_client_state_updates().log_and_ignore(loc!());
+            calloop::timer::TimeoutAction::ToDuration(std::time::Duration::from_millis(50))
         })
-        .map_err(|e| anyhow!("insert_source(serializer reader) failed: {e:?}"))?;
+        .map_err(|e| anyhow!("insert_source(refresh timer) failed: {e:?}"))?;
 
     WaylandSource::new(conn, event_queue)
         .insert(event_loop.handle())

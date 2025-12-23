@@ -26,8 +26,8 @@ mod wayland_server_impl {
     use std::thread;
 
     use crate::client::ClientBackendConfig;
-    use crate::client::build_client_backend;
     use crate::client::resolve_client_backend;
+    use crate::client::runner::run_client_for_serializer;
     use crate::client::config::WprscConfig;
     use crate::prelude::*;
     use crate::protocols::wprs as proto;
@@ -91,8 +91,10 @@ mod wayland_server_impl {
                     format!("failed to connect to internal wprs socket {internal_socket:?}")
                 })?;
 
-        let backend = build_client_backend(
-            resolve_client_backend(config.present_backend).location(loc!())?,
+        let present_backend = resolve_client_backend(config.present_backend).location(loc!())?;
+        run_client_for_serializer(
+            serializer,
+            present_backend,
             ClientBackendConfig {
                 title_prefix: config.title_prefix,
                 control_socket: config.control_socket,
@@ -102,52 +104,6 @@ mod wayland_server_impl {
                 min_output_scale_factor: config.min_output_scale_factor,
             },
         )
-        .location(loc!())?;
-
-        info!(
-            "wprsc presenting wayland-server via backend: {}",
-            backend.name()
-        );
-
-        // Allow the presentation backend to tell the embedded server how to tune compression.
-        {
-            let supports_buffer_patches = backend.name() == "winit-wgpu";
-            let cpu = transport::CpuFeatures {
-                #[cfg(all(target_arch = "x86_64"))]
-                avx2: std::arch::is_x86_feature_detected!("avx2"),
-                #[cfg(not(target_arch = "x86_64"))]
-                avx2: false,
-                #[cfg(all(target_arch = "aarch64"))]
-                neon: std::arch::is_aarch64_feature_detected!("neon"),
-                #[cfg(not(target_arch = "aarch64"))]
-                neon: false,
-            };
-            let hello = transport::ClientHello {
-                supported_codecs: {
-                    let mut codecs = vec![
-                        transport::TransportCodec::ShardedZstd { level: 1 },
-                        transport::TransportCodec::ShardedLz4,
-                        transport::TransportCodec::ShardedRaw,
-                        transport::TransportCodec::Png,
-                    ];
-                    #[cfg(feature = "image-jpeg")]
-                    codecs.push(transport::TransportCodec::Jpeg);
-                    #[cfg(feature = "video-h264")]
-                    codecs.push(transport::TransportCodec::H264);
-                    codecs
-                },
-                supports_buffer_patches,
-                cpu,
-                gpu: transport::GpuFeatures::default(),
-                preferences: transport::TransportPreferences::default(),
-            };
-            serializer
-                .writer()
-                .send(proto::serializer::SendType::Object(proto::types::Event::Transport(
-                    transport::TransportEvent::ClientHello(hello),
-                )));
-        }
-
-        backend.run(serializer).location(loc!())
+        .location(loc!())
     }
 }

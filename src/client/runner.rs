@@ -1,9 +1,14 @@
 use std::fs;
 use std::time::Duration;
 
+use calloop::EventLoop as CalloopEventLoop;
+use calloop::channel::Event as CalloopChannelEvent;
+
 use crate::client::ClientBackendConfig;
+use crate::client::backend::ClientContext;
 use crate::client::build_client_backend;
 use crate::client::resolve_client_backend;
+use crate::client::state::ClientState;
 use crate::client::config::ClientBackend;
 use crate::client::config::WprscConfig;
 use crate::client::config::WprscRole;
@@ -41,13 +46,45 @@ pub fn run_client_for_endpoint(
 }
 
 pub fn run_client_for_serializer(
-    serializer: Serializer<proto::types::Event, proto::types::Request>,
+    mut serializer: Serializer<proto::types::Event, proto::types::Request>,
     client_backend: ClientBackend,
     backend_config: ClientBackendConfig,
 ) -> Result<()> {
     let backend = build_client_backend(client_backend, backend_config).location(loc!())?;
 
     info!("viewer using backend: {}", backend.name());
+
+    let state = std::sync::Arc::new(ClientState::new());
+    let (notify_tx, notify_rx) = std::sync::mpsc::channel::<()>();
+
+    let reader = serializer.reader().location(loc!())?;
+    let state_for_reader = std::sync::Arc::clone(&state);
+    std::thread::spawn(move || {
+        let mut client_sync = crate::protocols::wprs::client_sync::ClientSync::new();
+        let mut loop_ = CalloopEventLoop::try_new().expect("calloop init");
+        loop_
+            .handle()
+            .insert_source(reader, move |event, _metadata, _state| {
+                if let CalloopChannelEvent::Msg(msg) = event {
+                    let msg = match client_sync.handle_message(msg) {
+                        Ok(Some(msg)) => msg,
+                        Ok(None) => return,
+                        Err(err) => {
+                            warn!("client sync failed: {err:?}");
+                            return;
+                        }
+                    };
+                    let crate::protocols::wprs::serializer::RecvType::Object(req) = msg else {
+                        return;
+                    };
+                    if state_for_reader.apply_request(req) {
+                        let _ = notify_tx.send(());
+                    }
+                }
+            })
+            .expect("insert serializer reader");
+        let _ = loop_.run(None, &mut (), |_| {});
+    });
 
     // Send a best-effort transport hello so the server can tune compression.
     {
@@ -89,7 +126,13 @@ pub fn run_client_for_serializer(
             )));
     }
 
-    backend.run(serializer).location(loc!())
+    backend
+        .run(ClientContext {
+            serializer,
+            state,
+            notify_rx,
+        })
+        .location(loc!())
 }
 
 fn run_viewer(config: WprscConfig) -> Result<()> {
@@ -136,7 +179,8 @@ fn run_viewer(config: WprscConfig) -> Result<()> {
             },
         };
 
-    let backend = build_client_backend(
+    run_client_for_serializer(
+        serializer,
         resolve_client_backend(config.present_backend).location(loc!())?,
         ClientBackendConfig {
             title_prefix: config.title_prefix,
@@ -147,46 +191,5 @@ fn run_viewer(config: WprscConfig) -> Result<()> {
             min_output_scale_factor: config.min_output_scale_factor,
         },
     )
-    .location(loc!())?;
-
-    info!("wprsc using backend: {}", backend.name());
-
-    // Send a best-effort transport hello so the server can tune compression.
-    {
-        let supports_buffer_patches = backend.name() == "winit-wgpu";
-        let cpu = transport::CpuFeatures {
-            #[cfg(all(target_arch = "x86_64"))]
-            avx2: std::arch::is_x86_feature_detected!("avx2"),
-            #[cfg(not(target_arch = "x86_64"))]
-            avx2: false,
-            #[cfg(all(target_arch = "aarch64"))]
-            neon: std::arch::is_aarch64_feature_detected!("neon"),
-            #[cfg(not(target_arch = "aarch64"))]
-            neon: false,
-        };
-        let mut supported_codecs = vec![
-            transport::TransportCodec::ShardedZstd { level: 1 },
-            transport::TransportCodec::ShardedLz4,
-            transport::TransportCodec::ShardedRaw,
-            transport::TransportCodec::Png,
-        ];
-        #[cfg(feature = "image-jpeg")]
-        supported_codecs.push(transport::TransportCodec::Jpeg);
-        #[cfg(feature = "video-h264")]
-        supported_codecs.push(transport::TransportCodec::H264);
-        let hello = transport::ClientHello {
-            supported_codecs,
-            supports_buffer_patches,
-            cpu,
-            gpu: transport::GpuFeatures::default(),
-            preferences: transport::TransportPreferences::default(),
-        };
-        serializer
-            .writer()
-            .send(proto::serializer::SendType::Object(proto::types::Event::Transport(
-                transport::TransportEvent::ClientHello(hello),
-            )));
-    }
-
-    backend.run(serializer).location(loc!())
+    .location(loc!())
 }

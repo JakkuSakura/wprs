@@ -56,6 +56,8 @@ use smithay_client_toolkit::shm::slot::SlotPool;
 use smithay::reexports::wayland_protocols::wp::pointer_gestures::zv1::client::zwp_pointer_gestures_v1::ZwpPointerGesturesV1;
 
 use crate::constants;
+use crate::client::state::ClientEvent;
+use crate::client::state::ClientState;
 use crate::prelude::*;
 use crate::protocols::wprs::types::Capabilities;
 use crate::protocols::wprs::types::ClientId;
@@ -63,7 +65,6 @@ use crate::protocols::wprs::types::Event;
 use crate::protocols::wprs::types::ObjectId;
 use crate::protocols::wprs::types::Request;
 use crate::protocols::wprs::serializer::Serializer;
-use crate::protocols::wprs::transport;
 use crate::protocols::wprs::geometry::Point;
 use crate::protocols::wprs::geometry::Rectangle;
 use crate::protocols::wprs::wayland::Bitmap;
@@ -139,6 +140,8 @@ pub struct WprsClientState {
     pub(super) primary_selection_offer: Option<PrimarySelectionOffer>,
 
     pub(super) serializer: Serializer<Event, Request>,
+    pub(super) client_state: Arc<ClientState>,
+    pub(super) notify_rx: std::sync::mpsc::Receiver<()>,
     pub(super) remote_display: RemoteDisplay,
     // left: remote object IDs, right: local "native" object IDs
     pub object_bimap: ObjectBimap,
@@ -154,10 +157,6 @@ pub struct WprsClientState {
     pub(super) active_hold_surface: Option<WlSurfaceId>,
 
     pub(super) title_prefix: String,
-
-    pub(super) client_sync: crate::protocols::wprs::client_sync::ClientSync,
-    pub(super) transport_config: transport::TransportConfig,
-    pub(super) transport_config_by_surface: std::collections::HashMap<WlSurfaceId, transport::TransportConfig>,
 }
 
 impl WprsClientState {
@@ -167,6 +166,8 @@ impl WprsClientState {
         conn: Connection,
         serializer: Serializer<Event, Request>,
         options: ClientOptions,
+        client_state: Arc<ClientState>,
+        notify_rx: std::sync::mpsc::Receiver<()>,
     ) -> Result<Self> {
         let shm_state = Shm::bind(&globals, &qh).context(loc!(), "wl_shm is not available")?;
 
@@ -220,6 +221,8 @@ impl WprsClientState {
             primary_selection_pipe: None,
 
             serializer,
+            client_state,
+            notify_rx,
             remote_display: RemoteDisplay::new(),
             object_bimap: BiMap::new(),
 
@@ -233,9 +236,6 @@ impl WprsClientState {
             active_swipe_surface: None,
             active_hold_surface: None,
             title_prefix: options.title_prefix,
-            client_sync: crate::protocols::wprs::client_sync::ClientSync::new(),
-            transport_config: transport::TransportConfig::default(),
-            transport_config_by_surface: std::collections::HashMap::new(),
         })
     }
 }

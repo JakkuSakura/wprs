@@ -3,7 +3,6 @@ use std::io::Write;
 
 use anyhow::ensure;
 
-use calloop::channel::Event as CalloopChannelEvent;
 use calloop::EventLoop as CalloopEventLoop;
 
 use termwiz::terminal::ScreenSize;
@@ -11,11 +10,10 @@ use termwiz::terminal::Terminal as _;
 
 use crate::client::backend::ClientBackend;
 use crate::client::backend::ClientBackendConfig;
+use crate::client::backend::ClientContext;
+use crate::client::state::ClientState;
 use crate::prelude::*;
 use crate::protocols::wprs as proto;
-use crate::protocols::wprs::serializer::RecvType;
-use crate::protocols::wprs::types::Request;
-use crate::protocols::wprs::serializer::Serializer;
 
 const UPPER_HALF_BLOCK: &str = "▀";
 
@@ -46,8 +44,8 @@ impl ClientBackend for SgrPixelsClientBackend {
         "sgr-pixels"
     }
 
-    fn run(self: Box<Self>, serializer: Serializer<proto::types::Event, proto::types::Request>) -> Result<()> {
-        run_event_loop(serializer).location(loc!())
+    fn run(self: Box<Self>, ctx: ClientContext) -> Result<()> {
+        run_event_loop(ctx).location(loc!())
     }
 }
 
@@ -102,44 +100,37 @@ impl TerminalPresenter {
         Ok(())
     }
 
-    fn handle_message(&mut self, msg: RecvType<Request>) -> Result<()> {
-        match msg {
-            RecvType::Object(Request::Surface(surface)) => {
-                use proto::wayland::BitmapAssignment;
-                use proto::wayland::Role;
-                use proto::wayland::SurfaceRequestPayload;
+    fn apply_state(&mut self, state: &ClientState) -> Result<()> {
+        use proto::wayland::BitmapAssignment;
+        use proto::wayland::Role;
 
-                let SurfaceRequestPayload::Commit(mut state) = surface.payload else {
-                    return Ok(());
-                };
+        let surfaces = state.snapshot_surfaces();
+        for surface_state in surfaces {
+            if self.selected_surface.is_none()
+                && matches!(surface_state.role.as_ref(), Some(Role::XdgToplevel(_)))
+            {
+                self.selected_surface = Some(surface_state.id);
+            }
+            if Some(surface_state.id) != self.selected_surface {
+                continue;
+            }
 
-                if self.selected_surface.is_none()
-                    && matches!(state.role.as_ref(), Some(Role::XdgToplevel(_)))
-                {
-                    self.selected_surface = Some(surface.surface);
-                }
-                if Some(surface.surface) != self.selected_surface {
-                    return Ok(());
-                }
+            let Some(BitmapAssignment::New(buf)) = surface_state.bitmap else {
+                continue;
+            };
+            if buf.data.len() != buf.metadata.len() {
+                continue;
+            }
+            let mut rgba = buf.data.as_slice().to_vec();
+            bgra_to_rgba_in_place(&mut rgba);
 
-                let Some(BitmapAssignment::New(buf)) = state.bitmap.take() else {
-                    return Ok(());
-                };
-                if buf.data.len() != buf.metadata.len() {
-                    return Ok(());
-                }
-                let mut rgba = buf.data.as_slice().to_vec();
-                bgra_to_rgba_in_place(&mut rgba);
-
-                self.refresh_size().location(loc!())?;
-                self.render_rgba(
-                    &rgba,
-                    buf.metadata.width as usize,
-                    buf.metadata.height as usize,
-                )
-                .location(loc!())?;
-            },
-            _ => {},
+            self.refresh_size().location(loc!())?;
+            self.render_rgba(
+                &rgba,
+                buf.metadata.width as usize,
+                buf.metadata.height as usize,
+            )
+            .location(loc!())?;
         }
         Ok(())
     }
@@ -207,33 +198,33 @@ fn read_pixel(rgba: &[u8], width: usize, x: usize, y: usize) -> [u8; 3] {
     [rgba[idx], rgba[idx + 1], rgba[idx + 2]]
 }
 
-fn run_event_loop(mut serializer: Serializer<proto::types::Event, proto::types::Request>) -> Result<()> {
-    let reader = serializer.reader().location(loc!())?;
-
+fn run_event_loop(ctx: ClientContext) -> Result<()> {
     struct State {
         presenter: TerminalPresenter,
-        client_sync: crate::protocols::wprs::client_sync::ClientSync,
+        client_state: std::sync::Arc<ClientState>,
+        notify_rx: std::sync::mpsc::Receiver<()>,
     }
 
     let mut loop_: CalloopEventLoop<State> = CalloopEventLoop::try_new().location(loc!())?;
     let mut state = State {
         presenter: TerminalPresenter::new().location(loc!())?,
-            client_sync: crate::protocols::wprs::client_sync::ClientSync::new(),
+        client_state: ctx.state,
+        notify_rx: ctx.notify_rx,
     };
 
+    let timer = calloop::timer::Timer::from_duration(std::time::Duration::from_millis(200));
     loop_
         .handle()
-        .insert_source(reader, move |event, _metadata, state| {
-            if let CalloopChannelEvent::Msg(msg) = event {
-                match state.client_sync.handle_message(msg).location(loc!()) {
-                    Ok(Some(msg)) => state.presenter.handle_message(msg).log_and_ignore(loc!()),
-                    Ok(None) => {},
-                    Err(err) => warn!("client_sync failed: {err:?}"),
-                }
-            }
+        .insert_source(timer, move |_, _, state| {
+            while state.notify_rx.try_recv().is_ok() {}
+            state
+                .presenter
+                .apply_state(&state.client_state)
+                .log_and_ignore(loc!());
+            calloop::timer::TimeoutAction::ToDuration(std::time::Duration::from_millis(200))
         })
-        .map_err(|e| anyhow!("insert_source(serializer reader) failed: {e:?}"))?;
+        .map_err(|e| anyhow!("insert_source(refresh timer) failed: {e:?}"))?;
 
-    let _serializer = serializer;
+    let _serializer = ctx.serializer;
     loop_.run(None, &mut state, |_| {}).location(loc!())
 }

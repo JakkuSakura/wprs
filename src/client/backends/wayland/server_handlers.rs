@@ -39,7 +39,6 @@ use crate::protocols::wprs::types::Capabilities;
 use crate::protocols::wprs::types::ClientId;
 use crate::protocols::wprs::types::DisplayConfig;
 use crate::protocols::wprs::types::Event;
-use crate::protocols::wprs::serializer::RecvType;
 use crate::protocols::wprs::types::Request;
 use crate::protocols::wprs::serializer::SendType;
 use crate::protocols::wprs::transport;
@@ -63,8 +62,60 @@ use crate::protocols::wprs::xdg_shell::PopupRequest;
 use crate::protocols::wprs::xdg_shell::PopupRequestPayload;
 use crate::protocols::wprs::xdg_shell::ToplevelRequest;
 use crate::protocols::wprs::xdg_shell::ToplevelRequestPayload;
+use crate::client::state::ClientEvent;
 
 impl WprsClientState {
+    pub fn apply_client_state_updates(&mut self) -> Result<()> {
+        let mut notified = false;
+        while self.notify_rx.try_recv().is_ok() {
+            notified = true;
+        }
+        if !notified {
+            return Ok(());
+        }
+
+        for event in self.client_state.drain_events() {
+            match event {
+                ClientEvent::Capabilities(caps) => {
+                    self.handle_capabilities(caps).location(loc!())?;
+                }
+                ClientEvent::DisplayConfig(cfg) => {
+                    self.handle_display_config(cfg).location(loc!())?;
+                }
+                ClientEvent::CursorImage(cursor) => {
+                    self.handle_cursor_image(cursor).location(loc!())?;
+                }
+                ClientEvent::Toplevel(req) => {
+                    self.handle_toplevel(req).location(loc!())?;
+                }
+                ClientEvent::Popup(req) => {
+                    self.handle_popup(req).location(loc!())?;
+                }
+                ClientEvent::Data(req) => {
+                    self.handle_data(req).location(loc!())?;
+                }
+                ClientEvent::ClientDisconnected(client) => {
+                    self.handle_client_disconnected(client).location(loc!())?;
+                }
+                ClientEvent::TransportConfig(_)
+                | ClientEvent::TransportConfigScoped { .. } => {
+                    // Client state already tracks these; backends should not handle codec details.
+                }
+            }
+        }
+
+        let delta = self.client_state.drain_surface_updates();
+        for surface_state in delta.updated {
+            self.handle_commit(surface_state.client, surface_state.id, surface_state)
+                .location(loc!())?;
+        }
+        for removed in delta.removed {
+            self.handle_surface_destroy(removed.client, removed.surface)
+                .location(loc!())?;
+        }
+
+        Ok(())
+    }
     #[instrument(skip(self), level = "debug")]
     fn handle_commit(
         &mut self,
@@ -636,31 +687,4 @@ impl WprsClientState {
         }
     }
 
-    #[instrument(skip(self), level = "debug")]
-    pub fn handle_request(&mut self, request: RecvType<Request>) {
-        let Some(request) =
-            log_and_return!(self.client_sync.handle_message(request).location(loc!()))
-        else {
-            return;
-        };
-
-        match request {
-            RecvType::Object(Request::Transport(req)) => self.handle_transport(req),
-            RecvType::Object(Request::Surface(surface)) => self.handle_surface(surface),
-            RecvType::Object(Request::Toplevel(toplevel)) => self.handle_toplevel(toplevel),
-            RecvType::Object(Request::Popup(popup)) => self.handle_popup(popup),
-            RecvType::Object(Request::CursorImage(cursor_image)) => {
-                self.handle_cursor_image(cursor_image)
-            },
-            RecvType::Object(Request::Data(data)) => self.handle_data(data),
-            RecvType::Object(Request::ClientDisconnected(client)) => {
-                self.handle_client_disconnected(client)
-            },
-            RecvType::Object(Request::Capabilities(caps)) => self.handle_capabilities(caps),
-            RecvType::Object(Request::DisplayConfig(cfg)) => self.handle_display_config(cfg),
-            RecvType::RawBuffer(_) => Ok(()),
-        }
-        .log_and_ignore(loc!())
-        // TODO: maybe send errors back to the server.
-    }
 }

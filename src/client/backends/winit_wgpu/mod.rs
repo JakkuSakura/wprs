@@ -28,8 +28,9 @@ use winit::event::{ButtonSource, ElementState, MouseButton, MouseScrollDelta, Wi
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{ResizeDirection, Window, WindowAttributes, WindowId, WindowLevel};
 
-use calloop::EventLoop as CalloopEventLoop;
-use calloop::channel::Event as CalloopChannelEvent;
+use crate::client::backend::ClientContext;
+use crate::client::state::ClientEvent;
+use crate::client::state::ClientState;
 use tracing::{debug, info, warn};
 
 use crate::client::config::KeyboardMode;
@@ -40,7 +41,6 @@ use crate::prelude::*;
 use crate::protocols::wprs as proto;
 use crate::protocols::wprs::types::ClientId;
 use crate::protocols::wprs::types::DisplayConfig;
-use crate::protocols::wprs::serializer::RecvType;
 use crate::protocols::wprs::types::Request;
 use crate::protocols::wprs::serializer::SendType;
 use crate::protocols::wprs::serializer::Serializer;
@@ -51,10 +51,8 @@ use crate::protocols::wprs::wayland::{
     AxisScroll, AxisSource, KeyInner, KeyState, KeyboardEvent, ModifierState, PointerEvent,
     PointerEventKind,
 };
-use crate::protocols::wprs::transport;
 use crate::protocols::wprs::wayland::{
-    BitmapAssignment, Mode, OutputEvent, OutputInfo, Subpixel, SurfaceRequest,
-    SurfaceRequestPayload, Transform, WlSurfaceId,
+    BitmapAssignment, Mode, OutputEvent, OutputInfo, Subpixel, SurfaceState, Transform, WlSurfaceId,
 };
 use crate::protocols::wprs::xdg_shell::XdgPopupState;
 use crate::protocols::wprs::xdg_shell::{
@@ -548,12 +546,10 @@ fn output_info_from_monitor(
 struct App {
     shared: WgpuShared,
     serializer: Serializer<proto::types::Event, Request>,
+    state: Arc<ClientState>,
+    notify_rx: std::sync::mpsc::Receiver<()>,
     decode_tx: std::sync::mpsc::Sender<DecodeJob>,
-    server_rx: std::sync::mpsc::Receiver<RecvType<Request>>,
     decoded_frame_rx: std::sync::mpsc::Receiver<DecodedFrame>,
-    client_sync: crate::protocols::wprs::client_sync::ClientSync,
-    transport_config: transport::TransportConfig,
-    transport_config_by_surface: HashMap<WlSurfaceId, transport::TransportConfig>,
     windows: HashMap<WlSurfaceId, WindowRenderer>,
     surface_by_window: HashMap<WindowId, WlSurfaceId>,
     outputs_sent: bool,
@@ -598,6 +594,7 @@ struct App {
     cursor_dirty: bool,
 
     warned_low_buffer_scale_on_hidpi: bool,
+
 }
 
 impl App {
@@ -1339,53 +1336,66 @@ impl App {
         })
     }
 
-    fn handle_server_message(
-        &mut self,
-        event_loop: &dyn ActiveEventLoop,
-        msg: RecvType<Request>,
-    ) -> Result<()> {
-        let Some(msg) = self.client_sync.handle_message(msg).location(loc!())? else {
-            return Ok(());
-        };
-
-        match msg {
-            RecvType::Object(Request::Surface(surface)) => self.handle_surface(event_loop, surface),
-            RecvType::Object(Request::DisplayConfig(cfg)) => {
-                if self.server_display_config.is_none() {
-                    info!(
-                        "server display config: scale_factor={} dpi={:?}",
-                        cfg.scale_factor, cfg.dpi
-                    );
-                }
-                self.server_display_config = Some(cfg);
-                Ok(())
-            },
-            RecvType::Object(Request::Transport(transport::TransportRequest::Config(cfg))) => {
-                self.transport_config = cfg;
-                Ok(())
-            },
-            RecvType::Object(Request::Transport(transport::TransportRequest::ConfigScoped {
-                scope,
-                config,
-            })) => {
-                match scope {
-                    transport::TransportScope::Global => {
-                        self.transport_config = config;
+    fn apply_client_events(&mut self, event_loop: &dyn ActiveEventLoop) -> Result<()> {
+        for event in self.state.drain_events() {
+            match event {
+                ClientEvent::DisplayConfig(cfg) => {
+                    if self.server_display_config.is_none() {
+                        info!(
+                            "server display config: scale_factor={} dpi={:?}",
+                            cfg.scale_factor, cfg.dpi
+                        );
                     }
-                    transport::TransportScope::Surface(surface) => {
-                        self.transport_config_by_surface.insert(surface, config);
-                    }
+                    self.server_display_config = Some(cfg);
                 }
-                Ok(())
+                ClientEvent::CursorImage(cursor) => {
+                    self.handle_cursor_image(event_loop, cursor);
+                }
+                _ => {}
             }
-            RecvType::Object(Request::Transport(transport::TransportRequest::Pong(_))) => Ok(()),
-            RecvType::Object(Request::CursorImage(cursor)) => {
-                self.handle_cursor_image(event_loop, cursor);
-                Ok(())
-            },
-            // Not yet handled in this backend.
-            _ => Ok(()),
         }
+        Ok(())
+    }
+
+    fn remove_surface(&mut self, surface_id: WlSurfaceId) {
+        if let Some(renderer) = self.windows.remove(&surface_id) {
+            self.surface_by_window.remove(&renderer.window.id());
+        }
+        self.popup_state_by_surface.remove(&surface_id);
+        if let Some(client) = self.cursor_surface_clients.remove(&surface_id) {
+            self.cursor_frames.remove(&ClientSurfaceKey {
+                client,
+                surface: surface_id,
+            });
+        }
+        self.surface_scale_factor.remove(&surface_id);
+        self.surfaces_with_frame.remove(&surface_id);
+        if self.pointer_surface == Some(surface_id) {
+            self.pointer_surface = None;
+        }
+    }
+
+    fn apply_client_state_updates(&mut self, event_loop: &dyn ActiveEventLoop) -> Result<()> {
+        let mut notified = false;
+        while self.notify_rx.try_recv().is_ok() {
+            notified = true;
+        }
+        if !notified {
+            return Ok(());
+        }
+
+        self.apply_client_events(event_loop).location(loc!())?;
+
+        let delta = self.state.drain_surface_updates();
+        for state in delta.updated {
+            self.handle_surface_state(event_loop, state)
+                .location(loc!())?;
+        }
+        for removed in delta.removed {
+            self.remove_surface(removed.surface);
+        }
+
+        Ok(())
     }
 
     fn send_configure_for_surface(&mut self, surface_id: WlSurfaceId) {
@@ -1417,197 +1427,173 @@ impl App {
             )));
     }
 
-    fn handle_surface(
+    fn handle_surface_state(
         &mut self,
         event_loop: &dyn ActiveEventLoop,
-        surface: SurfaceRequest,
+        mut state: SurfaceState,
     ) -> Result<()> {
-        let surface_id = surface.surface;
-        match surface.payload {
-            SurfaceRequestPayload::Destroyed => {
-                if let Some(renderer) = self.windows.remove(&surface_id) {
-                    self.surface_by_window.remove(&renderer.window.id());
-                }
-                self.popup_state_by_surface.remove(&surface_id);
-                if let Some(client) = self.cursor_surface_clients.remove(&surface_id) {
-                    self.cursor_frames.remove(&ClientSurfaceKey {
-                        client,
-                        surface: surface_id,
-                    });
-                }
-                return Ok(());
-            },
-            SurfaceRequestPayload::Commit(mut state) => {
-                self.surface_scale_factor
-                    .insert(surface_id, state.buffer_scale.max(1));
+        let surface_id = state.id;
+        self.surface_scale_factor
+            .insert(surface_id, state.buffer_scale.max(1));
+        let Some(role) = &state.role else {
+            return Ok(());
+        };
+        let toplevel = role.as_xdg_toplevel();
+        let popup = role.as_xdg_popup();
+        let cursor = role.as_cursor();
 
-                let Some(role) = &state.role else {
-                    return Ok(());
-                };
-                let toplevel = role.as_xdg_toplevel();
-                let popup = role.as_xdg_popup();
-                let cursor = role.as_cursor();
-
-                if cursor.is_some() {
-                    self.cursor_surface_clients.insert(surface_id, state.client);
-                }
-
-                let is_presented = toplevel.is_some() || popup.is_some();
-                if !is_presented && cursor.is_none() {
-                    return Ok(());
-                }
-
-                if let Some(popup) = popup {
-                    self.popup_state_by_surface
-                        .insert(surface_id, popup.clone());
-                } else {
-                    self.popup_state_by_surface.remove(&surface_id);
-                }
-
-                // Ensure we have a window for this surface if it is presented.
-                if is_presented && !self.windows.contains_key(&surface_id) {
-                    let mut attrs = if let Some(_toplevel) = toplevel {
-                        // Remote apps (e.g. KDE/Qt) may render their own client-side titlebars.
-                        // Prefer borderless windows for CSD apps to avoid double titlebars.
-                        let use_native_decorations =
-                            _toplevel.decoration_mode != Some(DecorationMode::Client);
-
-                        let title = if cfg!(target_os = "macos") && !use_native_decorations {
-                            String::new()
-                        } else {
-                            _toplevel
-                                .title
-                                .clone()
-                                .unwrap_or_else(|| "wprs".to_string())
-                        };
-
-                        let mut attrs = WindowAttributes::default().with_title(title);
-
-                        if !use_native_decorations {
-                            attrs = attrs.with_decorations(false);
-                        }
-                        attrs
-                    } else {
-                        WindowAttributes::default()
-                            .with_decorations(false)
-                            .with_resizable(false)
-                            .with_window_level(WindowLevel::AlwaysOnTop)
-                    };
-
-                    // We don't reserve a separate titlebar region: on macOS the titlebar is
-                    // transparent and the remote content can be visible behind it.
-
-                    if let Some(BitmapAssignment::New(buf)) = &state.bitmap {
-                        let w = buf.metadata.width.max(1) as u32;
-                        let h = buf.metadata.height.max(1) as u32;
-                        let server_scale = state.buffer_scale.max(1) as f64;
-
-                        if !self.warned_low_buffer_scale_on_hidpi {
-                            let local_scale = event_loop
-                                .primary_monitor()
-                                .map(|m| m.scale_factor().round() as i32)
-                                .unwrap_or(1)
-                                .max(1);
-                            if local_scale >= 2 && server_scale < 2.0 {
-                                let server_suggested_scale = self
-                                    .server_display_config
-                                    .as_ref()
-                                    .map(|cfg| cfg.scale_factor);
-                                warn!(
-                                    "HiDPI display detected (scale_factor={local_scale}) but server sent buffer_scale={} (server DisplayConfig.scale_factor={server_suggested_scale:?}); rendering may be blurry. If this is a capture backend, increase server DPI/scale (e.g. wprsd display_dpi). If this is an app-hosting backend, ensure output scale is being advertised correctly (winit-wgpu: min_output_scale_factor={}).",
-                                    state.buffer_scale.max(1),
-                                    self.min_output_scale_factor
-                                );
-                                self.warned_low_buffer_scale_on_hidpi = true;
-                            }
-                        }
-                        let logical_w = (f64::from(w) / server_scale).max(1.0);
-                        let logical_h = (f64::from(h) / server_scale).max(1.0);
-                        // Client-side scaling knob: magnify/shrink the window in logical units.
-                        attrs = attrs.with_surface_size(LogicalSize::new(
-                            logical_w * self.ui_scale(),
-                            logical_h * self.ui_scale(),
-                        ));
-
-                        info!(
-                            "creating window: surface={surface_id:?} kind={} buffer_px=({w}x{h}) buffer_scale={} ui_scale_factor={}",
-                            if toplevel.is_some() {
-                                "toplevel"
-                            } else {
-                                "popup"
-                            },
-                            state.buffer_scale,
-                            self.ui_scale_factor
-                        );
-                    } else if let Some(popup) = popup {
-                        attrs = attrs.with_surface_size(LogicalSize::new(
-                            (popup.positioner.width.max(1) as f64) * self.ui_scale(),
-                            (popup.positioner.height.max(1) as f64) * self.ui_scale(),
-                        ));
-
-                        if let Some(pos) = self.compute_popup_position(popup) {
-                            attrs = attrs.with_position(pos);
-                        }
-
-                        info!(
-                            "creating window: surface={surface_id:?} kind=popup positioner_px=({}x{}) ui_scale_factor={}",
-                            popup.positioner.width, popup.positioner.height, self.ui_scale_factor
-                        );
-                    }
-
-                    let window: Arc<dyn Window> =
-                        event_loop.create_window(attrs).location(loc!())?.into();
-                    let renderer =
-                        WindowRenderer::new(&self.shared, window.clone()).location(loc!())?;
-                    self.surface_by_window.insert(window.id(), surface_id);
-                    if let Some(toplevel) = toplevel {
-                        self.window_has_decorations.insert(
-                            window.id(),
-                            toplevel.decoration_mode != Some(DecorationMode::Client),
-                        );
-                    }
-                    if let Some(pos) = Self::window_surface_pos_in_desktop(window.as_ref()) {
-                        self.last_window_surface_pos.insert(window.id(), pos);
-                    }
-                    self.windows.insert(surface_id, renderer);
-
-                    // Start with a visible cursor even before the server sends its first cursor
-                    // update; some compositors/apps only update the cursor after the first motion.
-                    self.apply_cursor_for_surface(surface_id);
-                    self.cursor_dirty = false;
-
-                    if let Some(popup) = popup {
-                        if let Some(pos) = self.compute_popup_position(popup) {
-                            window.set_outer_position(pos.into());
-                        }
-                    }
-
-                    // Send an initial configure so apps can begin drawing.
-                    if toplevel.is_some() {
-                        self.send_configure_for_surface(surface_id);
-                    }
-                }
-
-                // Keep popup windows in sync with their parent.
-                if let Some(popup) = popup {
-                    self.update_popup_position(surface_id, popup);
-                }
-
-                // Apply buffer if present.
-                if let Some(BitmapAssignment::New(buf)) = state.bitmap.take() {
-                    if buf.data.len() != buf.metadata.len() {
-                        debug!(
-                            "Received buffer commit without inlined payload; skipping frame for {surface_id:?}"
-                        );
-                        return Ok(());
-                    }
-                    let raw = buf.data.0.clone();
-                    // Copy/pad on a worker thread to keep the window responsive.
-                    self.schedule_decode(surface_id, buf.metadata, raw);
-                }
-                Ok(())
-            },
+        if cursor.is_some() {
+            self.cursor_surface_clients.insert(surface_id, state.client);
         }
+
+        let is_presented = toplevel.is_some() || popup.is_some();
+        if !is_presented && cursor.is_none() {
+            return Ok(());
+        }
+
+        if let Some(popup) = popup {
+            self.popup_state_by_surface
+                .insert(surface_id, popup.clone());
+        } else {
+            self.popup_state_by_surface.remove(&surface_id);
+        }
+
+        // Ensure we have a window for this surface if it is presented.
+        if is_presented && !self.windows.contains_key(&surface_id) {
+            let mut attrs = if let Some(_toplevel) = toplevel {
+                // Remote apps (e.g. KDE/Qt) may render their own client-side titlebars.
+                // Prefer borderless windows for CSD apps to avoid double titlebars.
+                let use_native_decorations =
+                    _toplevel.decoration_mode != Some(DecorationMode::Client);
+
+                let title = if cfg!(target_os = "macos") && !use_native_decorations {
+                    String::new()
+                } else {
+                    _toplevel
+                        .title
+                        .clone()
+                        .unwrap_or_else(|| "wprs".to_string())
+                };
+
+                let mut attrs = WindowAttributes::default().with_title(title);
+
+                if !use_native_decorations {
+                    attrs = attrs.with_decorations(false);
+                }
+                attrs
+            } else {
+                WindowAttributes::default()
+                    .with_decorations(false)
+                    .with_resizable(false)
+                    .with_window_level(WindowLevel::AlwaysOnTop)
+            };
+
+            // We don't reserve a separate titlebar region: on macOS the titlebar is
+            // transparent and the remote content can be visible behind it.
+
+            if let Some(BitmapAssignment::New(buf)) = &state.bitmap {
+                let w = buf.metadata.width.max(1) as u32;
+                let h = buf.metadata.height.max(1) as u32;
+                let server_scale = state.buffer_scale.max(1) as f64;
+
+                if !self.warned_low_buffer_scale_on_hidpi {
+                    let local_scale = event_loop
+                        .primary_monitor()
+                        .map(|m| m.scale_factor().round() as i32)
+                        .unwrap_or(1)
+                        .max(1);
+                    if local_scale >= 2 && server_scale < 2.0 {
+                        let server_suggested_scale = self
+                            .server_display_config
+                            .as_ref()
+                            .map(|cfg| cfg.scale_factor);
+                        warn!(
+                            "HiDPI display detected (scale_factor={local_scale}) but server sent buffer_scale={} (server DisplayConfig.scale_factor={server_suggested_scale:?}); rendering may be blurry. If this is a capture backend, increase server DPI/scale (e.g. wprsd display_dpi). If this is an app-hosting backend, ensure output scale is being advertised correctly (winit-wgpu: min_output_scale_factor={}).",
+                            state.buffer_scale.max(1),
+                            self.min_output_scale_factor
+                        );
+                        self.warned_low_buffer_scale_on_hidpi = true;
+                    }
+                }
+                let logical_w = (f64::from(w) / server_scale).max(1.0);
+                let logical_h = (f64::from(h) / server_scale).max(1.0);
+                // Client-side scaling knob: magnify/shrink the window in logical units.
+                attrs = attrs.with_surface_size(LogicalSize::new(
+                    logical_w * self.ui_scale(),
+                    logical_h * self.ui_scale(),
+                ));
+
+                info!(
+                    "creating window: surface={surface_id:?} kind={} buffer_px=({w}x{h}) buffer_scale={} ui_scale_factor={}",
+                    if toplevel.is_some() { "toplevel" } else { "popup" },
+                    state.buffer_scale,
+                    self.ui_scale_factor
+                );
+            } else if let Some(popup) = popup {
+                attrs = attrs.with_surface_size(LogicalSize::new(
+                    (popup.positioner.width.max(1) as f64) * self.ui_scale(),
+                    (popup.positioner.height.max(1) as f64) * self.ui_scale(),
+                ));
+
+                if let Some(pos) = self.compute_popup_position(popup) {
+                    attrs = attrs.with_position(pos);
+                }
+
+                info!(
+                    "creating window: surface={surface_id:?} kind=popup positioner_px=({}x{}) ui_scale_factor={}",
+                    popup.positioner.width, popup.positioner.height, self.ui_scale_factor
+                );
+            }
+
+            let window: Arc<dyn Window> = event_loop.create_window(attrs).location(loc!())?.into();
+            let renderer = WindowRenderer::new(&self.shared, window.clone()).location(loc!())?;
+            self.surface_by_window.insert(window.id(), surface_id);
+            if let Some(toplevel) = toplevel {
+                self.window_has_decorations.insert(
+                    window.id(),
+                    toplevel.decoration_mode != Some(DecorationMode::Client),
+                );
+            }
+            if let Some(pos) = Self::window_surface_pos_in_desktop(window.as_ref()) {
+                self.last_window_surface_pos.insert(window.id(), pos);
+            }
+            self.windows.insert(surface_id, renderer);
+
+            // Start with a visible cursor even before the server sends its first cursor
+            // update; some compositors/apps only update the cursor after the first motion.
+            self.apply_cursor_for_surface(surface_id);
+            self.cursor_dirty = false;
+
+            if let Some(popup) = popup {
+                if let Some(pos) = self.compute_popup_position(popup) {
+                    window.set_outer_position(pos.into());
+                }
+            }
+
+            // Send an initial configure so apps can begin drawing.
+            if toplevel.is_some() {
+                self.send_configure_for_surface(surface_id);
+            }
+        }
+
+        // Keep popup windows in sync with their parent.
+        if let Some(popup) = popup {
+            self.update_popup_position(surface_id, popup);
+        }
+
+        // Apply buffer if present.
+        if let Some(BitmapAssignment::New(buf)) = state.bitmap.take() {
+            if buf.data.len() != buf.metadata.len() {
+                debug!(
+                    "Received buffer commit without inlined payload; skipping frame for {surface_id:?}"
+                );
+                return Ok(());
+            }
+            let raw = buf.data.0.clone();
+            // Copy/pad on a worker thread to keep the window responsive.
+            self.schedule_decode(surface_id, buf.metadata, raw);
+        }
+        Ok(())
     }
 }
 
@@ -1633,16 +1619,9 @@ impl ApplicationHandler for App {
     }
 
     fn proxy_wake_up(&mut self, event_loop: &dyn ActiveEventLoop) {
-        loop {
-            match self.server_rx.try_recv() {
-                Ok(msg) => {
-                    self.handle_server_message(event_loop, msg)
-                        .log_and_ignore(loc!());
-                },
-                Err(std::sync::mpsc::TryRecvError::Empty) => break,
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
-            }
-        }
+        self
+            .apply_client_state_updates(event_loop)
+            .log_and_ignore(loc!());
 
         loop {
             match self.decoded_frame_rx.try_recv() {
@@ -2124,10 +2103,8 @@ impl ApplicationHandler for App {
     }
 }
 
-pub fn run(
-    mut serializer: Serializer<proto::types::Event, Request>,
-    options: WinitWgpuOptions,
-) -> Result<()> {
+pub fn run(ctx: ClientContext, options: WinitWgpuOptions) -> Result<()> {
+    let serializer = ctx.serializer;
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Wait);
     let proxy = event_loop.create_proxy();
@@ -2156,23 +2133,8 @@ pub fn run(
         });
     }
 
-    let (server_tx, server_rx) = std::sync::mpsc::channel::<RecvType<Request>>();
-    let reader = serializer.reader().location(loc!())?;
-    let proxy_for_reader = proxy.clone();
-    thread::spawn(move || {
-        let mut loop_: CalloopEventLoop<()> = CalloopEventLoop::try_new().expect("calloop init");
-        loop_
-            .handle()
-            .insert_source(reader, move |event, _metadata, _state| {
-                if let CalloopChannelEvent::Msg(msg) = event {
-                    let _ = server_tx.send(msg);
-                    proxy_for_reader.wake_up();
-                }
-            })
-            .expect("insert serializer reader");
-
-        let _ = loop_.run(None, &mut (), |_| {});
-    });
+    let state = ctx.state;
+    let notify_rx = ctx.notify_rx;
 
     // Init shared wgpu context.
     let instance = Arc::new(wgpu::Instance::new(&wgpu::InstanceDescriptor {
@@ -2206,16 +2168,14 @@ pub fn run(
         queue: Arc::new(queue),
     };
 
-        let app = App {
+    let app = App {
         shared,
         serializer,
+        state,
+        notify_rx,
         decode_tx,
-        server_rx,
         decoded_frame_rx,
-            client_sync: crate::protocols::wprs::client_sync::ClientSync::new(),
-            transport_config: transport::TransportConfig::default(),
-            transport_config_by_surface: HashMap::new(),
-            windows: HashMap::new(),
+        windows: HashMap::new(),
         surface_by_window: HashMap::new(),
         outputs_sent: false,
 
@@ -2297,7 +2257,7 @@ impl crate::client::backend::ClientBackend for WinitWgpuClientBackend {
         "winit-wgpu"
     }
 
-    fn run(self: Box<Self>, serializer: Serializer<proto::types::Event, proto::types::Request>) -> Result<()> {
-        run(serializer, self.options).location(loc!())
+    fn run(self: Box<Self>, ctx: ClientContext) -> Result<()> {
+        run(ctx, self.options).location(loc!())
     }
 }
