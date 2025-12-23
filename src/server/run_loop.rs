@@ -19,9 +19,10 @@ use crate::protocols::wprs::serializer::SendType;
 use crate::protocols::wprs::serializer::Serializer;
 use crate::protocols::wprs::handshake;
 use crate::protocols::wprs::transport;
-use crate::protocols::wprs::wayland::BufferAssignment;
-use crate::protocols::wprs::wayland::BufferData;
+use crate::protocols::wprs::wayland::Bitmap;
+use crate::protocols::wprs::wayland::BitmapAssignment;
 use crate::protocols::wprs::wayland::BufferMetadata;
+use crate::protocols::wprs::wayland::BufferPoolHandle;
 use crate::protocols::wprs::wayland::OutputEvent;
 use crate::protocols::wprs::wayland::OutputInfo;
 use crate::protocols::wprs::wayland::Role;
@@ -169,7 +170,7 @@ fn send_initial_snapshot<B: PollingBackend>(state: &mut State<B>) -> Result<()> 
 
 fn surface_state_for_descriptor(
     surface: &crate::server::backend::BackendSurfaceDescriptor,
-    buffer: Option<BufferAssignment>,
+    bitmap: Option<BitmapAssignment>,
 ) -> SurfaceState {
     let role = match &surface.role {
         BackendSurfaceRole::XdgToplevel { id, title, app_id } => {
@@ -188,8 +189,8 @@ fn surface_state_for_descriptor(
     SurfaceState {
         client: surface.client,
         id: surface.id,
-        buffer,
-        buffer_update: None,
+        bitmap,
+        bitmap_update: None,
         role: Some(role),
         buffer_scale: surface.buffer_scale,
         buffer_transform: None,
@@ -367,13 +368,13 @@ fn apply_observation<B: PollingBackend>(
                 frame_to_send = None;
             }
 
-            let buffer = frame_to_send.as_ref().map(|frame| {
-                BufferAssignment::New(crate::protocols::wprs::wayland::Buffer {
+            let bitmap = frame_to_send.as_ref().map(|frame| {
+                BitmapAssignment::New(Bitmap {
                     metadata: frame.metadata,
-                    data: BufferData::External,
+                    data: BufferPoolHandle::from(Vec::new()),
                 })
             });
-            let state_to_send = surface_state_for_descriptor(&surface, buffer);
+            let state_to_send = surface_state_for_descriptor(&surface, bitmap);
 
             if let (Some(frame), Some(desired)) = (frame_to_send, desired) {
                 let (kind, shards) = encode_bgra_frame(
