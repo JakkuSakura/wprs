@@ -179,7 +179,9 @@ pub fn select_surface_transport_config(
     };
 
     cfg.codec = select_codec_for_surface(hello, &profile, &network, &surface_hints);
-    cfg.max_fps = stats.client_max_fps.or(cfg.max_fps);
+    cfg.max_fps = choose_max_fps(&profile, &network, &surface_hints, stats.client_max_fps)
+        .or(cfg.max_fps);
+    cfg.buffer_patches = choose_buffer_patches(hello, &profile, &network, &surface_hints);
 
     let _ = surface;
     cfg
@@ -284,6 +286,38 @@ struct SurfaceHints {
     client_max_fps: Option<u32>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct DimensionScores {
+    latency: i32,
+    bandwidth: i32,
+    clarity: i32,
+    cpu: i32,
+}
+
+impl DimensionScores {
+    fn weighted_sum(self, weights: DimensionWeights) -> i32 {
+        self.latency * weights.latency
+            + self.bandwidth * weights.bandwidth
+            + self.clarity * weights.clarity
+            + self.cpu * weights.cpu
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DimensionWeights {
+    latency: i32,
+    bandwidth: i32,
+    clarity: i32,
+    cpu: i32,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Behavior {
+    Codec,
+    BufferPatches,
+    Fps,
+}
+
 fn codec_allowed_by_network(hints: &NetworkHints, codec: transport::TransportCodec) -> bool {
     let Some(max_kbps) = hints.max_bitrate_kbps else {
         return true;
@@ -357,7 +391,7 @@ fn select_codec_for_surface(
             continue;
         }
 
-        let score = score_codec(
+        let scores = codec_dimension_scores(
             codec,
             profile,
             surface,
@@ -365,6 +399,11 @@ fn select_codec_for_surface(
             bandwidth_pressure,
             low_target_bitrate,
             tight_rtt,
+        );
+        let score = score_behavior(
+            Behavior::Codec,
+            profile,
+            scores,
         );
         if score > best_score {
             best_score = score;
@@ -375,7 +414,140 @@ fn select_codec_for_surface(
     best
 }
 
-fn score_codec(
+fn choose_buffer_patches(
+    hello: &transport::ClientHello,
+    profile: &PreferenceProfile,
+    network: &NetworkHints,
+    surface: &SurfaceHints,
+) -> transport::BufferPatchConfig {
+    let mut cfg = transport::BufferPatchConfig::default();
+    if !hello.supports_buffer_patches {
+        return cfg;
+    }
+
+    let enabled = buffer_patch_dimension_scores(true, profile, network, surface);
+    let disabled = buffer_patch_dimension_scores(false, profile, network, surface);
+    let enabled_score = score_behavior(Behavior::BufferPatches, profile, enabled);
+    let disabled_score = score_behavior(Behavior::BufferPatches, profile, disabled);
+
+    cfg.enabled = enabled_score > disabled_score;
+    cfg
+}
+
+fn buffer_patch_dimension_scores(
+    enabled: bool,
+    profile: &PreferenceProfile,
+    network: &NetworkHints,
+    surface: &SurfaceHints,
+) -> DimensionScores {
+    let bandwidth_pressure = network
+        .observed_tx_kbps
+        .zip(network.max_bitrate_kbps)
+        .map(|(tx, cap)| tx > cap)
+        .unwrap_or(false);
+    let surface_share = surface
+        .surface_tx_kbps
+        .zip(surface.total_tx_kbps)
+        .and_then(|(surface, total)| {
+            if total > 0 {
+                Some(surface as f32 / total as f32)
+            } else {
+                None
+            }
+        })
+        .unwrap_or(0.0);
+    let heavy_surface = surface_share >= 0.5;
+    let drop_avoid = profile.drop_tolerance == transport::DropTolerance::Avoid;
+
+    if enabled {
+        let mut scores = DimensionScores {
+            latency: -5,
+            bandwidth: 10,
+            clarity: -5,
+            cpu: -10,
+        };
+        if bandwidth_pressure || heavy_surface {
+            scores.bandwidth += 15;
+        }
+        if drop_avoid {
+            scores.bandwidth += 5;
+        }
+        scores
+    } else {
+        DimensionScores {
+            latency: 0,
+            bandwidth: -10,
+            clarity: 0,
+            cpu: 5,
+        }
+    }
+}
+
+fn choose_max_fps(
+    profile: &PreferenceProfile,
+    network: &NetworkHints,
+    surface: &SurfaceHints,
+    client_max_fps: Option<u32>,
+) -> Option<u32> {
+    let max_fps = client_max_fps?;
+    if max_fps == 0 {
+        return None;
+    }
+
+    let mut candidates = vec![max_fps];
+    if max_fps > 60 {
+        candidates.push(60);
+    }
+    if max_fps > 30 {
+        candidates.push(30);
+    }
+
+    let bandwidth_pressure = network
+        .observed_tx_kbps
+        .zip(network.max_bitrate_kbps)
+        .map(|(tx, cap)| tx > cap)
+        .unwrap_or(false);
+    let low_target_bitrate = network.max_bitrate_kbps.map_or(false, |kbps| kbps < 8_000);
+    let tight_rtt = network.max_rtt_ms.map_or(false, |rtt| rtt < 20);
+
+    let mut best = max_fps;
+    let mut best_score = i32::MIN;
+
+    for fps in candidates {
+        let scores = fps_dimension_scores(fps, bandwidth_pressure, low_target_bitrate, tight_rtt);
+        let score = score_behavior(Behavior::Fps, profile, scores);
+        if score > best_score {
+            best_score = score;
+            best = fps;
+        }
+    }
+
+    Some(best)
+}
+
+fn fps_dimension_scores(
+    fps: u32,
+    bandwidth_pressure: bool,
+    low_target_bitrate: bool,
+    tight_rtt: bool,
+) -> DimensionScores {
+    let fps = fps as i32;
+    let mut scores = DimensionScores {
+        latency: fps / 4,
+        bandwidth: -(fps / 3),
+        clarity: fps / 4,
+        cpu: -(fps / 6),
+    };
+    if bandwidth_pressure || low_target_bitrate {
+        scores.bandwidth -= 20;
+    }
+    if tight_rtt {
+        scores.latency -= 10;
+    }
+    scores
+}
+
+fn codec_dimension_scores(
     codec: transport::TransportCodec,
     profile: &PreferenceProfile,
     surface: &SurfaceHints,
@@ -383,7 +555,7 @@ fn score_codec(
     bandwidth_pressure: bool,
     low_target_bitrate: bool,
     tight_rtt: bool,
-) -> i32 {
+) -> DimensionScores {
     let latency = profile.latency_weight as i32;
     let bandwidth = profile.bandwidth_weight as i32;
     let clarity = profile.clarity_weight as i32;
@@ -411,150 +583,247 @@ fn score_codec(
 
     match codec {
         transport::TransportCodec::ShardedRaw => {
-            let mut score = latency * 3 - bandwidth * 3 + clarity / 2;
+            let mut score = DimensionScores {
+                latency: latency * 3,
+                bandwidth: -(bandwidth * 3),
+                clarity: clarity / 2,
+                cpu: 0,
+            };
             if bandwidth_pressure || low_target_bitrate {
-                score -= 50;
+                score.bandwidth -= 50;
             }
             if large_surface {
-                score -= 30;
+                score.bandwidth -= 30;
             }
             if high_fps {
-                score -= 20;
+                score.bandwidth -= 20;
             }
             if bandwidth_pressure && heavy_surface {
-                score -= 20;
+                score.bandwidth -= 20;
             }
             if drop_avoid {
-                score -= 30;
+                score.latency -= 10;
+                score.bandwidth -= 20;
             }
             if retransmit_avoid {
-                score -= 25;
+                score.latency -= 10;
+                score.bandwidth -= 15;
             }
             score
         }
         transport::TransportCodec::ShardedLz4 => {
-            let mut score = latency * 2 - cpu + clarity / 2 - bandwidth;
+            let mut score = DimensionScores {
+                latency: latency * 2,
+                bandwidth: -bandwidth,
+                clarity: clarity / 2,
+                cpu: -cpu,
+            };
             if bandwidth_pressure {
-                score += 10;
+                score.bandwidth += 10;
             }
             if large_surface {
-                score += 5;
+                score.bandwidth += 5;
             }
             if high_fps {
-                score += 10;
+                score.latency += 10;
             }
             if bandwidth_pressure && heavy_surface {
-                score += 10;
+                score.bandwidth += 10;
             }
             if drop_avoid {
-                score += 5;
+                score.latency += 5;
             }
             if retransmit_avoid {
-                score += 10;
+                score.latency += 10;
             }
             score
         }
         transport::TransportCodec::ShardedZstd { .. } => {
-            let mut score = latency * 1 - cpu * 2 + clarity / 2 - bandwidth;
+            let mut score = DimensionScores {
+                latency: latency,
+                bandwidth: -bandwidth,
+                clarity: clarity / 2,
+                cpu: -(cpu * 2),
+            };
             if bandwidth_pressure {
-                score += 15;
+                score.bandwidth += 15;
             }
             if large_surface {
-                score += 5;
+                score.bandwidth += 5;
             }
             if high_fps {
-                score += 5;
+                score.latency += 5;
             }
             if bandwidth_pressure && heavy_surface {
-                score += 5;
+                score.bandwidth += 5;
             }
             if drop_avoid {
-                score += 10;
+                score.latency += 5;
+                score.bandwidth += 5;
             }
             if retransmit_avoid {
-                score += 15;
+                score.latency += 10;
+                score.bandwidth += 5;
             }
             score
         }
         transport::TransportCodec::Png => {
-            let mut score = clarity * 3 - bandwidth * 2 - cpu;
+            let mut score = DimensionScores {
+                latency: 0,
+                bandwidth: -(bandwidth * 2),
+                clarity: clarity * 3,
+                cpu: -cpu,
+            };
             if bandwidth_pressure || low_target_bitrate {
-                score -= 40;
+                score.bandwidth -= 40;
             }
             if large_surface {
-                score -= 20;
+                score.bandwidth -= 20;
             }
             if high_fps {
-                score -= 25;
+                score.bandwidth -= 25;
             }
             if tight_rtt {
-                score -= 10;
+                score.latency -= 10;
             }
             if bandwidth_pressure && heavy_surface {
-                score -= 10;
+                score.bandwidth -= 10;
             }
             if drop_avoid {
-                score += 5;
+                score.clarity += 5;
             }
             if retransmit_avoid {
-                score -= 10;
+                score.latency -= 10;
             }
             score
         }
         transport::TransportCodec::Jpeg => {
             if !profile.allow_lossy {
-                return i32::MIN / 2;
+                return DimensionScores {
+                    latency: i32::MIN / 4,
+                    bandwidth: i32::MIN / 4,
+                    clarity: i32::MIN / 4,
+                    cpu: i32::MIN / 4,
+                };
             }
-            let mut score = clarity * 2 - bandwidth * 1 - cpu;
+            let mut score = DimensionScores {
+                latency: 0,
+                bandwidth: -bandwidth,
+                clarity: clarity * 2,
+                cpu: -cpu,
+            };
             if bandwidth_pressure {
-                score += 10;
+                score.bandwidth += 10;
             }
             if high_fps {
-                score += 5;
+                score.latency += 5;
             }
             if tight_rtt {
-                score -= 10;
+                score.latency -= 10;
             }
             if bandwidth_pressure && heavy_surface {
-                score += 5;
+                score.bandwidth += 5;
             }
             if drop_avoid {
-                score += 10;
+                score.clarity += 10;
             }
             if retransmit_avoid {
-                score += 10;
+                score.latency += 10;
             }
             score
         }
         transport::TransportCodec::H264 => {
             if !profile.allow_lossy || !decode_is_plausible {
-                return i32::MIN / 2;
+                return DimensionScores {
+                    latency: i32::MIN / 4,
+                    bandwidth: i32::MIN / 4,
+                    clarity: i32::MIN / 4,
+                    cpu: i32::MIN / 4,
+                };
             }
-            let mut score = bandwidth * 3 - clarity + latency * 1 - cpu;
+            let mut score = DimensionScores {
+                latency: latency,
+                bandwidth: bandwidth * 3,
+                clarity: -clarity,
+                cpu: -cpu,
+            };
             if bandwidth_pressure || low_target_bitrate {
-                score += 30;
+                score.bandwidth += 30;
             }
             if large_surface {
-                score += 15;
+                score.bandwidth += 10;
+                score.clarity += 5;
             } else {
-                score -= 40;
+                score.bandwidth -= 30;
             }
             if high_fps {
-                score += 20;
+                score.latency += 20;
             }
             if tight_rtt {
-                score -= 20;
+                score.latency -= 20;
             }
             if bandwidth_pressure && heavy_surface {
-                score += 10;
+                score.bandwidth += 10;
             }
             if drop_avoid {
-                score += 10;
+                score.clarity += 10;
             }
             if retransmit_avoid {
-                score += 15;
+                score.latency += 15;
             }
             score
         }
+    }
+}
+
+fn score_behavior(
+    behavior: Behavior,
+    profile: &PreferenceProfile,
+    scores: DimensionScores,
+) -> i32 {
+    let weights = behavior_weights(profile, behavior);
+    let primary = primary_dimension(weights);
+    let penalty_factor = primary.max(1) / 4;
+    let penalty = negative_penalty(scores) * penalty_factor;
+    scores.weighted_sum(weights) - penalty
+}
+
+fn negative_penalty(scores: DimensionScores) -> i32 {
+    let mut total = 0;
+    for dim in [scores.latency, scores.bandwidth, scores.clarity, scores.cpu] {
+        if dim < 0 {
+            total += -dim;
+        }
+    }
+    total
+}
+
+fn primary_dimension(weights: DimensionWeights) -> i32 {
+    let max = weights.latency.max(weights.bandwidth).max(weights.clarity).max(weights.cpu);
+    max
+}
+
+fn behavior_weights(profile: &PreferenceProfile, behavior: Behavior) -> DimensionWeights {
+    let base = DimensionWeights {
+        latency: profile.latency_weight as i32,
+        bandwidth: profile.bandwidth_weight as i32,
+        clarity: profile.clarity_weight as i32,
+        cpu: profile.cpu_weight as i32,
+    };
+
+    match behavior {
+        Behavior::Codec => base,
+        Behavior::BufferPatches => DimensionWeights {
+            latency: base.latency,
+            bandwidth: base.bandwidth * 2,
+            clarity: base.clarity,
+            cpu: base.cpu * 2,
+        },
+        Behavior::Fps => DimensionWeights {
+            latency: base.latency * 2,
+            bandwidth: base.bandwidth,
+            clarity: base.clarity,
+            cpu: base.cpu,
+        },
     }
 }
