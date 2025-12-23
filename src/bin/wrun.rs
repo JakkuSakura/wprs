@@ -19,11 +19,11 @@ struct Args {
     #[arg(long, value_name = "PATH")]
     config_file: Option<PathBuf>,
 
-    /// Which client backend to use for presenting remote surfaces.
+    /// Which backend to use for presenting remote surfaces.
     ///
     /// If omitted, `wrun` will print the WPRS endpoint to stdout.
-    #[arg(long, value_name = "BACKEND")]
-    client_backend: Option<ClientBackend>,
+    #[arg(long = "backend", value_name = "BACKEND")]
+    backend: Option<ClientBackend>,
 
     /// Disable setting `WAYLAND_DISPLAY` for the wrapped command.
     #[arg(long, default_value_t = false, action = clap::ArgAction::SetTrue)]
@@ -63,7 +63,7 @@ fn main() -> Result<()> {
 
     let exit_code = launcher::run(launcher::RunConfig {
         wprsd_config_file: args.config_file,
-        client_backend: args.client_backend,
+        backend: args.backend,
         no_wayland: args.no_wayland,
         no_x11: args.no_x11,
         cmd: args.cmd,

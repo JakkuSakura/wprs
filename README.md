@@ -207,13 +207,13 @@ Then update the `wprsc.ron` and `wprsd.ron` files with your desired settings.
 
 ### Running `wprsc` Without Wayland (Experimental)
 
-`wprsc` can use a Wayland client backend or a cross-platform backend based on
-`winit` + `wgpu`.
+`wprsc` can use a Wayland client backend, a cross-platform backend based on
+`winit` + `wgpu`, or an HTML backend that serves a browser UI.
 
 When `--backend auto` is selected (the default), `wprsc` prefers the Wayland
 backend if a compositor is available; otherwise it falls back to the
 `winit-wgpu` backend (when compiled with `winit-wgpu-client`). You can override
-the selection with `--backend auto|wayland|winit-wgpu`.
+the selection with `--backend auto|wayland|winit-wgpu|html`.
 
 If you compile `wprsc` with one of the `smithay_*` feature bundles, the same
 bundle names are also accepted as `--backend` values (they currently alias to
@@ -222,6 +222,11 @@ bundle names are also accepted as `--backend` values (they currently alias to
 ```bash
 cargo run --profile dev --bin wprsc
 ```
+
+When using the HTML backend, `wprsc` starts a local HTTP/WebSocket server
+(default `127.0.0.1:7777`). Open the URL in a browser to see the surface list
+and auto-open tabs for new windows. Some browsers may block popups unless
+triggered by a user interaction.
 
 Keyboard behavior is configurable:
 

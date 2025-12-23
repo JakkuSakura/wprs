@@ -1,3 +1,4 @@
+use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use anyhow::ensure;
@@ -20,6 +21,7 @@ pub enum ClientBackend {
     Wayland,
     WinitWgpu,
     SgrPixels,
+    Html,
 
     // --- Smithay feature bundle aliases ---
     //
@@ -118,6 +120,9 @@ pub struct WprscConfig {
     #[serde(default = "default_one")]
     pub ui_scale_factor: f64,
 
+    #[serde(default = "default_html_bind_addr")]
+    pub html_bind_addr: SocketAddr,
+
     /// Minimum output scale factor to report to the server (winit-wgpu backend only).
     ///
     /// This is an integer because the protocol uses Wayland-style integer scaling.
@@ -153,6 +158,8 @@ impl Default for WprscConfig {
 
             ui_scale_factor: default_one(),
 
+            html_bind_addr: default_html_bind_addr(),
+
             min_output_scale_factor: None,
 
             forward_only: false,
@@ -166,6 +173,10 @@ fn default_true() -> bool {
 
 fn default_one() -> f64 {
     1.0
+}
+
+pub(crate) fn default_html_bind_addr() -> SocketAddr {
+    "127.0.0.1:7777".parse().expect("valid html bind addr")
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -218,6 +229,9 @@ pub struct WprscArgs {
 
     #[arg(long, value_name = "SCALE")]
     pub min_output_scale_factor: Option<i32>,
+
+    #[arg(long, value_name = "ADDR")]
+    pub html_bind_addr: Option<SocketAddr>,
 
     #[arg(long, value_name = "BOOL", default_value_t = false, action = clap::ArgAction::Set)]
     pub forward_only: bool,
@@ -286,6 +300,10 @@ impl WprscArgs {
 
         if let Some(scale) = self.min_output_scale_factor {
             cfg.min_output_scale_factor = Some(scale);
+        }
+
+        if let Some(addr) = self.html_bind_addr {
+            cfg.html_bind_addr = addr;
         }
 
         if let Some(scale) = cfg.min_output_scale_factor {

@@ -5,3 +5,4 @@ pub mod wayland;
 pub mod winit_wgpu;
 
 pub mod sgr_pixels;
+pub mod html;

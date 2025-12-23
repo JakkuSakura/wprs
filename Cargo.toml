@@ -29,6 +29,9 @@ crossbeam-channel = "0.5.15"
 divbuf = "0.4.1"
 enum-as-inner = "0.6.1"
 async-trait = { version = "0.1.89", optional = true }
+axum = { version = "0.8", features = ["ws"] }
+futures-util = { version = "0.3.31", features = ["sink"] }
+tokio = { version = "1.45.1", features = ["macros", "rt-multi-thread", "sync", "net"] }
 fallible-iterator = "0.3.0"
 home = "0.5.11"
 itertools = "0.14.0"

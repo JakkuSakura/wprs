@@ -36,6 +36,7 @@ impl SgrPixelsClientBackend {
             xkb_keymap_file: None,
             ui_scale_factor: 1.0,
             min_output_scale_factor: None,
+            html_bind_addr: crate::client::config::default_html_bind_addr(),
         })
     }
 }

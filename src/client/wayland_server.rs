@@ -102,6 +102,7 @@ mod wayland_server_impl {
                 xkb_keymap_file: config.xkb_keymap_file,
                 ui_scale_factor: config.ui_scale_factor,
                 min_output_scale_factor: config.min_output_scale_factor,
+                html_bind_addr: config.html_bind_addr,
             },
         )
         .location(loc!())

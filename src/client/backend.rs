@@ -1,3 +1,4 @@
+use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use crate::client::config;
@@ -14,6 +15,7 @@ pub struct ClientBackendConfig {
     pub xkb_keymap_file: Option<PathBuf>,
     pub ui_scale_factor: f64,
     pub min_output_scale_factor: Option<i32>,
+    pub html_bind_addr: SocketAddr,
 }
 
 pub struct ClientContext {
@@ -143,6 +145,9 @@ pub fn build_client_backend(
         config::ClientBackend::WinitWgpu => build_winit_wgpu_backend(config),
         config::ClientBackend::SgrPixels => Ok(Box::new(
             crate::client::backends::sgr_pixels::SgrPixelsClientBackend::new(config),
+        )),
+        config::ClientBackend::Html => Ok(Box::new(
+            crate::client::backends::html::HtmlClientBackend::new(config),
         )),
     }
 }

@@ -26,7 +26,7 @@ const ENV_WCTL_SOCKET: &str = "WCTL_SOCKET";
 #[derive(Clone, Debug)]
 pub struct RunConfig {
     pub wprsd_config_file: Option<PathBuf>,
-    pub client_backend: Option<ClientBackend>,
+    pub backend: Option<ClientBackend>,
     pub no_wayland: bool,
     pub no_x11: bool,
     pub cmd: Vec<OsString>,
@@ -74,7 +74,7 @@ pub fn run(cfg: RunConfig) -> Result<i32> {
     let mut daemon =
         connect_or_start_daemon(&cfg, wprsd_config_from_file.clone()).location(loc!())?;
     let server_info = daemon.client.server_info().location(loc!())?;
-    if cfg.client_backend.is_none() {
+    if cfg.backend.is_none() {
         println!("{}", server_info.wprs_endpoint);
     } else {
         info!("wrun: wprs_endpoint={}", server_info.wprs_endpoint);
@@ -110,7 +110,7 @@ pub fn run(cfg: RunConfig) -> Result<i32> {
 
     let capture_lease = start_capture_target_pid_lease(daemon.client.clone(), pid);
 
-    if let Some(present_backend) = cfg.client_backend {
+    if let Some(present_backend) = cfg.backend {
         let (cancel_tx, cancel_rx) = std::sync::mpsc::channel::<()>();
         let wait_endpoint = daemon.control_endpoint.clone();
         let mut capture_lease = capture_lease;
@@ -146,6 +146,7 @@ pub fn run(cfg: RunConfig) -> Result<i32> {
             xkb_keymap_file: None,
             ui_scale_factor: 1.0,
             min_output_scale_factor: None,
+            html_bind_addr: crate::client::config::default_html_bind_addr(),
         };
 
         if let Some(serializer) = daemon.inproc_client_serializer.take() {
@@ -201,7 +202,7 @@ fn connect_or_start_daemon(
         derive_wprsd_config_for_wrun(wprsd_config_from_file, &embedded_control_endpoint)
             .location(loc!())?;
 
-    let (embedded_server_thread, inproc_client_serializer) = if cfg.client_backend.is_some() {
+    let (embedded_server_thread, inproc_client_serializer) = if cfg.backend.is_some() {
         let (server_serializer, client_serializer) = wprs::serializer::new_inproc_serializer_pair::<
             wprs::types::Request,
             wprs::types::Event,
