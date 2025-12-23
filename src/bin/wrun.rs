@@ -4,8 +4,11 @@ use std::path::PathBuf;
 use clap::Parser;
 
 use wprs::client::config::ClientBackend;
+use wprs::config;
 use wprs::launcher;
 use wprs::prelude::*;
+use wprs::server::config::WprsdConfig;
+use wprs::utils;
 
 #[derive(Parser, Debug)]
 #[command(name = "wrun")]
@@ -36,6 +39,23 @@ struct Args {
 
 fn main() -> Result<()> {
     let args = Args::parse();
+    let config_file =
+        args.config_file
+            .clone()
+            .unwrap_or_else(|| config::default_config_file("wprsd"));
+    let wprsd_config =
+        config::maybe_read_ron_file::<WprsdConfig>(&config_file).location(loc!())?
+            .unwrap_or_default();
+
+    config::set_log_priv_data(wprsd_config.log_priv_data);
+    utils::configure_tracing(
+        wprsd_config.stderr_log_level.0,
+        wprsd_config.log_file.clone(),
+        wprsd_config.file_log_level.0,
+    )
+    .location(loc!())?;
+    utils::exit_on_thread_panic();
+
     let exit_code = launcher::run(launcher::RunConfig {
         wprsd_config_file: args.config_file,
         client_backend: args.client_backend,
