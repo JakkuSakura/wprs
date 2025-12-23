@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use crate::client::ClientBackendConfig;
 use crate::client::build_client_backend;
+use crate::client::resolve_client_backend;
 use crate::client::config::ClientBackend;
 use crate::client::config::WprscConfig;
 use crate::client::config::WprscRole;
@@ -23,6 +24,8 @@ pub fn run_client_for_endpoint(
     client_backend: ClientBackend,
     backend_config: ClientBackendConfig,
 ) -> Result<()> {
+    let client_backend = resolve_client_backend(client_backend).location(loc!())?;
+
     let serializer_options = proto::SerializerClientOptions {
         auto_reconnect: false,
         on_connect: vec![proto::SendType::Object(proto::Event::WprsClientConnect)],
@@ -124,7 +127,7 @@ fn run_viewer(config: WprscConfig) -> Result<()> {
         };
 
     let backend = build_client_backend(
-        config.present_backend,
+        resolve_client_backend(config.present_backend).location(loc!())?,
         ClientBackendConfig {
             title_prefix: config.title_prefix,
             control_socket: config.control_socket,

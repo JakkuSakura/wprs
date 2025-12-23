@@ -14,4 +14,5 @@ pub use backends::winit_wgpu;
 pub use backend::ClientBackend;
 pub use backend::ClientBackendConfig;
 pub use backend::build_client_backend;
+pub use backend::resolve_client_backend;
 pub use runner::run_wprsc;

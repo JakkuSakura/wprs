@@ -65,6 +65,9 @@ pub fn build_client_backend(
     config: ClientBackendConfig,
 ) -> Result<Box<dyn ClientBackend>> {
     match requested {
+        config::ClientBackend::Auto => {
+            bail!("ClientBackend::Auto must be resolved before calling build_client_backend")
+        },
         #[cfg(feature = "smithay_winit_gl_wayland")]
         config::ClientBackend::SmithayWinitGlWayland => {
             build_winit_wgpu_backend_aliased(requested, config)
@@ -134,39 +137,56 @@ pub fn build_client_backend(
         config::ClientBackend::TermwizImage => Ok(Box::new(
             crate::client::backends::termwiz_image::TermwizImageClientBackend::new(config),
         )),
-        config::ClientBackend::Auto => {
-            #[cfg(feature = "wayland-client")]
-            {
-                use smithay_client_toolkit::reexports::client::ConnectError;
-                use smithay_client_toolkit::reexports::client::Connection;
+    }
+}
 
-                match Connection::connect_to_env() {
-                    Ok(conn) => {
-                        return Ok(Box::new(
-                            crate::client::backends::wayland::WaylandClientBackend::new(
-                                config, conn,
-                            ),
-                        ));
-                    },
-                    Err(ConnectError::NoCompositor) => {
-                        // No compositor; fall back below.
-                    },
-                    Err(e) => return Err(anyhow!(e)),
-                }
-            }
+pub fn resolve_client_backend(requested: config::ClientBackend) -> Result<config::ClientBackend> {
+    match requested {
+        config::ClientBackend::Auto => resolve_auto_backend().location(loc!()),
+        other => Ok(other),
+    }
+}
 
-            #[cfg(feature = "winit-wgpu-client")]
-            {
-                build_winit_wgpu_backend(config)
-            }
+fn resolve_auto_backend() -> Result<config::ClientBackend> {
+    #[cfg(feature = "wayland-client")]
+    {
+        use smithay_client_toolkit::reexports::client::ConnectError;
+        use smithay_client_toolkit::reexports::client::Connection;
 
-            #[cfg(not(feature = "winit-wgpu-client"))]
-            {
-                let _ = config;
-                bail!(
-                    "No usable client backend available. Enable `wayland-client` for the Wayland backend and/or `winit-wgpu-client` for the cross-platform backend."
-                )
-            }
-        },
+        match Connection::connect_to_env() {
+            Ok(_) => return Ok(config::ClientBackend::Wayland),
+            Err(ConnectError::NoCompositor) => {
+                // No compositor; fall through.
+            },
+            Err(e) => return Err(anyhow!(e)),
+        }
+    }
+
+    #[cfg(feature = "winit-wgpu-client")]
+    return Ok(config::ClientBackend::WinitWgpu);
+
+    #[cfg(not(feature = "winit-wgpu-client"))]
+    Ok(config::ClientBackend::TermwizImage)
+}
+
+#[cfg(test)]
+mod resolve_tests {
+    use super::*;
+
+    #[test]
+    fn explicit_backend_is_not_modified() {
+        assert_eq!(
+            resolve_client_backend(config::ClientBackend::TermwizImage).unwrap(),
+            config::ClientBackend::TermwizImage
+        );
+    }
+
+    #[test]
+    #[cfg(all(feature = "winit-wgpu-client", not(feature = "wayland-client")))]
+    fn auto_prefers_winit_when_wayland_client_missing() {
+        assert_eq!(
+            resolve_client_backend(config::ClientBackend::Auto).unwrap(),
+            config::ClientBackend::WinitWgpu
+        );
     }
 }

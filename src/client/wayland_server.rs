@@ -27,6 +27,7 @@ mod wayland_server_impl {
 
     use crate::client::ClientBackendConfig;
     use crate::client::build_client_backend;
+    use crate::client::resolve_client_backend;
     use crate::client::config::WprscConfig;
     use crate::prelude::*;
     use crate::protocols::wprs as proto;
@@ -91,7 +92,7 @@ mod wayland_server_impl {
                 })?;
 
         let backend = build_client_backend(
-            config.present_backend,
+            resolve_client_backend(config.present_backend).location(loc!())?,
             ClientBackendConfig {
                 title_prefix: config.title_prefix,
                 control_socket: config.control_socket,
