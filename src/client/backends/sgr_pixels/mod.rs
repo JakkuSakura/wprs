@@ -12,6 +12,7 @@ use crate::client::backend::ClientBackend;
 use crate::client::backend::ClientBackendConfig;
 use crate::client::backend::ClientContext;
 use crate::client::state::ClientState;
+use crate::client::state::drain_client_updates;
 use crate::prelude::*;
 use crate::protocols::wprs as proto;
 
@@ -216,7 +217,8 @@ fn run_event_loop(ctx: ClientContext) -> Result<()> {
     loop_
         .handle()
         .insert_source(timer, move |_, _, state| {
-            while state.notify_rx.try_recv().is_ok() {}
+            drain_client_updates(&state.notify_rx, &state.client_state)
+                .log_and_ignore(loc!());
             state
                 .presenter
                 .apply_state(&state.client_state)

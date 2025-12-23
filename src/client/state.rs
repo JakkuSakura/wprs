@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Mutex;
 
+use crate::prelude::*;
+
 use crate::protocols::wprs::transport;
 use crate::protocols::wprs::types::Capabilities;
 use crate::protocols::wprs::types::DisplayConfig;
@@ -203,4 +205,26 @@ impl ClientState {
 pub struct SurfaceDelta {
     pub updated: Vec<SurfaceState>,
     pub removed: Vec<ClientSurface>,
+}
+
+#[derive(Debug, Default)]
+pub struct ClientUpdateBatch {
+    pub events: Vec<ClientEvent>,
+    pub surfaces: SurfaceDelta,
+}
+
+pub fn drain_client_updates(
+    notify_rx: &std::sync::mpsc::Receiver<()>,
+    state: &ClientState,
+) -> Result<Option<ClientUpdateBatch>> {
+    let mut notified = false;
+    while notify_rx.try_recv().is_ok() {
+        notified = true;
+    }
+    if !notified {
+        return Ok(None);
+    }
+    let events = state.drain_events();
+    let surfaces = state.drain_surface_updates();
+    Ok(Some(ClientUpdateBatch { events, surfaces }))
 }

@@ -31,6 +31,7 @@ use winit::window::{ResizeDirection, Window, WindowAttributes, WindowId, WindowL
 use crate::client::backend::ClientContext;
 use crate::client::state::ClientEvent;
 use crate::client::state::ClientState;
+use crate::client::state::drain_client_updates;
 use tracing::{debug, info, warn};
 
 use crate::client::config::KeyboardMode;
@@ -1336,23 +1337,25 @@ impl App {
         })
     }
 
-    fn apply_client_events(&mut self, event_loop: &dyn ActiveEventLoop) -> Result<()> {
-        for event in self.state.drain_events() {
-            match event {
-                ClientEvent::DisplayConfig(cfg) => {
-                    if self.server_display_config.is_none() {
-                        info!(
-                            "server display config: scale_factor={} dpi={:?}",
-                            cfg.scale_factor, cfg.dpi
-                        );
-                    }
-                    self.server_display_config = Some(cfg);
+    fn handle_client_event(
+        &mut self,
+        event_loop: &dyn ActiveEventLoop,
+        event: ClientEvent,
+    ) -> Result<()> {
+        match event {
+            ClientEvent::DisplayConfig(cfg) => {
+                if self.server_display_config.is_none() {
+                    info!(
+                        "server display config: scale_factor={} dpi={:?}",
+                        cfg.scale_factor, cfg.dpi
+                    );
                 }
-                ClientEvent::CursorImage(cursor) => {
-                    self.handle_cursor_image(event_loop, cursor);
-                }
-                _ => {}
+                self.server_display_config = Some(cfg);
             }
+            ClientEvent::CursorImage(cursor) => {
+                self.handle_cursor_image(event_loop, cursor);
+            }
+            _ => {}
         }
         Ok(())
     }
@@ -1376,25 +1379,22 @@ impl App {
     }
 
     fn apply_client_state_updates(&mut self, event_loop: &dyn ActiveEventLoop) -> Result<()> {
-        let mut notified = false;
-        while self.notify_rx.try_recv().is_ok() {
-            notified = true;
-        }
-        if !notified {
+        let Some(batch) = drain_client_updates(&self.notify_rx, &self.state).location(loc!())?
+        else {
             return Ok(());
+        };
+
+        for event in batch.events {
+            self.handle_client_event(event_loop, event)
+                .location(loc!())?;
         }
-
-        self.apply_client_events(event_loop).location(loc!())?;
-
-        let delta = self.state.drain_surface_updates();
-        for state in delta.updated {
+        for state in batch.surfaces.updated {
             self.handle_surface_state(event_loop, state)
                 .location(loc!())?;
         }
-        for removed in delta.removed {
+        for removed in batch.surfaces.removed {
             self.remove_surface(removed.surface);
         }
-
         Ok(())
     }
 

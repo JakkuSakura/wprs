@@ -63,18 +63,17 @@ use crate::protocols::wprs::xdg_shell::PopupRequestPayload;
 use crate::protocols::wprs::xdg_shell::ToplevelRequest;
 use crate::protocols::wprs::xdg_shell::ToplevelRequestPayload;
 use crate::client::state::ClientEvent;
+use crate::client::state::drain_client_updates;
 
 impl WprsClientState {
     pub fn apply_client_state_updates(&mut self) -> Result<()> {
-        let mut notified = false;
-        while self.notify_rx.try_recv().is_ok() {
-            notified = true;
-        }
-        if !notified {
+        let Some(batch) =
+            drain_client_updates(&self.notify_rx, &self.client_state).location(loc!())?
+        else {
             return Ok(());
-        }
+        };
 
-        for event in self.client_state.drain_events() {
+        for event in batch.events {
             match event {
                 ClientEvent::Capabilities(caps) => {
                     self.handle_capabilities(caps).location(loc!())?;
@@ -103,17 +102,14 @@ impl WprsClientState {
                 }
             }
         }
-
-        let delta = self.client_state.drain_surface_updates();
-        for surface_state in delta.updated {
+        for surface_state in batch.surfaces.updated {
             self.handle_commit(surface_state.client, surface_state.id, surface_state)
                 .location(loc!())?;
         }
-        for removed in delta.removed {
+        for removed in batch.surfaces.removed {
             self.handle_surface_destroy(removed.client, removed.surface)
                 .location(loc!())?;
         }
-
         Ok(())
     }
     #[instrument(skip(self), level = "debug")]
