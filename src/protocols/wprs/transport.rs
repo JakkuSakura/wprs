@@ -38,6 +38,8 @@ pub struct TransportPreferences {
     pub retransmit_policy: Option<RetransmitPolicy>,
     /// How the server should select and update transport settings.
     pub selection_mode: SelectionMode,
+    /// Explicit codec selection used when selection_mode is Manual.
+    pub manual_codec: Option<TransportCodec>,
     /// Optional target bitrate hint, in kilobits/sec.
     pub target_bitrate_kbps: Option<u32>,
     /// Optional max RTT hint, in milliseconds.
@@ -76,7 +78,7 @@ pub enum RetransmitPolicy {
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Archive, Deserialize, Serialize)]
 pub enum SelectionMode {
-    /// Manual selection: ignore heuristics and use the base codec.
+    /// Manual selection: ignore heuristics and use the configured codec.
     Manual,
     /// Static selection: use heuristics once without runtime adjustments.
     Static,
@@ -119,6 +121,7 @@ impl Default for TransportPreferences {
             drop_tolerance: None,
             retransmit_policy: None,
             selection_mode: SelectionMode::Dynamic,
+            manual_codec: None,
             target_bitrate_kbps: None,
             max_rtt_ms: None,
             latency_weight: 25,

@@ -34,6 +34,13 @@ pub fn select_global_transport_config(
     let mut codec = select_base_codec(hello);
 
     if profile.selection_mode == transport::SelectionMode::Manual {
+        if let Some(manual) = hello.preferences.manual_codec {
+            if hello.supported_codecs.contains(&manual)
+                && codec_allowed_by_network(&network, manual)
+            {
+                codec = manual;
+            }
+        }
         return transport::TransportConfig {
             codec,
             buffer_patches: transport::BufferPatchConfig {
