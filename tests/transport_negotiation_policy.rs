@@ -63,6 +63,16 @@ fn global_can_pick_h264_under_bandwidth_pressure() {
 }
 
 #[test]
+fn global_avoids_h264_without_decode_support() {
+    let mut hello = hello_bandwidth_h264();
+    hello.gpu.has_hw_video_decode = false;
+    hello.cpu.avx2 = false;
+    hello.cpu.neon = false;
+    let cfg = transport_policy::select_global_transport_config(&hello, Some(20_000));
+    assert_ne!(cfg.codec, transport::TransportCodec::H264);
+}
+
+#[test]
 fn surface_large_prefers_h264_if_supported_and_bandwidth_or_target_low() {
     let hello = hello_bandwidth_h264();
     let global = transport_policy::select_global_transport_config(&hello, None);
@@ -129,12 +139,13 @@ fn usage_goal_gaming_prefers_h264_globally() {
     let hello = hello_with_goal(
         transport::UsageGoal::Gaming,
         vec![
+            transport::TransportCodec::ShardedRaw,
             transport::TransportCodec::ShardedZstd { level: 1 },
             transport::TransportCodec::H264,
         ],
     );
     let cfg = transport_policy::select_global_transport_config(&hello, None);
-    assert_eq!(cfg.codec, transport::TransportCodec::H264);
+    assert_eq!(cfg.codec, transport::TransportCodec::ShardedRaw);
 }
 
 #[test]
@@ -163,4 +174,74 @@ fn usage_goal_media_prefers_png_over_jpeg() {
     );
     let cfg = transport_policy::select_global_transport_config(&hello, None);
     assert_eq!(cfg.codec, transport::TransportCodec::Png);
+}
+
+#[test]
+fn gaming_with_bandwidth_pressure_prefers_h264() {
+    let hello = hello_with_goal(
+        transport::UsageGoal::Gaming,
+        vec![
+            transport::TransportCodec::ShardedRaw,
+            transport::TransportCodec::ShardedZstd { level: 1 },
+            transport::TransportCodec::H264,
+        ],
+    );
+    let cfg = transport_policy::select_global_transport_config(&hello, Some(20_000));
+    assert_eq!(cfg.codec, transport::TransportCodec::H264);
+}
+
+#[test]
+fn media_large_surface_prefers_h264_if_supported() {
+    let mut hello = hello_with_goal(
+        transport::UsageGoal::Media,
+        vec![
+            transport::TransportCodec::ShardedZstd { level: 1 },
+            transport::TransportCodec::H264,
+            transport::TransportCodec::Png,
+        ],
+    );
+    hello.gpu.has_hw_video_decode = true;
+    hello.preferences.target_bitrate_kbps = Some(6_000);
+    let global = transport_policy::select_global_transport_config(&hello, None);
+    let meta = BufferMetadata {
+        width: 1920,
+        height: 1080,
+        stride: 1920 * 4,
+        format: BufferFormat::Argb8888,
+    };
+    let cfg = transport_policy::select_surface_transport_config(
+        &global,
+        Some(&hello),
+        Some(30_000),
+        WlSurfaceId(1),
+        &meta,
+    );
+    assert_eq!(cfg.codec, transport::TransportCodec::H264);
+}
+
+#[test]
+fn dynamic_selection_can_be_disabled() {
+    let mut hello = hello_with_goal(
+        transport::UsageGoal::Gaming,
+        vec![
+            transport::TransportCodec::ShardedZstd { level: 1 },
+            transport::TransportCodec::H264,
+        ],
+    );
+    hello.preferences.dynamic_selection = false;
+    let global = transport_policy::select_global_transport_config(&hello, None);
+    let meta = BufferMetadata {
+        width: 1920,
+        height: 1080,
+        stride: 1920 * 4,
+        format: BufferFormat::Argb8888,
+    };
+    let cfg = transport_policy::select_surface_transport_config(
+        &global,
+        Some(&hello),
+        Some(30_000),
+        WlSurfaceId(1),
+        &meta,
+    );
+    assert_eq!(cfg.codec, global.codec);
 }

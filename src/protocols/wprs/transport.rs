@@ -32,6 +32,12 @@ impl Default for CpuFeatures {
 #[derive(Debug, Clone, Eq, PartialEq, Archive, Deserialize, Serialize)]
 pub struct TransportPreferences {
     pub usage_goal: Option<UsageGoal>,
+    /// Optional drop tolerance hint for quality-of-service decisions.
+    pub drop_tolerance: Option<DropTolerance>,
+    /// Optional retransmit policy hint for quality-of-service decisions.
+    pub retransmit_policy: Option<RetransmitPolicy>,
+    /// Whether the server may adjust transport settings per-surface.
+    pub dynamic_selection: bool,
     /// Optional target bitrate hint, in kilobits/sec.
     pub target_bitrate_kbps: Option<u32>,
     /// Optional max RTT hint, in milliseconds.
@@ -54,6 +60,18 @@ pub enum UsageGoal {
     Office,
     /// Maximize clarity with compression; avoid drops and lossy codecs when possible.
     Media,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Archive, Deserialize, Serialize)]
+pub enum DropTolerance {
+    Allow,
+    Avoid,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Archive, Deserialize, Serialize)]
+pub enum RetransmitPolicy {
+    Allow,
+    Avoid,
 }
 
 /// Client-reported GPU / acceleration capabilities.
@@ -88,6 +106,9 @@ impl Default for TransportPreferences {
     fn default() -> Self {
         Self {
             usage_goal: None,
+            drop_tolerance: None,
+            retransmit_policy: None,
+            dynamic_selection: true,
             target_bitrate_kbps: None,
             max_rtt_ms: None,
             latency_weight: 25,
