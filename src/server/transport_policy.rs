@@ -28,6 +28,7 @@ pub fn select_base_codec(hello: &transport::ClientHello) -> transport::Transport
 pub fn select_global_transport_config(
     hello: &transport::ClientHello,
     observed_tx_kbps: Option<u32>,
+    client_max_fps: Option<u32>,
 ) -> transport::TransportConfig {
     let profile = preference_profile(&hello.preferences);
     let network = network_hints(&hello.preferences, observed_tx_kbps, profile.dynamic_selection);
@@ -47,7 +48,7 @@ pub fn select_global_transport_config(
                 enabled: hello.supports_buffer_patches,
                 ..Default::default()
             },
-            max_fps: None,
+            max_fps: client_max_fps,
         };
     }
 
@@ -132,14 +133,21 @@ pub fn select_global_transport_config(
             enabled: hello.supports_buffer_patches,
             ..Default::default()
         },
-        max_fps: None,
+        max_fps: client_max_fps,
     }
+}
+
+pub struct SurfaceDecisionInput {
+    pub surface_tx_kbps: Option<u32>,
+    pub total_tx_kbps: Option<u32>,
+    pub estimated_fps: Option<f32>,
+    pub client_max_fps: Option<u32>,
 }
 
 pub fn select_surface_transport_config(
     global: &transport::TransportConfig,
     hello: Option<&transport::ClientHello>,
-    observed_tx_kbps: Option<u32>,
+    stats: SurfaceDecisionInput,
     surface: WlSurfaceId,
     metadata: &BufferMetadata,
 ) -> transport::TransportConfig {
@@ -148,7 +156,11 @@ pub fn select_surface_transport_config(
         return cfg;
     };
     let profile = preference_profile(&hello.preferences);
-    let network = network_hints(&hello.preferences, observed_tx_kbps, profile.dynamic_selection);
+    let network = network_hints(
+        &hello.preferences,
+        stats.total_tx_kbps,
+        profile.dynamic_selection,
+    );
 
     if profile.selection_mode == transport::SelectionMode::Manual {
         return cfg;
@@ -160,9 +172,14 @@ pub fn select_surface_transport_config(
     let surface_hints = SurfaceHints {
         surface_px,
         large_surface,
+        estimated_fps: stats.estimated_fps,
+        surface_tx_kbps: stats.surface_tx_kbps,
+        total_tx_kbps: stats.total_tx_kbps,
+        client_max_fps: stats.client_max_fps,
     };
 
     cfg.codec = select_codec_for_surface(hello, &profile, &network, &surface_hints);
+    cfg.max_fps = stats.client_max_fps.or(cfg.max_fps);
 
     let _ = surface;
     cfg
@@ -261,6 +278,10 @@ fn network_hints(
 struct SurfaceHints {
     surface_px: u64,
     large_surface: bool,
+    estimated_fps: Option<f32>,
+    surface_tx_kbps: Option<u32>,
+    total_tx_kbps: Option<u32>,
+    client_max_fps: Option<u32>,
 }
 
 fn codec_allowed_by_network(hints: &NetworkHints, codec: transport::TransportCodec) -> bool {
@@ -309,6 +330,13 @@ fn select_codec_for_surface(
         .unwrap_or(false);
     let low_target_bitrate = max_bitrate_kbps.map_or(false, |kbps| kbps < 8_000);
     let tight_rtt = network.max_rtt_ms.map_or(false, |rtt| rtt < 20);
+    let high_fps = match surface.client_max_fps {
+        Some(max_fps) if max_fps > 0 => surface
+            .estimated_fps
+            .unwrap_or(0.0)
+            >= (max_fps as f32 * 0.8),
+        _ => surface.estimated_fps.unwrap_or(0.0) >= 30.0,
+    };
 
     let mut best = select_base_codec(hello);
     let mut best_score = i32::MIN;
@@ -318,7 +346,11 @@ fn select_codec_for_surface(
         .any(|codec| *codec != transport::TransportCodec::H264);
 
     for codec in candidates {
-        if codec == transport::TransportCodec::H264 && !surface.large_surface && has_non_h264 {
+        if codec == transport::TransportCodec::H264
+            && !surface.large_surface
+            && !high_fps
+            && has_non_h264
+        {
             continue;
         }
         if !codec_allowed_by_network(network, codec) {
@@ -359,6 +391,23 @@ fn score_codec(
     let large_surface = surface.large_surface;
     let drop_avoid = profile.drop_tolerance == transport::DropTolerance::Avoid;
     let retransmit_avoid = profile.retransmit_policy == transport::RetransmitPolicy::Avoid;
+    let estimated_fps = surface.estimated_fps.unwrap_or(0.0);
+    let high_fps = match surface.client_max_fps {
+        Some(max_fps) if max_fps > 0 => estimated_fps >= (max_fps as f32 * 0.8),
+        _ => estimated_fps >= 30.0,
+    };
+    let surface_share = surface
+        .surface_tx_kbps
+        .zip(surface.total_tx_kbps)
+        .and_then(|(surface, total)| {
+            if total > 0 {
+                Some(surface as f32 / total as f32)
+            } else {
+                None
+            }
+        })
+        .unwrap_or(0.0);
+    let heavy_surface = surface_share >= 0.5;
 
     match codec {
         transport::TransportCodec::ShardedRaw => {
@@ -368,6 +417,12 @@ fn score_codec(
             }
             if large_surface {
                 score -= 30;
+            }
+            if high_fps {
+                score -= 20;
+            }
+            if bandwidth_pressure && heavy_surface {
+                score -= 20;
             }
             if drop_avoid {
                 score -= 30;
@@ -385,6 +440,12 @@ fn score_codec(
             if large_surface {
                 score += 5;
             }
+            if high_fps {
+                score += 10;
+            }
+            if bandwidth_pressure && heavy_surface {
+                score += 10;
+            }
             if drop_avoid {
                 score += 5;
             }
@@ -399,6 +460,12 @@ fn score_codec(
                 score += 15;
             }
             if large_surface {
+                score += 5;
+            }
+            if high_fps {
+                score += 5;
+            }
+            if bandwidth_pressure && heavy_surface {
                 score += 5;
             }
             if drop_avoid {
@@ -417,7 +484,13 @@ fn score_codec(
             if large_surface {
                 score -= 20;
             }
+            if high_fps {
+                score -= 25;
+            }
             if tight_rtt {
+                score -= 10;
+            }
+            if bandwidth_pressure && heavy_surface {
                 score -= 10;
             }
             if drop_avoid {
@@ -436,8 +509,14 @@ fn score_codec(
             if bandwidth_pressure {
                 score += 10;
             }
+            if high_fps {
+                score += 5;
+            }
             if tight_rtt {
                 score -= 10;
+            }
+            if bandwidth_pressure && heavy_surface {
+                score += 5;
             }
             if drop_avoid {
                 score += 10;
@@ -460,8 +539,14 @@ fn score_codec(
             } else {
                 score -= 40;
             }
+            if high_fps {
+                score += 20;
+            }
             if tight_rtt {
                 score -= 20;
+            }
+            if bandwidth_pressure && heavy_surface {
+                score += 10;
             }
             if drop_avoid {
                 score += 10;
