@@ -33,6 +33,17 @@ pub fn select_global_transport_config(
     let network = network_hints(&hello.preferences, observed_tx_kbps);
     let mut codec = select_base_codec(hello);
 
+    if !profile.dynamic_selection {
+        return transport::TransportConfig {
+            codec,
+            buffer_patches: transport::BufferPatchConfig {
+                enabled: hello.supports_buffer_patches,
+                ..Default::default()
+            },
+            max_fps: None,
+        };
+    }
+
     // NOTE: H.264 support may be compiled in by default, but it is intentionally
     // not selected as the default negotiated codec unless the client indicates
     // bandwidth pressure.
