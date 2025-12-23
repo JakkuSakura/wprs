@@ -35,6 +35,14 @@ pub fn run_client_for_endpoint(
         Serializer::new_client_endpoint_with_options(endpoint, serializer_options)
             .location(loc!())?;
 
+    run_client_for_serializer(serializer, client_backend, backend_config).location(loc!())
+}
+
+pub fn run_client_for_serializer(
+    serializer: Serializer<proto::Event, proto::Request>,
+    client_backend: ClientBackend,
+    backend_config: ClientBackendConfig,
+) -> Result<()> {
     let backend = build_client_backend(client_backend, backend_config).location(loc!())?;
 
     info!("viewer using backend: {}", backend.name());

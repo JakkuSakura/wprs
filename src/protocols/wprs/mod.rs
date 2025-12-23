@@ -51,6 +51,7 @@ use calloop::channel::Channel;
 use crossbeam_channel::Receiver;
 use crossbeam_channel::RecvTimeoutError;
 use crossbeam_channel::Sender;
+use fallible_iterator::IteratorExt;
 #[cfg(unix)]
 use nix::sys::socket;
 #[cfg(unix)]
@@ -983,6 +984,43 @@ where
     RawBuffer(RawBufferMessage),
 }
 
+fn extract_single_uncompressed_shard(shards: CompressedShards) -> Result<Vec<u8>, CompressedShards> {
+    if shards.shards.len() != 1 {
+        return Err(shards);
+    }
+
+    let shard = &shards.shards[0];
+    if shard.idx != 0 || shard.compression || shard.uncompressed_size != shard.data.len() {
+        return Err(shards);
+    }
+
+    let mut shards = shards;
+    let shard = shards.shards.pop().expect("checked len == 1");
+    Ok(shard.data)
+}
+
+fn decompress_shards_to_owned(shards: CompressedShards) -> Result<Vec<u8>> {
+    if shards.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let indices = shards.indices();
+    let uncompressed_size = shards.uncompressed_size();
+    let shards_iter = shards
+        .shards
+        .into_iter()
+        .map(Ok::<_, anyhow::Error>)
+        .transpose_into_fallible();
+
+    // Avoid spawning lots of decompressor threads; in-process transport is
+    // already low-latency.
+    let mut decompressor =
+        ShardingDecompressor::new(NonZeroUsize::new(2).unwrap()).location(loc!())?;
+    decompressor
+        .decompress_to_owned(&indices, uncompressed_size, shards_iter)
+        .location(loc!())
+}
+
 impl<RT> fmt::Debug for RecvType<RT>
 where
     RT: Serializable,
@@ -1859,4 +1897,94 @@ where
         self.on_connect_frames.lock().unwrap().push(frame);
         Ok(())
     }
+}
+
+pub fn new_inproc_serializer_pair<ST, RT>() -> Result<(Serializer<ST, RT>, Serializer<RT, ST>)>
+where
+    ST: Serializable,
+    ST::Archived: Deserialize<ST, HighDeserializer<RancorError>>
+        + for<'a> bytecheck::CheckBytes<HighValidator<'a, RancorError>>,
+    RT: Serializable,
+    RT::Archived: Deserialize<RT, HighDeserializer<RancorError>>
+        + for<'a> bytecheck::CheckBytes<HighValidator<'a, RancorError>>,
+{
+    fn spawn_forwarder<T>(
+        input: Receiver<SendType<T>>,
+        output: channel::SyncSender<RecvType<T>>,
+    ) where
+        T: Serializable,
+        T::Archived: Deserialize<T, HighDeserializer<RancorError>>
+            + for<'a> bytecheck::CheckBytes<HighValidator<'a, RancorError>>,
+    {
+        std::thread::spawn(move || {
+            for msg in input.iter() {
+                let out = match msg {
+                    SendType::Object(obj) => RecvType::Object(obj),
+                    SendType::RawBuffer(payload) => {
+                        let header = RawBufferHeader {
+                            version: RawBufferHeader::V2,
+                            kind: payload.kind,
+                            surface: Some(payload.surface),
+                        };
+
+                        let bytes = match extract_single_uncompressed_shard(payload.shards) {
+                            Ok(bytes) => bytes,
+                            Err(shards) => match decompress_shards_to_owned(shards) {
+                                Ok(bytes) => bytes,
+                                Err(err) => {
+                                    warn!("inproc raw buffer decompress failed: {err:?}");
+                                    continue;
+                                },
+                            },
+                        };
+                        RecvType::RawBuffer(RawBufferMessage { header, bytes })
+                    }
+                };
+
+                if output.send(out).is_err() {
+                    break;
+                }
+            }
+        });
+    }
+
+    let (a_reader_tx, a_reader_rx): (channel::SyncSender<RecvType<RT>>, Channel<RecvType<RT>>) =
+        channel::sync_channel(CHANNEL_SIZE);
+    let (b_reader_tx, b_reader_rx): (channel::SyncSender<RecvType<ST>>, Channel<RecvType<ST>>) =
+        channel::sync_channel(CHANNEL_SIZE);
+
+    let (a_writer_tx, a_writer_rx): (Sender<SendType<ST>>, Receiver<SendType<ST>>) =
+        crossbeam_channel::unbounded();
+    let (b_writer_tx, b_writer_rx): (Sender<SendType<RT>>, Receiver<SendType<RT>>) =
+        crossbeam_channel::unbounded();
+
+    let a_connected = Arc::new(AtomicBool::new(true));
+    let b_connected = Arc::new(AtomicBool::new(true));
+
+    spawn_forwarder::<ST>(a_writer_rx, b_reader_tx);
+    spawn_forwarder::<RT>(b_writer_rx, a_reader_tx);
+
+    let a = Serializer {
+        read_handle: Some(a_reader_rx),
+        write_handle: DiscardingSender {
+            sender: a_writer_tx,
+            actually_send: a_connected.clone(),
+        },
+        other_end_connected: a_connected,
+        on_connect_frames: Arc::new(Mutex::new(Vec::new())),
+        transport_guard: None,
+    };
+
+    let b = Serializer {
+        read_handle: Some(b_reader_rx),
+        write_handle: DiscardingSender {
+            sender: b_writer_tx,
+            actually_send: b_connected.clone(),
+        },
+        other_end_connected: b_connected,
+        on_connect_frames: Arc::new(Mutex::new(Vec::new())),
+        transport_guard: None,
+    };
+
+    Ok((a, b))
 }

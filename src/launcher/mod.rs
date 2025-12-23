@@ -14,6 +14,7 @@ use crate::client::config::ClientBackend;
 use crate::config;
 use crate::prelude::*;
 use crate::protocols::wctl;
+use crate::protocols::wprs;
 use crate::server::config::WprsdBackend;
 use crate::server::config::WprsdConfig;
 use crate::server::daemon;
@@ -32,6 +33,7 @@ pub struct RunConfig {
 struct DaemonInstance {
     control_endpoint: wctl::Endpoint,
     client: wctl::client::Client,
+    inproc_client_serializer: Option<wprs::Serializer<wprs::Event, wprs::Request>>,
     embedded_server_thread: Option<JoinHandle<()>>,
 }
 
@@ -67,7 +69,8 @@ pub fn run(cfg: RunConfig) -> Result<i32> {
 
     let wprsd_config_from_file =
         maybe_load_wprsd_config(cfg.wprsd_config_file.clone()).location(loc!())?;
-    let daemon = connect_or_start_daemon(&cfg, wprsd_config_from_file.clone()).location(loc!())?;
+    let mut daemon =
+        connect_or_start_daemon(&cfg, wprsd_config_from_file.clone()).location(loc!())?;
     let server_info = daemon.client.server_info().location(loc!())?;
     if cfg.client_backend.is_none() {
         println!("{}", server_info.wprs_endpoint);
@@ -134,10 +137,6 @@ pub fn run(cfg: RunConfig) -> Result<i32> {
             }
         });
 
-        let wprs_endpoint = server_info.wprs_endpoint.parse().with_context(loc!(), || {
-            format!("invalid wprs endpoint: {}", server_info.wprs_endpoint)
-        })?;
-
         let backend_config = ClientBackendConfig {
             title_prefix: "wrun".to_string(),
             control_socket: config::default_control_socket_path("wprsc"),
@@ -147,12 +146,16 @@ pub fn run(cfg: RunConfig) -> Result<i32> {
             min_output_scale_factor: None,
         };
 
-        crate::client::runner::run_client_for_endpoint(
-            wprs_endpoint,
-            present_backend,
-            backend_config,
-        )
-        .log_and_ignore(loc!());
+        if let Some(serializer) = daemon.inproc_client_serializer.take() {
+            crate::client::runner::run_client_for_serializer(serializer, present_backend, backend_config)
+                .log_and_ignore(loc!());
+        } else {
+            let wprs_endpoint = server_info.wprs_endpoint.parse().with_context(loc!(), || {
+                format!("invalid wprs endpoint: {}", server_info.wprs_endpoint)
+            })?;
+            crate::client::runner::run_client_for_endpoint(wprs_endpoint, present_backend, backend_config)
+                .log_and_ignore(loc!());
+        }
 
         let _ = cancel_tx.send(());
         let exit_code = wait_thread.join().unwrap_or(1);
@@ -170,7 +173,7 @@ pub fn run(cfg: RunConfig) -> Result<i32> {
 }
 
 fn connect_or_start_daemon(
-    _cfg: &RunConfig,
+    cfg: &RunConfig,
     wprsd_config_from_file: Option<WprsdConfig>,
 ) -> Result<DaemonInstance> {
     let probe_endpoints = resolve_wctl_probe_endpoints(&wprsd_config_from_file).location(loc!())?;
@@ -180,6 +183,7 @@ fn connect_or_start_daemon(
             return Ok(DaemonInstance {
                 control_endpoint: candidate.clone(),
                 client,
+                inproc_client_serializer: None,
                 embedded_server_thread: None,
             });
         }
@@ -194,12 +198,28 @@ fn connect_or_start_daemon(
     let wprsd_config =
         derive_wprsd_config_for_wrun(wprsd_config_from_file, &embedded_control_endpoint)
             .location(loc!())?;
-    let embedded_server_thread = Some(daemon::start_in_thread(wprsd_config));
+
+    let (embedded_server_thread, inproc_client_serializer) = if cfg.client_backend.is_some() {
+        let (server_serializer, client_serializer) =
+            wprs::new_inproc_serializer_pair::<wprs::Request, wprs::Event>().location(loc!())?;
+        let wprs_endpoint = format!("inproc://wrun/{}", process::id());
+        (
+            Some(daemon::start_in_thread_with_serializer(
+                wprsd_config,
+                server_serializer,
+                wprs_endpoint,
+            )),
+            Some(client_serializer),
+        )
+    } else {
+        (Some(daemon::start_in_thread(wprsd_config)), None)
+    };
     client.wait_ready(Duration::from_secs(5)).location(loc!())?;
 
     Ok(DaemonInstance {
         control_endpoint: embedded_control_endpoint,
         client,
+        inproc_client_serializer,
         embedded_server_thread,
     })
 }

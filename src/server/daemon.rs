@@ -86,23 +86,36 @@ pub fn run(config: &WprsdConfig) -> Result<()> {
         std::fs::create_dir_all(path.parent().location(loc!())?).location(loc!())?;
     }
 
+    let serializer = make_server_serializer(config).location(loc!())?;
+
+    let wprs_endpoint = match &config.endpoint {
+        Some(endpoint) => endpoint.to_string(),
+        None => format!("unix://{}", config.socket.display()),
+    };
+
+    run_with_serializer(config, serializer, wprs_endpoint).location(loc!())
+}
+
+pub fn run_with_serializer(
+    config: &WprsdConfig,
+    serializer: Serializer<ProtoRequest, ProtoEvent>,
+    wprs_endpoint: String,
+) -> Result<()> {
     let control_endpoint = resolve_control_endpoint(config);
     #[cfg(unix)]
     if let WctlEndpoint::Unix { path } = &control_endpoint {
         std::fs::create_dir_all(path.parent().location(loc!())?).location(loc!())?;
     }
 
-    let serializer = make_server_serializer(config).location(loc!())?;
+    if config.enable_rdp && wprs_endpoint.starts_with("inproc://") {
+        bail!("embedded inproc wprs transport does not support rdp integration")
+    }
+
     let _rdp_bridge = maybe_start_rdp_bridge(config).location(loc!())?;
 
     let backend_kind = infer_backend(config).location(loc!())?;
     let (backend, macos_target_pid, windows_target_pid) =
         build_backend(&backend_kind, config).location(loc!())?;
-
-    let wprs_endpoint = match &config.endpoint {
-        Some(endpoint) => endpoint.to_string(),
-        None => format!("unix://{}", config.socket.display()),
-    };
 
     let server_info = wctl::ServerInfo {
         wprs_endpoint,
@@ -142,6 +155,16 @@ pub fn run(config: &WprsdConfig) -> Result<()> {
 pub fn start_in_thread(config: WprsdConfig) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         run(&config).log_and_ignore(loc!());
+    })
+}
+
+pub fn start_in_thread_with_serializer(
+    config: WprsdConfig,
+    serializer: Serializer<ProtoRequest, ProtoEvent>,
+    wprs_endpoint: String,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        run_with_serializer(&config, serializer, wprs_endpoint).log_and_ignore(loc!());
     })
 }
 
