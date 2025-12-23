@@ -135,7 +135,7 @@ fn surface_small_can_use_png_for_clarity() {
 }
 
 #[test]
-fn usage_goal_gaming_prefers_h264_globally() {
+fn usage_goal_gaming_prefers_raw_globally() {
     let hello = hello_with_goal(
         transport::UsageGoal::Gaming,
         vec![
