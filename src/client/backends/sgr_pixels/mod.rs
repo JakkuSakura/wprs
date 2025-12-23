@@ -13,9 +13,9 @@ use crate::client::backend::ClientBackend;
 use crate::client::backend::ClientBackendConfig;
 use crate::prelude::*;
 use crate::protocols::wprs as proto;
-use crate::protocols::wprs::RecvType;
-use crate::protocols::wprs::Request;
-use crate::protocols::wprs::Serializer;
+use crate::protocols::wprs::serializer::RecvType;
+use crate::protocols::wprs::types::Request;
+use crate::protocols::wprs::serializer::Serializer;
 use crate::utils::filtering;
 
 const UPPER_HALF_BLOCK: &str = "▀";
@@ -47,7 +47,7 @@ impl ClientBackend for SgrPixelsClientBackend {
         "sgr-pixels"
     }
 
-    fn run(self: Box<Self>, serializer: Serializer<proto::Event, proto::Request>) -> Result<()> {
+    fn run(self: Box<Self>, serializer: Serializer<proto::types::Event, proto::types::Request>) -> Result<()> {
         run_event_loop(serializer).location(loc!())
     }
 }
@@ -212,7 +212,7 @@ fn read_pixel(rgba: &[u8], width: usize, x: usize, y: usize) -> [u8; 3] {
     [rgba[idx], rgba[idx + 1], rgba[idx + 2]]
 }
 
-fn run_event_loop(mut serializer: Serializer<proto::Event, proto::Request>) -> Result<()> {
+fn run_event_loop(mut serializer: Serializer<proto::types::Event, proto::types::Request>) -> Result<()> {
     let reader = serializer.reader().location(loc!())?;
 
     struct State {

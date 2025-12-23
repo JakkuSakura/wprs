@@ -1,8 +1,8 @@
 use bimap::BiMap;
 use smithay_client_toolkit::reexports::client::backend::ObjectId as SctkObjectId;
 
-use crate::protocols::wprs::ClientId;
-use crate::protocols::wprs::ObjectId;
+use crate::protocols::wprs::types::ClientId;
+use crate::protocols::wprs::types::ObjectId;
 
 pub(crate) type ObjectBimap = BiMap<(ClientId, ObjectId), SctkObjectId>;
 

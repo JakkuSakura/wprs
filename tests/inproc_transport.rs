@@ -1,11 +1,11 @@
 use std::num::NonZeroUsize;
 
-use wprs::protocols::wprs::RawBufferHeader;
-use wprs::protocols::wprs::RawBufferKind;
-use wprs::protocols::wprs::RawBufferPayload;
-use wprs::protocols::wprs::RecvType;
-use wprs::protocols::wprs::SendType;
-use wprs::protocols::wprs::new_inproc_serializer_pair;
+use wprs::protocols::wprs::raw_buffer::RawBufferHeader;
+use wprs::protocols::wprs::raw_buffer::RawBufferKind;
+use wprs::protocols::wprs::raw_buffer::RawBufferPayload;
+use wprs::protocols::wprs::serializer::RecvType;
+use wprs::protocols::wprs::serializer::SendType;
+use wprs::protocols::wprs::serializer::new_inproc_serializer_pair;
 use wprs::protocols::wprs::wayland::WlSurfaceId;
 use wprs::utils::arc_slice::ArcSlice;
 use wprs::utils::sharding_compression::CompressedShards;
@@ -14,7 +14,7 @@ use wprs::utils::sharding_compression::ShardingCompressor;
 #[test]
 fn inproc_raw_buffer_fast_path_moves_uncompressed_bytes() {
     let (server, mut client) =
-        new_inproc_serializer_pair::<wprs::protocols::wprs::Request, wprs::protocols::wprs::Event>()
+        new_inproc_serializer_pair::<wprs::protocols::wprs::types::Request, wprs::protocols::wprs::types::Event>()
             .unwrap();
     let surface = WlSurfaceId(42);
     let bytes = vec![1u8, 2, 3, 4, 5];
@@ -47,7 +47,7 @@ fn inproc_raw_buffer_fast_path_moves_uncompressed_bytes() {
 #[test]
 fn inproc_raw_buffer_decompresses_compressed_shards() {
     let (server, mut client) =
-        new_inproc_serializer_pair::<wprs::protocols::wprs::Request, wprs::protocols::wprs::Event>()
+        new_inproc_serializer_pair::<wprs::protocols::wprs::types::Request, wprs::protocols::wprs::types::Event>()
             .unwrap();
     let surface = WlSurfaceId(7);
     let bytes = vec![7u8; 8192];

@@ -15,6 +15,9 @@ use crate::config;
 use crate::prelude::*;
 use crate::protocols::wctl;
 use crate::protocols::wprs;
+use crate::protocols::wprs::serializer::Serializer;
+use crate::protocols::wprs::types::Event as WprsEvent;
+use crate::protocols::wprs::types::Request as WprsRequest;
 use crate::server::config::WprsdBackend;
 use crate::server::config::WprsdConfig;
 use crate::server::daemon;
@@ -33,7 +36,7 @@ pub struct RunConfig {
 struct DaemonInstance {
     control_endpoint: wctl::Endpoint,
     client: wctl::client::Client,
-    inproc_client_serializer: Option<wprs::Serializer<wprs::Event, wprs::Request>>,
+    inproc_client_serializer: Option<Serializer<WprsEvent, WprsRequest>>,
     embedded_server_thread: Option<JoinHandle<()>>,
 }
 
@@ -200,8 +203,11 @@ fn connect_or_start_daemon(
             .location(loc!())?;
 
     let (embedded_server_thread, inproc_client_serializer) = if cfg.client_backend.is_some() {
-        let (server_serializer, client_serializer) =
-            wprs::new_inproc_serializer_pair::<wprs::Request, wprs::Event>().location(loc!())?;
+        let (server_serializer, client_serializer) = wprs::serializer::new_inproc_serializer_pair::<
+            wprs::types::Request,
+            wprs::types::Event,
+        >()
+        .location(loc!())?;
         let wprs_endpoint = format!("inproc://wrun/{}", process::id());
         (
             Some(daemon::start_in_thread_with_serializer(
@@ -338,7 +344,7 @@ fn derive_wprsd_config_for_wrun(
                 let port = addr.port();
                 let wprs_port = port.saturating_sub(1).max(1025);
                 cfg.control_endpoint = Some(embedded_control_endpoint.clone());
-                cfg.endpoint = Some(crate::protocols::wprs::Endpoint::Tcp {
+                cfg.endpoint = Some(crate::protocols::wprs::endpoint::Endpoint::Tcp {
                     addr: std::net::SocketAddr::from((addr.ip(), wprs_port)),
                 });
             },

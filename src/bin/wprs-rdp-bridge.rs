@@ -1,7 +1,7 @@
 use clap::Parser;
 
 use wprs::prelude::*;
-use wprs::protocols::wprs::Endpoint;
+use wprs::protocols::wprs::endpoint::Endpoint;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 enum Security {

@@ -1,10 +1,10 @@
 use crate::prelude::*;
-use crate::protocols::wprs::Capabilities;
-use crate::protocols::wprs::ClientId;
-use crate::protocols::wprs::DisplayConfig;
-use crate::protocols::wprs::Event;
-use crate::protocols::wprs::Request;
-use crate::protocols::wprs::Serializer;
+use crate::protocols::wprs::types::Capabilities;
+use crate::protocols::wprs::types::ClientId;
+use crate::protocols::wprs::types::DisplayConfig;
+use crate::protocols::wprs::types::Event;
+use crate::protocols::wprs::types::Request;
+use crate::protocols::wprs::serializer::Serializer;
 use crate::protocols::wprs::wayland::BufferMetadata;
 use crate::protocols::wprs::wayland::WlSurfaceId;
 use crate::protocols::wprs::xdg_shell;

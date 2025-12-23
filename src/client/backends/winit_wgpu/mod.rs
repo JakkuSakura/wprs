@@ -39,12 +39,12 @@ use crate::client::coords::UiScaleFactor;
 use crate::utils::filtering;
 use crate::prelude::*;
 use crate::protocols::wprs as proto;
-use crate::protocols::wprs::ClientId;
-use crate::protocols::wprs::DisplayConfig;
-use crate::protocols::wprs::RecvType;
-use crate::protocols::wprs::Request;
-use crate::protocols::wprs::SendType;
-use crate::protocols::wprs::Serializer;
+use crate::protocols::wprs::types::ClientId;
+use crate::protocols::wprs::types::DisplayConfig;
+use crate::protocols::wprs::serializer::RecvType;
+use crate::protocols::wprs::types::Request;
+use crate::protocols::wprs::serializer::SendType;
+use crate::protocols::wprs::serializer::Serializer;
 use crate::protocols::wprs::geometry::{Point, Size};
 use crate::protocols::wprs::wayland::ClientSurface;
 use crate::protocols::wprs::wayland::PointerGestureEvent;
@@ -551,7 +551,7 @@ fn output_info_from_monitor(
 
 struct App {
     shared: WgpuShared,
-    serializer: Serializer<proto::Event, Request>,
+    serializer: Serializer<proto::types::Event, Request>,
     decode_tx: std::sync::mpsc::Sender<DecodeJob>,
     server_rx: std::sync::mpsc::Receiver<RecvType<Request>>,
     decoded_frame_rx: std::sync::mpsc::Receiver<DecodedFrame>,
@@ -623,7 +623,7 @@ impl App {
             if current[i] != self.last_outputs[i] {
                 self.serializer
                     .writer()
-                    .send(SendType::Object(proto::Event::Output(OutputEvent::Update(
+                    .send(SendType::Object(proto::types::Event::Output(OutputEvent::Update(
                         current[i].clone(),
                     ))));
             }
@@ -632,7 +632,7 @@ impl App {
             for output in &current[self.last_outputs.len()..] {
                 self.serializer
                     .writer()
-                    .send(SendType::Object(proto::Event::Output(OutputEvent::New(
+                    .send(SendType::Object(proto::types::Event::Output(OutputEvent::New(
                         output.clone(),
                     ))));
             }
@@ -640,7 +640,7 @@ impl App {
             for output in &self.last_outputs[current.len()..] {
                 self.serializer
                     .writer()
-                    .send(SendType::Object(proto::Event::Output(
+                    .send(SendType::Object(proto::types::Event::Output(
                         OutputEvent::Destroy(output.clone()),
                     )));
             }
@@ -1123,7 +1123,7 @@ impl App {
 
         self.serializer
             .writer()
-            .send(SendType::Object(proto::Event::KeyboardEvent(
+            .send(SendType::Object(proto::types::Event::KeyboardEvent(
                 KeyboardEvent::Keymap(keymap),
             )));
     }
@@ -1150,7 +1150,7 @@ impl App {
     ) {
         self.serializer
             .writer()
-            .send(SendType::Object(proto::Event::PointerFrame(vec![
+            .send(SendType::Object(proto::types::Event::PointerFrame(vec![
                 PointerEvent {
                     surface_id,
                     position,
@@ -1168,7 +1168,7 @@ impl App {
             let serial = self.next_serial();
             self.serializer
                 .writer()
-                .send(SendType::Object(proto::Event::KeyboardEvent(
+                .send(SendType::Object(proto::types::Event::KeyboardEvent(
                     KeyboardEvent::Leave { serial },
                 )));
         }
@@ -1181,7 +1181,7 @@ impl App {
             let serial = self.next_serial();
             self.serializer
                 .writer()
-                .send(SendType::Object(proto::Event::KeyboardEvent(
+                .send(SendType::Object(proto::types::Event::KeyboardEvent(
                     KeyboardEvent::Enter {
                         serial,
                         surface_id,
@@ -1195,7 +1195,7 @@ impl App {
     fn send_modifiers(&mut self, modifiers: winit::keyboard::ModifiersState) {
         self.serializer
             .writer()
-            .send(SendType::Object(proto::Event::KeyboardEvent(
+            .send(SendType::Object(proto::types::Event::KeyboardEvent(
                 KeyboardEvent::Modifiers {
                     modifier_state: ModifierState {
                         ctrl: modifiers.control_key(),
@@ -1219,7 +1219,7 @@ impl App {
         let serial = self.next_serial();
         self.serializer
             .writer()
-            .send(SendType::Object(proto::Event::KeyboardEvent(
+            .send(SendType::Object(proto::types::Event::KeyboardEvent(
                 KeyboardEvent::Key(KeyInner {
                     serial,
                     raw_code: keycode,
@@ -1416,7 +1416,7 @@ impl App {
         };
         self.serializer
             .writer()
-            .send(SendType::Object(proto::Event::Toplevel(
+            .send(SendType::Object(proto::types::Event::Toplevel(
                 ToplevelEvent::Configure(configure),
             )));
     }
@@ -1748,7 +1748,7 @@ impl ApplicationHandler for App {
                     if !self.popup_state_by_surface.contains_key(&surface_id) {
                         self.serializer
                             .writer()
-                            .send(SendType::Object(proto::Event::Toplevel(
+                            .send(SendType::Object(proto::types::Event::Toplevel(
                                 ToplevelEvent::Close(ToplevelClose { surface_id }),
                             )));
                     }
@@ -2033,7 +2033,7 @@ impl ApplicationHandler for App {
                         if !was_active {
                             let serial = self.next_serial();
                             self.serializer.writer().send(SendType::Object(
-                                proto::Event::PointerGesture(PointerGestureEvent::PinchBegin {
+                                proto::types::Event::PointerGesture(PointerGestureEvent::PinchBegin {
                                     surface_id,
                                     position: pos,
                                     serial,
@@ -2048,7 +2048,7 @@ impl ApplicationHandler for App {
                             state.scale = (state.scale + delta).clamp(0.1, 10.0);
                         }
                         self.serializer.writer().send(SendType::Object(
-                            proto::Event::PointerGesture(PointerGestureEvent::PinchUpdate {
+                            proto::types::Event::PointerGesture(PointerGestureEvent::PinchUpdate {
                                 surface_id,
                                 position: pos,
                                 delta: (0.0, 0.0).into(),
@@ -2065,7 +2065,7 @@ impl ApplicationHandler for App {
                             self.pinch_state.remove(&surface_id);
                             let serial = self.next_serial();
                             self.serializer.writer().send(SendType::Object(
-                                proto::Event::PointerGesture(PointerGestureEvent::PinchEnd {
+                                proto::types::Event::PointerGesture(PointerGestureEvent::PinchEnd {
                                     surface_id,
                                     position: pos,
                                     serial,
@@ -2091,7 +2091,7 @@ impl ApplicationHandler for App {
                         if !was_active {
                             let serial = self.next_serial();
                             self.serializer.writer().send(SendType::Object(
-                                proto::Event::PointerGesture(PointerGestureEvent::PinchBegin {
+                                proto::types::Event::PointerGesture(PointerGestureEvent::PinchBegin {
                                     surface_id,
                                     position: pos,
                                     serial,
@@ -2104,7 +2104,7 @@ impl ApplicationHandler for App {
                         // winit uses CCW-positive, smithay uses clockwise-positive.
                         let rotation = -(delta as f64);
                         self.serializer.writer().send(SendType::Object(
-                            proto::Event::PointerGesture(PointerGestureEvent::PinchUpdate {
+                            proto::types::Event::PointerGesture(PointerGestureEvent::PinchUpdate {
                                 surface_id,
                                 position: pos,
                                 delta: (0.0, 0.0).into(),
@@ -2121,7 +2121,7 @@ impl ApplicationHandler for App {
                             self.pinch_state.remove(&surface_id);
                             let serial = self.next_serial();
                             self.serializer.writer().send(SendType::Object(
-                                proto::Event::PointerGesture(PointerGestureEvent::PinchEnd {
+                                proto::types::Event::PointerGesture(PointerGestureEvent::PinchEnd {
                                     surface_id,
                                     position: pos,
                                     serial,
@@ -2138,7 +2138,7 @@ impl ApplicationHandler for App {
 }
 
 pub fn run(
-    mut serializer: Serializer<proto::Event, Request>,
+    mut serializer: Serializer<proto::types::Event, Request>,
     options: WinitWgpuOptions,
 ) -> Result<()> {
     let event_loop = EventLoop::new()?;
@@ -2310,7 +2310,7 @@ impl crate::client::backend::ClientBackend for WinitWgpuClientBackend {
         "winit-wgpu"
     }
 
-    fn run(self: Box<Self>, serializer: Serializer<proto::Event, proto::Request>) -> Result<()> {
+    fn run(self: Box<Self>, serializer: Serializer<proto::types::Event, proto::types::Request>) -> Result<()> {
         run(serializer, self.options).location(loc!())
     }
 }

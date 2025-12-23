@@ -53,7 +53,9 @@ use smithay_client_toolkit::shell::xdg::window::DecorationMode as SctkDecoration
 #[cfg(feature = "wayland-client")]
 use smithay_client_toolkit::shell::xdg::window::WindowConfigure;
 
-use super::ClientId;
+use crate::protocols::wprs::types::ClientId;
+#[cfg(feature = "wayland")]
+use crate::protocols::wprs::types::hash;
 use super::geometry::Point;
 use super::geometry::Rectangle;
 use super::geometry::Size;
@@ -67,7 +69,7 @@ pub struct XdgSurfaceId(pub u64);
 impl XdgSurfaceId {
     #[cfg(feature = "wayland")]
     pub fn new(xdg_surface: &xdg_surface::XdgSurface) -> Self {
-        Self(super::hash(&xdg_surface.id()))
+        Self(hash(&xdg_surface.id()))
     }
 }
 
@@ -77,14 +79,14 @@ pub struct XdgToplevelId(pub u64);
 impl XdgToplevelId {
     #[cfg(feature = "wayland")]
     pub fn new(xdg_toplevel: &XdgToplevel) -> Self {
-        Self(super::hash(&xdg_toplevel.id()))
+        Self(hash(&xdg_toplevel.id()))
     }
 }
 
 #[cfg(feature = "wayland")]
 impl From<&backend::ObjectId> for XdgToplevelId {
     fn from(object_id: &backend::ObjectId) -> Self {
-        Self(super::hash(object_id))
+        Self(hash(object_id))
     }
 }
 
@@ -94,21 +96,21 @@ pub struct XdgPopupId(pub u64);
 impl XdgPopupId {
     #[cfg(feature = "wayland")]
     pub fn new(xdg_popup: &xdg_popup::XdgPopup) -> Self {
-        Self(super::hash(&xdg_popup.id()))
+        Self(hash(&xdg_popup.id()))
     }
 }
 
 #[cfg(feature = "wayland")]
 impl From<backend::ObjectId> for XdgPopupId {
     fn from(object_id: backend::ObjectId) -> Self {
-        Self(super::hash(&object_id))
+        Self(hash(&object_id))
     }
 }
 
 #[cfg(feature = "wayland")]
 impl From<&backend::ObjectId> for XdgPopupId {
     fn from(object_id: &backend::ObjectId) -> Self {
-        Self(super::hash(object_id))
+        Self(hash(object_id))
     }
 }
 

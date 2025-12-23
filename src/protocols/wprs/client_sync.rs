@@ -1,7 +1,7 @@
 use crate::prelude::*;
-use crate::protocols::wprs::RawBufferKind;
-use crate::protocols::wprs::RecvType;
-use crate::protocols::wprs::Request;
+use crate::protocols::wprs::raw_buffer::RawBufferKind;
+use crate::protocols::wprs::serializer::RecvType;
+use crate::protocols::wprs::types::Request;
 use crate::protocols::wprs::wayland::BufferAssignment;
 use crate::protocols::wprs::wayland::BufferData;
 use crate::protocols::wprs::wayland::SurfaceRequestPayload;

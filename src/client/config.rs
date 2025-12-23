@@ -10,7 +10,7 @@ use tracing::Level;
 use crate::config;
 use crate::config::SerializableLevel;
 use crate::prelude::*;
-use crate::protocols::wprs::Endpoint;
+use crate::protocols::wprs::endpoint::Endpoint;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, ValueEnum)]
 #[serde(rename_all = "kebab-case")]

@@ -13,10 +13,10 @@
 // limitations under the License.
 
 use crate::prelude::*;
-use crate::protocols::wprs::Capabilities;
-use crate::protocols::wprs::DisplayConfig;
-use crate::protocols::wprs::Request;
-use crate::protocols::wprs::SendType;
+use crate::protocols::wprs::types::Capabilities;
+use crate::protocols::wprs::types::DisplayConfig;
+use crate::protocols::wprs::types::Request;
+use crate::protocols::wprs::serializer::SendType;
 use crate::protocols::wprs::wayland::SurfaceState;
 
 /// Builds messages to represent a surface snapshot.
@@ -26,7 +26,7 @@ use crate::protocols::wprs::wayland::SurfaceState;
 /// transport layer.
 pub fn surface_messages(state: SurfaceState) -> Result<Vec<SendType<Request>>> {
     Ok(vec![SendType::Object(Request::Surface(
-        crate::protocols::wprs::surface_request_from_state(state),
+        crate::protocols::wprs::server_core::surface_request_from_state(state),
     ))])
 }
 
@@ -49,7 +49,7 @@ pub fn initial_messages(
 mod tests {
     use super::*;
 
-    use crate::protocols::wprs::ClientId;
+    use crate::protocols::wprs::types::ClientId;
     use crate::protocols::wprs::wayland::WlSurfaceId;
 
     fn dummy_surface_state(id: u64) -> SurfaceState {

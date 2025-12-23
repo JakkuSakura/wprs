@@ -1,8 +1,8 @@
 use wprs::prelude::*;
-use wprs::protocols::wprs::Endpoint;
-use wprs::protocols::wprs::Event;
-use wprs::protocols::wprs::Request;
-use wprs::protocols::wprs::Serializer;
+use wprs::protocols::wprs::endpoint::Endpoint;
+use wprs::protocols::wprs::serializer::Serializer;
+use wprs::protocols::wprs::types::Event;
+use wprs::protocols::wprs::types::Request;
 use wprs::server;
 use wprs::server::backends::mock;
 

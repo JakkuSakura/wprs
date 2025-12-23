@@ -11,7 +11,7 @@ use crate::client::backends::wayland::ClientOptions;
 use crate::client::backends::wayland::WprsClientState;
 use crate::prelude::*;
 use crate::protocols::wprs as proto;
-use crate::protocols::wprs::Serializer;
+use crate::protocols::wprs::serializer::Serializer;
 
 #[derive(Debug)]
 pub struct WaylandClientBackend {
@@ -45,13 +45,13 @@ impl ClientBackend for WaylandClientBackend {
         "wayland"
     }
 
-    fn run(self: Box<Self>, serializer: Serializer<proto::Event, proto::Request>) -> Result<()> {
+    fn run(self: Box<Self>, serializer: Serializer<proto::types::Event, proto::types::Request>) -> Result<()> {
         run_wayland(serializer, self.config, self.conn).location(loc!())
     }
 }
 
 fn run_wayland(
-    mut serializer: Serializer<proto::Event, proto::Request>,
+    mut serializer: Serializer<proto::types::Event, proto::types::Request>,
     config: ClientBackendConfig,
     conn: Connection,
 ) -> Result<()> {

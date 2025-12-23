@@ -85,13 +85,13 @@ use super::WprsServerState;
 use super::smithay_handlers::DndGrab;
 use crate::config;
 use crate::prelude::*;
-use crate::protocols::wprs::DisplayConfig;
-use crate::protocols::wprs::Event;
-use crate::protocols::wprs::RecvType;
-use crate::protocols::wprs::Request;
-use crate::protocols::wprs::SendType;
-use crate::protocols::wprs::Backend;
-use crate::protocols::wprs::dispatch_event;
+use crate::protocols::wprs::types::DisplayConfig;
+use crate::protocols::wprs::types::Event;
+use crate::protocols::wprs::serializer::RecvType;
+use crate::protocols::wprs::types::Request;
+use crate::protocols::wprs::serializer::SendType;
+use crate::protocols::wprs::server_core::Backend;
+use crate::protocols::wprs::server_core::dispatch_event;
 use crate::protocols::wprs::handshake;
 use crate::protocols::wprs::wayland::DataDestinationEvent;
 use crate::protocols::wprs::wayland::DataEvent;
@@ -952,7 +952,7 @@ impl WprsServerState {
         });
 
         for msg in handshake::initial_messages(
-            crate::protocols::wprs::Capabilities {
+            crate::protocols::wprs::types::Capabilities {
                 xwayland: self.xwayland_enabled,
             },
             DisplayConfig::default(),

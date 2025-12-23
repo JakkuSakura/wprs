@@ -13,10 +13,10 @@
 // limitations under the License.
 
 use crate::prelude::*;
-use crate::protocols::wprs::DisplayConfig;
-use crate::protocols::wprs::Event;
-use crate::protocols::wprs::Request;
-use crate::protocols::wprs::SendType;
+use crate::protocols::wprs::types::DisplayConfig;
+use crate::protocols::wprs::types::Event;
+use crate::protocols::wprs::types::Request;
+use crate::protocols::wprs::serializer::SendType;
 use crate::protocols::wprs::transport::TransportEvent;
 use crate::protocols::wprs::wayland::DataEvent;
 use crate::protocols::wprs::wayland::KeyboardEvent;
@@ -50,7 +50,7 @@ impl Core {
         surfaces: impl IntoIterator<Item = crate::protocols::wprs::wayland::SurfaceState>,
     ) -> Result<Vec<SendType<Request>>> {
         handshake::initial_messages(
-            crate::protocols::wprs::Capabilities {
+            crate::protocols::wprs::types::Capabilities {
                 xwayland: self.xwayland_enabled,
             },
             DisplayConfig::default(),

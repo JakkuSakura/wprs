@@ -22,39 +22,8 @@ pub mod xdg_shell;
 pub mod client_sync;
 pub mod handshake;
 
-mod endpoint;
-mod raw_buffer;
-mod serializer;
-mod server_core;
-mod types;
-
-pub use endpoint::ClientTransportGuard;
-pub use endpoint::Endpoint;
-pub use endpoint::SshDestination;
-pub use endpoint::setup_client_transport;
-
-pub use raw_buffer::RawBufferHeader;
-pub use raw_buffer::RawBufferKind;
-pub use raw_buffer::RawBufferMessage;
-pub use raw_buffer::RawBufferPayload;
-
-pub use serializer::MessageType;
-pub use serializer::RecvType;
-pub use serializer::SendType;
-pub use serializer::Serializable;
-pub use serializer::Serializer;
-pub use serializer::SerializerClientOptions;
-pub use serializer::new_inproc_serializer_pair;
-
-pub use server_core::Backend;
-pub use server_core::Core;
-pub use server_core::dispatch_event;
-pub use server_core::surface_request_from_state;
-
-pub use types::Capabilities;
-pub use types::ClientId;
-pub use types::DisplayConfig;
-pub use types::Event;
-pub use types::ObjectId;
-pub use types::Request;
-pub use types::hash;
+pub mod endpoint;
+pub mod raw_buffer;
+pub mod serializer;
+pub mod server_core;
+pub mod types;

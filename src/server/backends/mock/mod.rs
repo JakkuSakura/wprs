@@ -2,9 +2,9 @@ use std::path::PathBuf;
 use clap::Parser;
 
 use crate::prelude::*;
-use crate::protocols::wprs::Capabilities;
-use crate::protocols::wprs::ClientId;
-use crate::protocols::wprs::Event;
+use crate::protocols::wprs::types::Capabilities;
+use crate::protocols::wprs::types::ClientId;
+use crate::protocols::wprs::types::Event;
 use crate::protocols::wprs::wayland::BufferFormat;
 use crate::protocols::wprs::wayland::BufferMetadata;
 use crate::protocols::wprs::wayland::WlSurfaceId;

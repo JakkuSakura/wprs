@@ -1,6 +1,6 @@
 use crate::prelude::*;
-use crate::protocols::wprs::Capabilities;
-use crate::protocols::wprs::Event;
+use crate::protocols::wprs::types::Capabilities;
+use crate::protocols::wprs::types::Event;
 use crate::server::runtime::backend::BackendObservation;
 use crate::server::runtime::backend::PollingBackend;
 

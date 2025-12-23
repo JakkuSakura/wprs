@@ -11,9 +11,9 @@ use smithay::reexports::wayland_server::Display;
 use smithay::wayland::socket::ListeningSocketSource;
 
 use crate::prelude::*;
-use crate::protocols::wprs::Event;
-use crate::protocols::wprs::Request;
-use crate::protocols::wprs::Serializer;
+use crate::protocols::wprs::types::Event;
+use crate::protocols::wprs::types::Request;
+use crate::protocols::wprs::serializer::Serializer;
 use crate::server::backends::wayland::smithay_handlers::ClientState;
 use super::WprsServerState;
 

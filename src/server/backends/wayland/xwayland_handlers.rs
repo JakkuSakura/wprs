@@ -15,9 +15,9 @@ use smithay::xwayland::xwm::WmWindowProperty;
 use smithay::xwayland::xwm::XwmId;
 
 use crate::prelude::*;
-use crate::protocols::wprs::ClientId;
-use crate::protocols::wprs::Request;
-use crate::protocols::wprs::SendType;
+use crate::protocols::wprs::types::ClientId;
+use crate::protocols::wprs::types::Request;
+use crate::protocols::wprs::serializer::SendType;
 use crate::protocols::wprs::wayland::Role;
 use crate::protocols::wprs::wayland::WlSurfaceId;
 use crate::protocols::wprs::xdg_shell::ToplevelRequest;

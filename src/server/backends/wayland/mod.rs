@@ -48,10 +48,10 @@ use smithay::wayland::xwayland_shell::XWaylandShellState;
 use smithay::xwayland::X11Wm;
 
 use crate::prelude::*;
-use crate::protocols::wprs::Event;
-use crate::protocols::wprs::Request;
-use crate::protocols::wprs::SendType;
-use crate::protocols::wprs::Serializer;
+use crate::protocols::wprs::types::Event;
+use crate::protocols::wprs::types::Request;
+use crate::protocols::wprs::serializer::SendType;
+use crate::protocols::wprs::serializer::Serializer;
 use crate::protocols::wprs::wayland::SurfaceRequest;
 use crate::protocols::wprs::wayland::SurfaceRequestPayload;
 use crate::protocols::wprs::wayland::SurfaceState;

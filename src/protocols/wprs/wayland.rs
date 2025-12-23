@@ -76,7 +76,8 @@ use smithay_client_toolkit::seat::pointer::PointerEvent as SctkPointerEvent;
 #[cfg(feature = "wayland-client")]
 use smithay_client_toolkit::seat::pointer::PointerEventKind as SctkPointerEventKind;
 
-use super::ClientId;
+use crate::protocols::wprs::types::ClientId;
+use crate::protocols::wprs::types::hash;
 use super::geometry::Point;
 use super::geometry::Size;
 use super::tuple::Tuple2;
@@ -106,14 +107,14 @@ pub use crate::models::surface::WlSurfaceId;
 impl WlSurfaceId {
     #[cfg(feature = "wayland")]
     pub fn new(wl_surface: &WlSurface) -> Self {
-        Self(super::hash(&wl_surface.id()))
+        Self(hash(&wl_surface.id()))
     }
 }
 
 #[cfg(feature = "wayland")]
 impl From<&backend::ObjectId> for WlSurfaceId {
     fn from(object_id: &backend::ObjectId) -> Self {
-        Self(super::hash(object_id))
+        Self(hash(object_id))
     }
 }
 
@@ -129,7 +130,7 @@ impl ClientSurface {
 
 impl SubSurfaceId {
     pub fn new(subsurface_id: &WlSurfaceId) -> Self {
-        Self(super::hash(&subsurface_id))
+        Self(hash(&subsurface_id))
     }
 }
 

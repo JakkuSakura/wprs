@@ -103,11 +103,11 @@ use smithay::xwayland::XWaylandClientData;
 use super::LockedSurfaceState;
 use super::WprsServerState;
 use crate::prelude::*;
-use crate::protocols::wprs::ClientId;
-use crate::protocols::wprs::Request;
-use crate::protocols::wprs::SendType;
-use crate::protocols::wprs::Backend;
-use crate::protocols::wprs::dispatch_event;
+use crate::protocols::wprs::types::ClientId;
+use crate::protocols::wprs::types::Request;
+use crate::protocols::wprs::serializer::SendType;
+use crate::protocols::wprs::server_core::Backend;
+use crate::protocols::wprs::server_core::dispatch_event;
 use crate::protocols::wprs::handshake;
 use crate::protocols::wprs::tuple::Tuple2;
 use crate::protocols::wprs::wayland::BufferAssignment;
@@ -891,9 +891,9 @@ pub fn commit_impl(
             state
                 .serializer
                 .writer()
-                .send(SendType::RawBuffer(crate::protocols::wprs::RawBufferPayload {
+                .send(SendType::RawBuffer(crate::protocols::wprs::raw_buffer::RawBufferPayload {
                     surface: surface_state_to_send.id,
-                    kind: crate::protocols::wprs::RawBufferKind::FilteredBgra,
+                    kind: crate::protocols::wprs::raw_buffer::RawBufferKind::FilteredBgra,
                     shards: raw_buffer_to_send,
                 }));
         },

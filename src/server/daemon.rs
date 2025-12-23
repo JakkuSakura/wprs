@@ -6,12 +6,12 @@ use std::time::Duration;
 use crate::prelude::*;
 use crate::protocols::wctl;
 use crate::protocols::wctl::Endpoint as WctlEndpoint;
-use crate::protocols::wprs::Endpoint as WprsEndpoint;
+use crate::protocols::wprs::endpoint::Endpoint as WprsEndpoint;
 #[cfg(feature = "rdp")]
-use crate::protocols::wprs::Endpoint;
-use crate::protocols::wprs::Event as ProtoEvent;
-use crate::protocols::wprs::Request as ProtoRequest;
-use crate::protocols::wprs::Serializer;
+use crate::protocols::wprs::endpoint::Endpoint;
+use crate::protocols::wprs::types::Event as ProtoEvent;
+use crate::protocols::wprs::types::Request as ProtoRequest;
+use crate::protocols::wprs::serializer::Serializer;
 use crate::server::backends;
 use crate::server::config::IntegrationMode;
 use crate::server::config::WprsdBackend;

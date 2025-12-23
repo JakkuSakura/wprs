@@ -29,7 +29,7 @@ use super::WprsClientState;
 use super::smithay_handlers::SubSurfaceData;
 use crate::utils::fallible_entry::FallibleEntryExt;
 use crate::prelude::*;
-use crate::protocols::wprs::ClientId;
+use crate::protocols::wprs::types::ClientId;
 use crate::protocols::wprs::wayland::SubSurfaceState;
 use crate::protocols::wprs::wayland::SubsurfacePosition;
 use crate::protocols::wprs::wayland::SurfaceState;

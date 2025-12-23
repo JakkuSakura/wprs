@@ -31,7 +31,7 @@ mod wayland_server_impl {
     use crate::client::config::WprscConfig;
     use crate::prelude::*;
     use crate::protocols::wprs as proto;
-    use crate::protocols::wprs::Serializer;
+    use crate::protocols::wprs::serializer::Serializer;
     use crate::protocols::wprs::transport;
     use crate::server::backends::wayland::backend::WaylandSmithayBackend;
     use crate::server::backends::wayland::backend::WaylandSmithayBackendConfig;
@@ -65,7 +65,7 @@ mod wayland_server_impl {
         let server_socket = internal_socket.clone();
         let server_wayland_display = wayland_display.clone();
         thread::spawn(move || {
-            let serializer: Serializer<proto::Request, proto::Event> =
+            let serializer: Serializer<proto::types::Request, proto::types::Event> =
                 warn_and_return!(Serializer::new_server(&server_socket));
 
             let backend = WaylandSmithayBackend::new(WaylandSmithayBackendConfig {
@@ -81,11 +81,11 @@ mod wayland_server_impl {
         });
 
         // Connect the local presentation backend as a wprs client.
-        let serializer_options = proto::SerializerClientOptions {
+        let serializer_options = proto::serializer::SerializerClientOptions {
             auto_reconnect: true,
-            on_connect: vec![proto::SendType::Object(proto::Event::WprsClientConnect)],
+            on_connect: vec![proto::serializer::SendType::Object(proto::types::Event::WprsClientConnect)],
         };
-        let serializer: Serializer<proto::Event, proto::Request> =
+        let serializer: Serializer<proto::types::Event, proto::types::Request> =
             Serializer::new_client_with_options(&internal_socket, serializer_options)
                 .with_context(loc!(), || {
                     format!("failed to connect to internal wprs socket {internal_socket:?}")
@@ -143,7 +143,7 @@ mod wayland_server_impl {
             };
             serializer
                 .writer()
-                .send(proto::SendType::Object(proto::Event::Transport(
+                .send(proto::serializer::SendType::Object(proto::types::Event::Transport(
                     transport::TransportEvent::ClientHello(hello),
                 )));
         }

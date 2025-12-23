@@ -3,7 +3,7 @@ use rkyv::Archive;
 use rkyv::Deserialize;
 use rkyv::Serialize;
 
-use crate::protocols::wprs::ClientId;
+use crate::protocols::wprs::types::ClientId;
 use crate::protocols::wprs::geometry::Point;
 use crate::protocols::wprs::geometry::Rectangle;
 use crate::protocols::wprs::geometry::Size;

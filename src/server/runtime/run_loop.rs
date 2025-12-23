@@ -12,11 +12,11 @@ use calloop::timer::Timer;
 use crate::utils::buffer_pointer::BufferPointer;
 use crate::utils::filtering;
 use crate::prelude::*;
-use crate::protocols::wprs::Event;
-use crate::protocols::wprs::RecvType;
-use crate::protocols::wprs::Request;
-use crate::protocols::wprs::SendType;
-use crate::protocols::wprs::Serializer;
+use crate::protocols::wprs::types::Event;
+use crate::protocols::wprs::serializer::RecvType;
+use crate::protocols::wprs::types::Request;
+use crate::protocols::wprs::serializer::SendType;
+use crate::protocols::wprs::serializer::Serializer;
 use crate::protocols::wprs::handshake;
 use crate::protocols::wprs::transport;
 use crate::protocols::wprs::wayland::BufferAssignment;
@@ -173,7 +173,7 @@ fn encode_bgra_frame(
     tick_fps: u32,
     metadata: BufferMetadata,
     bgra: &[u8],
-) -> Result<(crate::protocols::wprs::RawBufferKind, CompressedShards)> {
+) -> Result<(crate::protocols::wprs::raw_buffer::RawBufferKind, CompressedShards)> {
     let expected_len = metadata.len();
     ensure!(
         bgra.len() == expected_len,
@@ -221,7 +221,7 @@ fn encode_bgra_frame(
                 .encode(bgra, metadata.stride as usize)
                 .location(loc!())?;
             Ok((
-                crate::protocols::wprs::RawBufferKind::H264,
+                crate::protocols::wprs::raw_buffer::RawBufferKind::H264,
                 CompressedShards::single_uncompressed(encoded),
             ))
         }
@@ -234,7 +234,7 @@ fn encode_bgra_frame(
             )
             .location(loc!())?;
             Ok((
-                crate::protocols::wprs::RawBufferKind::Png,
+                crate::protocols::wprs::raw_buffer::RawBufferKind::Png,
                 CompressedShards::single_uncompressed(png_bytes),
             ))
         }
@@ -247,19 +247,19 @@ fn encode_bgra_frame(
             )
             .location(loc!())?;
             Ok((
-                crate::protocols::wprs::RawBufferKind::Jpeg,
+                crate::protocols::wprs::raw_buffer::RawBufferKind::Jpeg,
                 CompressedShards::single_uncompressed(jpeg_bytes),
             ))
         }
         transport::TransportCodec::ShardedRaw => {
             let filtered = filtering::filter_to_vec4u8s(data);
             Ok((
-                crate::protocols::wprs::RawBufferKind::FilteredBgra,
+                crate::protocols::wprs::raw_buffer::RawBufferKind::FilteredBgra,
                 CompressedShards::single_uncompressed(filtered.into()),
             ))
         }
         _ => Ok((
-            crate::protocols::wprs::RawBufferKind::FilteredBgra,
+            crate::protocols::wprs::raw_buffer::RawBufferKind::FilteredBgra,
             filtering::filter_and_compress(data, compressor),
         )),
     }
@@ -325,7 +325,7 @@ fn apply_observation<B: PollingBackend>(
                 state
                     .serializer
                     .writer()
-                    .send(SendType::RawBuffer(crate::protocols::wprs::RawBufferPayload {
+                    .send(SendType::RawBuffer(crate::protocols::wprs::raw_buffer::RawBufferPayload {
                         surface: surface.id,
                         kind,
                         shards,

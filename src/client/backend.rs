@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use crate::client::config;
 use crate::prelude::*;
 use crate::protocols::wprs as proto;
-use crate::protocols::wprs::Serializer;
+use crate::protocols::wprs::serializer::Serializer;
 
 #[derive(Debug, Clone)]
 pub struct ClientBackendConfig {
@@ -18,7 +18,7 @@ pub struct ClientBackendConfig {
 pub trait ClientBackend {
     fn name(&self) -> &'static str;
 
-    fn run(self: Box<Self>, serializer: Serializer<proto::Event, proto::Request>) -> Result<()>;
+    fn run(self: Box<Self>, serializer: Serializer<proto::types::Event, proto::types::Request>) -> Result<()>;
 }
 
 fn build_winit_wgpu_backend(config: ClientBackendConfig) -> Result<Box<dyn ClientBackend>> {

@@ -9,7 +9,9 @@ use crate::client::config::WprscConfig;
 use crate::client::config::WprscRole;
 use crate::prelude::*;
 use crate::protocols::wprs as proto;
-use crate::protocols::wprs::Serializer;
+use crate::protocols::wprs::endpoint::Endpoint;
+use crate::protocols::wprs::endpoint::setup_client_transport;
+use crate::protocols::wprs::serializer::Serializer;
 use crate::protocols::wprs::transport;
 
 pub fn run_wprsc(config: WprscConfig) -> Result<()> {
@@ -20,18 +22,18 @@ pub fn run_wprsc(config: WprscConfig) -> Result<()> {
 }
 
 pub fn run_client_for_endpoint(
-    endpoint: proto::Endpoint,
+    endpoint: Endpoint,
     client_backend: ClientBackend,
     backend_config: ClientBackendConfig,
 ) -> Result<()> {
     let client_backend = resolve_client_backend(client_backend).location(loc!())?;
 
-    let serializer_options = proto::SerializerClientOptions {
+    let serializer_options = proto::serializer::SerializerClientOptions {
         auto_reconnect: false,
-        on_connect: vec![proto::SendType::Object(proto::Event::WprsClientConnect)],
+        on_connect: vec![proto::serializer::SendType::Object(proto::types::Event::WprsClientConnect)],
     };
 
-    let serializer: Serializer<proto::Event, proto::Request> =
+    let serializer: Serializer<proto::types::Event, proto::types::Request> =
         Serializer::new_client_endpoint_with_options(endpoint, serializer_options)
             .location(loc!())?;
 
@@ -39,7 +41,7 @@ pub fn run_client_for_endpoint(
 }
 
 pub fn run_client_for_serializer(
-    serializer: Serializer<proto::Event, proto::Request>,
+    serializer: Serializer<proto::types::Event, proto::types::Request>,
     client_backend: ClientBackend,
     backend_config: ClientBackendConfig,
 ) -> Result<()> {
@@ -82,7 +84,7 @@ pub fn run_client_for_serializer(
         };
         serializer
             .writer()
-            .send(proto::SendType::Object(proto::Event::Transport(
+            .send(proto::serializer::SendType::Object(proto::types::Event::Transport(
                 transport::TransportEvent::ClientHello(hello),
             )));
     }
@@ -98,7 +100,7 @@ fn run_viewer(config: WprscConfig) -> Result<()> {
             .ok_or_else(|| anyhow!("--forward-only requires --endpoint=ssh://..."))
             .location(loc!())?;
 
-        let (local_endpoint, guard) = proto::setup_client_transport(endpoint).location(loc!())?;
+        let (local_endpoint, guard) = setup_client_transport(endpoint).location(loc!())?;
         let _guard = guard
             .ok_or_else(|| anyhow!("--forward-only requires an ssh:// endpoint"))
             .location(loc!())?;
@@ -109,12 +111,12 @@ fn run_viewer(config: WprscConfig) -> Result<()> {
         }
     }
 
-    let serializer_options = proto::SerializerClientOptions {
+    let serializer_options = proto::serializer::SerializerClientOptions {
         auto_reconnect: config.auto_reconnect,
-        on_connect: vec![proto::SendType::Object(proto::Event::WprsClientConnect)],
+        on_connect: vec![proto::serializer::SendType::Object(proto::types::Event::WprsClientConnect)],
     };
 
-    let serializer: Serializer<proto::Event, proto::Request> =
+    let serializer: Serializer<proto::types::Event, proto::types::Request> =
         match &config.endpoint {
             Some(endpoint) => {
                 Serializer::new_client_endpoint_with_options(endpoint.clone(), serializer_options)
@@ -181,7 +183,7 @@ fn run_viewer(config: WprscConfig) -> Result<()> {
         };
         serializer
             .writer()
-            .send(proto::SendType::Object(proto::Event::Transport(
+            .send(proto::serializer::SendType::Object(proto::types::Event::Transport(
                 transport::TransportEvent::ClientHello(hello),
             )));
     }

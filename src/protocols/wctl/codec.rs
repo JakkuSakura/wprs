@@ -8,7 +8,7 @@ use rkyv::rancor::Error as RancorError;
 use rkyv::util::AlignedVec;
 
 use crate::prelude::*;
-use crate::protocols::wprs::Serializable;
+use crate::protocols::wprs::serializer::Serializable;
 use crate::protocols::wprs::framing::Framed;
 
 pub fn send<T>(stream: &mut impl Write, msg: &T) -> Result<()>
