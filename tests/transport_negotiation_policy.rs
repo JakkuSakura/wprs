@@ -38,6 +38,12 @@ fn hello_clarity_png() -> transport::ClientHello {
     hello
 }
 
+fn hello_with_goal(goal: transport::UsageGoal, codecs: Vec<transport::TransportCodec>) -> transport::ClientHello {
+    let mut hello = hello_with_codecs(codecs);
+    hello.preferences.usage_goal = Some(goal);
+    hello
+}
+
 #[test]
 fn global_default_prefers_sharded_zstd() {
     let hello = hello_with_codecs(vec![
@@ -118,3 +124,43 @@ fn surface_small_can_use_png_for_clarity() {
     assert_eq!(cfg.codec, transport::TransportCodec::Png);
 }
 
+#[test]
+fn usage_goal_gaming_prefers_h264_globally() {
+    let hello = hello_with_goal(
+        transport::UsageGoal::Gaming,
+        vec![
+            transport::TransportCodec::ShardedZstd { level: 1 },
+            transport::TransportCodec::H264,
+        ],
+    );
+    let cfg = transport_policy::select_global_transport_config(&hello, None);
+    assert_eq!(cfg.codec, transport::TransportCodec::H264);
+}
+
+#[test]
+fn usage_goal_office_prefers_png_over_lossy_codecs() {
+    let hello = hello_with_goal(
+        transport::UsageGoal::Office,
+        vec![
+            transport::TransportCodec::ShardedZstd { level: 1 },
+            transport::TransportCodec::H264,
+            transport::TransportCodec::Png,
+        ],
+    );
+    let cfg = transport_policy::select_global_transport_config(&hello, None);
+    assert_eq!(cfg.codec, transport::TransportCodec::Png);
+}
+
+#[test]
+fn usage_goal_media_prefers_png_over_jpeg() {
+    let hello = hello_with_goal(
+        transport::UsageGoal::Media,
+        vec![
+            transport::TransportCodec::ShardedZstd { level: 1 },
+            transport::TransportCodec::Jpeg,
+            transport::TransportCodec::Png,
+        ],
+    );
+    let cfg = transport_policy::select_global_transport_config(&hello, None);
+    assert_eq!(cfg.codec, transport::TransportCodec::Png);
+}

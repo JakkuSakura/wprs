@@ -31,6 +31,7 @@ impl Default for CpuFeatures {
 /// User preferences for transport tuning.
 #[derive(Debug, Clone, Eq, PartialEq, Archive, Deserialize, Serialize)]
 pub struct TransportPreferences {
+    pub usage_goal: Option<UsageGoal>,
     /// Optional target bitrate hint, in kilobits/sec.
     pub target_bitrate_kbps: Option<u32>,
     /// Optional max RTT hint, in milliseconds.
@@ -43,6 +44,16 @@ pub struct TransportPreferences {
     pub bandwidth_weight: u8,
     pub cpu_weight: u8,
     pub clarity_weight: u8,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Archive, Deserialize, Serialize)]
+pub enum UsageGoal {
+    /// Maximize bandwidth utilization and minimize latency; allow drops and lossiness.
+    Gaming,
+    /// Maximize clarity while tolerating drops; avoid lossy codecs when possible.
+    Office,
+    /// Maximize clarity with compression; avoid drops and lossy codecs when possible.
+    Media,
 }
 
 /// Client-reported GPU / acceleration capabilities.
@@ -76,6 +87,7 @@ impl Default for GpuFeatures {
 impl Default for TransportPreferences {
     fn default() -> Self {
         Self {
+            usage_goal: None,
             target_bitrate_kbps: None,
             max_rtt_ms: None,
             latency_weight: 25,
