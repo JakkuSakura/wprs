@@ -148,7 +148,7 @@ pub fn select_surface_transport_config(
     global: &transport::TransportConfig,
     hello: Option<&transport::ClientHello>,
     stats: SurfaceDecisionInput,
-    surface: WlSurfaceId,
+    _surface: WlSurfaceId,
     metadata: &BufferMetadata,
 ) -> transport::TransportConfig {
     let mut cfg = global.clone();
@@ -179,11 +179,10 @@ pub fn select_surface_transport_config(
     };
 
     cfg.codec = select_codec_for_surface(hello, &profile, &network, &surface_hints);
-    cfg.max_fps = choose_max_fps(&profile, &network, &surface_hints, stats.client_max_fps)
+    cfg.max_fps = choose_max_fps(&profile, &network, stats.client_max_fps)
         .or(cfg.max_fps);
     cfg.buffer_patches = choose_buffer_patches(hello, &profile, &network, &surface_hints);
 
-    let _ = surface;
     cfg
 }
 
@@ -193,8 +192,6 @@ struct PreferenceProfile {
     cpu_weight: u8,
     clarity_weight: u8,
     allow_lossy: bool,
-    allow_droppy: bool,
-    prefer_compression: bool,
     selection_mode: transport::SelectionMode,
     dynamic_selection: bool,
     drop_tolerance: transport::DropTolerance,
@@ -248,8 +245,6 @@ fn preference_profile(prefs: &transport::TransportPreferences) -> PreferenceProf
         cpu_weight,
         clarity_weight,
         allow_lossy,
-        allow_droppy,
-        prefer_compression: true,
         selection_mode: prefs.selection_mode,
         dynamic_selection: prefs.selection_mode == transport::SelectionMode::Dynamic,
         drop_tolerance,
@@ -486,7 +481,6 @@ fn buffer_patch_dimension_scores(
 fn choose_max_fps(
     profile: &PreferenceProfile,
     network: &NetworkHints,
-    surface: &SurfaceHints,
     client_max_fps: Option<u32>,
 ) -> Option<u32> {
     let max_fps = client_max_fps?;
@@ -561,6 +555,7 @@ fn codec_dimension_scores(
     let clarity = profile.clarity_weight as i32;
     let cpu = profile.cpu_weight as i32;
     let large_surface = surface.large_surface;
+    let tiny_surface = surface.surface_px <= 320 * 240;
     let drop_avoid = profile.drop_tolerance == transport::DropTolerance::Avoid;
     let retransmit_avoid = profile.retransmit_policy == transport::RetransmitPolicy::Avoid;
     let estimated_fps = surface.estimated_fps.unwrap_or(0.0);
@@ -680,6 +675,9 @@ fn codec_dimension_scores(
             if large_surface {
                 score.bandwidth -= 20;
             }
+            if tiny_surface {
+                score.clarity += 10;
+            }
             if high_fps {
                 score.bandwidth -= 25;
             }
@@ -714,6 +712,9 @@ fn codec_dimension_scores(
             };
             if bandwidth_pressure {
                 score.bandwidth += 10;
+            }
+            if tiny_surface {
+                score.clarity += 5;
             }
             if high_fps {
                 score.latency += 5;

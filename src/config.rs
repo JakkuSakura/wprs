@@ -23,9 +23,7 @@ fn fallback_config_parent_dir() -> Result<PathBuf> {
 
 pub fn default_config_file_dir() -> PathBuf {
     Path::join(
-        &env::var("XDG_CONFIG_HOME")
-            .log(loc!())
-            .ok()
+        &env::var_os("XDG_CONFIG_HOME")
             .map(Into::into)
             .or(fallback_config_parent_dir().log(loc!()).ok())
             .unwrap_or_else(|| "/etc".into()),
