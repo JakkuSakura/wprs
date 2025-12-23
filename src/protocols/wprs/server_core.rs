@@ -27,9 +27,7 @@ use crate::protocols::wprs::wayland::SurfaceEvent;
 use crate::protocols::wprs::wayland::SurfaceRequest;
 use crate::protocols::wprs::xdg_shell::PopupEvent;
 use crate::protocols::wprs::xdg_shell::ToplevelEvent;
-
-pub mod handshake;
-pub mod client_sync;
+use crate::protocols::wprs::handshake;
 
 /// Platform-neutral server core.
 ///

@@ -90,7 +90,9 @@ use crate::protocols::wprs::Event;
 use crate::protocols::wprs::RecvType;
 use crate::protocols::wprs::Request;
 use crate::protocols::wprs::SendType;
-use crate::protocols::wprs::core;
+use crate::protocols::wprs::Backend;
+use crate::protocols::wprs::dispatch_event;
+use crate::protocols::wprs::handshake;
 use crate::protocols::wprs::wayland::DataDestinationEvent;
 use crate::protocols::wprs::wayland::DataEvent;
 use crate::protocols::wprs::wayland::DataRequest;
@@ -949,7 +951,7 @@ impl WprsServerState {
             surfaces.push(surface_state);
         });
 
-        for msg in core::handshake::initial_messages(
+        for msg in handshake::initial_messages(
             crate::protocols::wprs::Capabilities {
                 xwayland: self.xwayland_enabled,
             },
@@ -1308,7 +1310,7 @@ impl WprsServerState {
     pub fn handle_event(&mut self, event: RecvType<Event>) {
         match event {
             RecvType::Object(Event::WprsClientConnect) => self.handle_connect(),
-            RecvType::Object(other) => core::dispatch_event(self, other),
+            RecvType::Object(other) => dispatch_event(self, other),
             RecvType::RawBuffer(_) => unreachable!(),
         }
             .log_and_ignore(loc!());
@@ -1316,7 +1318,7 @@ impl WprsServerState {
     }
 }
 
-impl core::Backend for WprsServerState {
+impl Backend for WprsServerState {
     fn on_toplevel_event(&mut self, event: ToplevelEvent) -> Result<()> {
         self.handle_toplevel(event)
     }

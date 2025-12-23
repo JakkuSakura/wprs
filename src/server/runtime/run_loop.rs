@@ -17,7 +17,7 @@ use crate::protocols::wprs::RecvType;
 use crate::protocols::wprs::Request;
 use crate::protocols::wprs::SendType;
 use crate::protocols::wprs::Serializer;
-use crate::protocols::wprs::core::handshake;
+use crate::protocols::wprs::handshake;
 use crate::protocols::wprs::transport;
 use crate::protocols::wprs::wayland::BufferAssignment;
 use crate::protocols::wprs::wayland::BufferData;

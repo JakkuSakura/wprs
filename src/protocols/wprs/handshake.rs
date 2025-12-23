@@ -26,7 +26,7 @@ use crate::protocols::wprs::wayland::SurfaceState;
 /// transport layer.
 pub fn surface_messages(state: SurfaceState) -> Result<Vec<SendType<Request>>> {
     Ok(vec![SendType::Object(Request::Surface(
-        super::surface_request_from_state(state),
+        crate::protocols::wprs::surface_request_from_state(state),
     ))])
 }
 
@@ -99,4 +99,3 @@ mod tests {
         assert!(matches!(msgs[3], SendType::Object(Request::Surface(_))));
     }
 }
-

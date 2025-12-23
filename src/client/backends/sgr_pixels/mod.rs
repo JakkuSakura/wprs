@@ -67,7 +67,9 @@ struct TerminalPresenter {
 impl TerminalPresenter {
     fn new() -> Result<Self> {
         let termwiz_caps = termwiz::caps::Capabilities::new_from_env().location(loc!())?;
-        let mut terminal = termwiz::terminal::new_terminal(termwiz_caps).location(loc!())?;
+        let mut terminal = Box::new(
+            termwiz::terminal::new_terminal(termwiz_caps).location(loc!())?,
+        );
         let size = terminal.get_screen_size().location(loc!())?;
         ensure!(
             size.cols > 0 && size.rows > 0,
@@ -215,13 +217,13 @@ fn run_event_loop(mut serializer: Serializer<proto::Event, proto::Request>) -> R
 
     struct State {
         presenter: TerminalPresenter,
-        client_sync: crate::protocols::wprs::core::client_sync::ClientSync,
+        client_sync: crate::protocols::wprs::client_sync::ClientSync,
     }
 
     let mut loop_: CalloopEventLoop<State> = CalloopEventLoop::try_new().location(loc!())?;
     let mut state = State {
         presenter: TerminalPresenter::new().location(loc!())?,
-        client_sync: crate::protocols::wprs::core::client_sync::ClientSync::new(),
+            client_sync: crate::protocols::wprs::client_sync::ClientSync::new(),
     };
 
     loop_

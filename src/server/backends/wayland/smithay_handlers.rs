@@ -106,7 +106,9 @@ use crate::prelude::*;
 use crate::protocols::wprs::ClientId;
 use crate::protocols::wprs::Request;
 use crate::protocols::wprs::SendType;
-use crate::protocols::wprs::core;
+use crate::protocols::wprs::Backend;
+use crate::protocols::wprs::dispatch_event;
+use crate::protocols::wprs::handshake;
 use crate::protocols::wprs::tuple::Tuple2;
 use crate::protocols::wprs::wayland::BufferAssignment;
 use crate::protocols::wprs::wayland::Buffer;
@@ -403,7 +405,7 @@ impl XdgShellHandler for WprsServerState {
             }
 
             let surface_state_to_send = surface_state.clone_without_buffer();
-            for msg in log_and_return!(core::handshake::surface_messages(surface_state_to_send)) {
+            for msg in log_and_return!(handshake::surface_messages(surface_state_to_send)) {
                 self.serializer.writer().send(msg);
             }
         });
@@ -926,7 +928,7 @@ pub fn commit_impl(
         .collect();
     surface_state_to_send.damage = Some(damage);
 
-    for msg in core::handshake::surface_messages(surface_state_to_send).location(loc!())? {
+    for msg in handshake::surface_messages(surface_state_to_send).location(loc!())? {
         state.serializer.writer().send(msg);
     }
     Ok(true)
