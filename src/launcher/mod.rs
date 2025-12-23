@@ -4,7 +4,6 @@ use std::path::PathBuf;
 use std::process;
 use std::process::Command;
 use std::thread::JoinHandle;
-use std::time;
 use std::time::Duration;
 
 use anyhow::ensure;
@@ -296,9 +295,11 @@ fn default_wctl_probe_endpoint() -> wctl::Endpoint {
 fn default_embedded_wctl_endpoint() -> wctl::Endpoint {
     #[cfg(unix)]
     {
-        let dir = unique_runtime_dir();
         return wctl::Endpoint::Unix {
-            path: dir.join("wprsd-ctrl.sock"),
+            path: std::env::temp_dir().join(format!(
+                "wrun-{}-ctrl.sock",
+                std::process::id()
+            )),
         };
     }
     #[cfg(not(unix))]
@@ -307,20 +308,6 @@ fn default_embedded_wctl_endpoint() -> wctl::Endpoint {
             addr: std::net::SocketAddr::from(([127, 0, 0, 1], 48200)),
         }
     }
-}
-
-fn unique_runtime_dir() -> PathBuf {
-    let runtime = std::env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::temp_dir().join(whoami::username()));
-    let nanos = time::SystemTime::now()
-        .duration_since(time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    runtime
-        .join("wprs")
-        .join("wrun")
-        .join(format!("{}-{nanos}", process::id()))
 }
 
 fn derive_wprsd_config_for_wrun(
