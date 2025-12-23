@@ -2,10 +2,9 @@ use crate::prelude::*;
 use crate::protocols::wprs::raw_buffer::RawBufferKind;
 use crate::protocols::wprs::serializer::RecvType;
 use crate::protocols::wprs::types::Request;
-use crate::protocols::wprs::wayland::BufferAssignment;
+use crate::protocols::wprs::wayland::BitmapAssignment;
 use crate::protocols::wprs::wayland::SurfaceRequestPayload;
-use crate::protocols::wprs::wayland::UncompressedBufferData;
-use crate::utils::buffer_pointer::BufferPointer;
+use crate::protocols::wprs::wayland::BufferPoolHandle;
 use crate::utils::filtering;
 
 /// Client-side synchronizer for pairing `RawBuffer` frames with `Surface(Commit)` messages.
@@ -15,8 +14,8 @@ use crate::utils::filtering;
 /// association logic out of presentation backends.
 #[derive(Default)]
 pub struct ClientSync {
-    buffer_cache: std::collections::HashMap<crate::protocols::wprs::wayland::WlSurfaceId, UncompressedBufferData>,
-    legacy_last_buffer: Option<UncompressedBufferData>,
+    buffer_cache: std::collections::HashMap<crate::protocols::wprs::wayland::WlSurfaceId, BufferPoolHandle>,
+    legacy_last_buffer: Option<BufferPoolHandle>,
     #[cfg(feature = "video-h264")]
     h264_decoder: std::collections::HashMap<
         crate::protocols::wprs::wayland::WlSurfaceId,
@@ -40,9 +39,10 @@ impl ClientSync {
                 let surface = msg.header.surface;
                 match msg.header.kind {
                     RawBufferKind::FilteredBgra => {
-                        let data = UncompressedBufferData::from(
-                            crate::utils::vec4u8::Vec4u8s::from(msg.bytes),
-                        );
+                        let filtered = crate::utils::vec4u8::Vec4u8s::from(msg.bytes);
+                        let mut bgra = vec![0u8; filtered.len() * 4];
+                        filtering::unfilter(&filtered, &mut bgra);
+                        let data = BufferPoolHandle::from(bgra);
                         if let Some(surface) = surface {
                             self.buffer_cache.insert(surface, data);
                         } else {
@@ -68,11 +68,8 @@ impl ClientSync {
                         let Some(decoded) = decoded else {
                             return Ok(None);
                         };
-                        let ptr = decoded.bgra.as_ptr();
-                        let data = unsafe { BufferPointer::new(&ptr, decoded.bgra.len()) };
-                        let filtered = filtering::filter_to_vec4u8s(data);
-                        let data = UncompressedBufferData::from(filtered);
-                        self.buffer_cache.insert(surface, data);
+                        self.buffer_cache
+                            .insert(surface, BufferPoolHandle::from(decoded.bgra));
                     }
                     #[cfg(not(feature = "video-h264"))]
                     RawBufferKind::H264 => {
@@ -82,10 +79,7 @@ impl ClientSync {
                         let (_w, _h, bgra) =
                             crate::protocols::wprs::transport::decode_png_to_bgra(&msg.bytes)
                                 .location(loc!())?;
-                        let ptr = bgra.as_ptr();
-                        let data = unsafe { BufferPointer::new(&ptr, bgra.len()) };
-                        let filtered = filtering::filter_to_vec4u8s(data);
-                        let data = UncompressedBufferData::from(filtered);
+                        let data = BufferPoolHandle::from(bgra);
                         if let Some(surface) = surface {
                             self.buffer_cache.insert(surface, data);
                         } else {
@@ -96,10 +90,7 @@ impl ClientSync {
                         let (_w, _h, bgra) =
                             crate::protocols::wprs::transport::decode_jpeg_to_bgra(&msg.bytes)
                                 .location(loc!())?;
-                        let ptr = bgra.as_ptr();
-                        let data = unsafe { BufferPointer::new(&ptr, bgra.len()) };
-                        let filtered = filtering::filter_to_vec4u8s(data);
-                        let data = UncompressedBufferData::from(filtered);
+                        let data = BufferPoolHandle::from(bgra);
                         if let Some(surface) = surface {
                             self.buffer_cache.insert(surface, data);
                         } else {
@@ -125,15 +116,15 @@ impl ClientSync {
                     unreachable!()
                 };
 
-                if let Some(BufferAssignment::New(mut buf)) = state.buffer.take() {
-                    if buf.data.as_ref().len() * 4 != buf.metadata.len() {
+                if let Some(BitmapAssignment::New(mut buf)) = state.bitmap.take() {
+                    if buf.data.len() != buf.metadata.len() {
                         if let Some(cache) = self.buffer_cache.remove(&surface.surface) {
                             buf.data = cache;
                         } else if let Some(cache) = self.legacy_last_buffer.take() {
                             buf.data = cache;
                         }
                     }
-                    state.buffer = Some(BufferAssignment::New(buf));
+                    state.bitmap = Some(BitmapAssignment::New(buf));
                 }
 
                 surface.payload = SurfaceRequestPayload::Commit(state);

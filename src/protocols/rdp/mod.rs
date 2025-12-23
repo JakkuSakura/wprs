@@ -20,7 +20,6 @@ use ironrdp_server::RdpServerInputHandler;
 use ironrdp_server::tokio;
 use tokio::sync::mpsc;
 
-use crate::utils::filtering;
 use crate::prelude::*;
 use crate::protocols::wprs::endpoint::Endpoint;
 use crate::protocols::wprs::types::Event as ProtoEvent;
@@ -31,13 +30,13 @@ use crate::protocols::wprs::serializer::Serializer;
 use crate::protocols::wprs::serializer::SerializerClientOptions;
 use crate::protocols::wprs::wayland::AxisScroll;
 use crate::protocols::wprs::wayland::AxisSource;
-use crate::protocols::wprs::wayland::BufferAssignment;
+use crate::protocols::wprs::wayland::BitmapAssignment;
 use crate::protocols::wprs::wayland::KeyInner;
 use crate::protocols::wprs::wayland::KeyState;
 use crate::protocols::wprs::wayland::KeyboardEvent;
 use crate::protocols::wprs::wayland::PointerEvent;
 use crate::protocols::wprs::wayland::PointerEventKind;
-use crate::protocols::wprs::wayland::UncompressedBufferData;
+use crate::protocols::wprs::wayland::BufferPoolHandle;
 use crate::protocols::wprs::wayland::WlSurfaceId;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -349,7 +348,7 @@ pub fn run_bridge(
         std::thread::spawn(move || {
             let mut event_loop = calloop::EventLoop::try_new().expect("calloop init failed");
 
-            let mut buffer_cache: Option<UncompressedBufferData> = None;
+            let mut buffer_cache: Option<BufferPoolHandle> = None;
             let mut desktop_size = DesktopSize {
                 width: 1024,
                 height: 768,
@@ -361,9 +360,10 @@ pub fn run_bridge(
                     if let calloop::channel::Event::Msg(msg) = event {
                         match msg {
                             RecvType::RawBuffer(buf) => {
-                                buffer_cache = Some(UncompressedBufferData::from(
-                                    crate::utils::vec4u8::Vec4u8s::from(buf.bytes),
-                                ));
+                                let filtered = crate::utils::vec4u8::Vec4u8s::from(buf.bytes);
+                                let mut bgra = vec![0u8; filtered.len() * 4];
+                                filtering::unfilter(&filtered, &mut bgra);
+                                buffer_cache = Some(BufferPoolHandle::from(bgra));
                             }
                             RecvType::Object(ProtoRequest::Surface(surface)) => {
                                 if let crate::protocols::wprs::wayland::SurfaceRequestPayload::Commit(
@@ -388,27 +388,24 @@ pub fn run_bridge(
                                         return;
                                     }
 
-                                    if let Some(BufferAssignment::New(mut buf)) = state.buffer.take()
+                                    if let Some(BitmapAssignment::New(mut buf)) = state.bitmap.take()
                                     {
-                                        if buf.data.as_ref().len() * 4 != buf.metadata.len() {
+                                        if buf.data.len() != buf.metadata.len() {
                                             if let Some(cache) = buffer_cache.take() {
                                                 buf.data = cache;
                                             }
                                         }
 
-                                        let filtered = buf.data.as_ref();
+                                        let raw = buf.data.as_slice();
 
                                         let width = buf.metadata.width.max(1) as usize;
                                         let height = buf.metadata.height.max(1) as usize;
                                         let src_stride = buf.metadata.stride.max(1) as usize;
                                         let dst_stride = width * 4;
 
-                                        let mut unfiltered = vec![0u8; buf.metadata.len()];
-                                        filtering::unfilter(filtered, &mut unfiltered);
-
                                         let mut pixels = vec![0u8; dst_stride * height];
                                         for y in 0..height {
-                                            let src_row = &unfiltered
+                                            let src_row = &raw
                                                 [y * src_stride..y * src_stride + dst_stride];
                                             let dst_row = &mut pixels
                                                 [y * dst_stride..y * dst_stride + dst_stride];

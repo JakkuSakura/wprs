@@ -56,7 +56,6 @@ use smithay_client_toolkit::shm::slot::SlotPool;
 use smithay::reexports::wayland_protocols::wp::pointer_gestures::zv1::client::zwp_pointer_gestures_v1::ZwpPointerGesturesV1;
 
 use crate::constants;
-use crate::utils::filtering;
 use crate::prelude::*;
 use crate::protocols::wprs::types::Capabilities;
 use crate::protocols::wprs::types::ClientId;
@@ -67,18 +66,16 @@ use crate::protocols::wprs::serializer::Serializer;
 use crate::protocols::wprs::transport;
 use crate::protocols::wprs::geometry::Point;
 use crate::protocols::wprs::geometry::Rectangle;
-use crate::protocols::wprs::wayland::Buffer;
-use crate::protocols::wprs::wayland::BufferAssignment;
+use crate::protocols::wprs::wayland::Bitmap;
+use crate::protocols::wprs::wayland::BitmapAssignment;
 use crate::protocols::wprs::wayland::BufferMetadata;
 use crate::protocols::wprs::wayland::Region;
 use crate::protocols::wprs::wayland::SubsurfacePosition;
-use crate::protocols::wprs::wayland::UncompressedBufferData;
 use crate::protocols::wprs::wayland::ViewportState;
 use crate::protocols::wprs::wayland::WlSurfaceId;
 #[cfg(feature = "video-h264")]
 use crate::protocols::video::h264::H264Decoder;
 use crate::utils::client::SeatObject;
-use crate::utils::vec4u8::Vec4u8s;
 
 use super::smithay_handlers;
 use super::subsurface;
@@ -246,14 +243,14 @@ impl WprsClientState {
 #[derive(Debug)]
 pub struct RemoteBuffer {
     pub metadata: BufferMetadata,
-    pub data: std::sync::Arc<Vec4u8s>,
+    pub data: std::sync::Arc<Vec<u8>>,
     pub active_buffer: SlotBuffer,
     pub dirty: bool,
 }
 
 impl RemoteBuffer {
     #[allow(clippy::missing_panics_doc)]
-    pub fn new(buffer_msg: Buffer, pool: &mut SlotPool) -> Result<Self> {
+    pub fn new(buffer_msg: Bitmap, pool: &mut SlotPool) -> Result<Self> {
         let active_buffer = pool
             .create_buffer(
                 buffer_msg.metadata.width,
@@ -264,7 +261,7 @@ impl RemoteBuffer {
             .location(loc!())?
             .0;
 
-        let data = buffer_msg.data.into_uncompressed().unwrap().0;
+        let data = buffer_msg.data.0;
         Ok(Self {
             metadata: buffer_msg.metadata,
             data,
@@ -273,8 +270,8 @@ impl RemoteBuffer {
         })
     }
 
-    fn update_data(&mut self, buffer: Buffer) {
-        self.data = buffer.data.into_uncompressed().unwrap().0;
+    fn update_data(&mut self, buffer: Bitmap) {
+        self.data = buffer.data.0;
         self.dirty = true;
     }
 
@@ -299,7 +296,7 @@ impl RemoteBuffer {
                 pool.canvas(&self.active_buffer).location(loc!())?
             },
         };
-        filtering::unfilter(self.data.as_ref(), canvas);
+        canvas.copy_from_slice(self.data.as_ref());
         Ok(())
     }
 }
@@ -455,7 +452,7 @@ impl RemoteSurface {
     }
 
     #[instrument(skip(self, pool), level = "debug")]
-    fn set_buffer(&mut self, new_buffer: Buffer, pool: &mut SlotPool) -> Result<()> {
+    fn set_buffer(&mut self, new_buffer: Bitmap, pool: &mut SlotPool) -> Result<()> {
         let buffer = match &mut self.buffer {
             // Surface was previously committed.
             Some(buffer) => {
@@ -493,12 +490,12 @@ impl RemoteSurface {
     #[instrument(skip(self, pool), level = "debug")]
     pub fn apply_buffer(
         &mut self,
-        new_buffer: Option<BufferAssignment>,
+        new_buffer: Option<BitmapAssignment>,
         pool: &mut SlotPool,
     ) -> Result<()> {
         match new_buffer {
-            Some(BufferAssignment::New(mut new_buffer)) => {
-                if new_buffer.data.as_ref().len() * 4 != new_buffer.metadata.len() {
+            Some(BitmapAssignment::New(mut new_buffer)) => {
+                if new_buffer.data.len() != new_buffer.metadata.len() {
                     debug!(
                         "received buffer commit without inlined payload; skipping"
                     );
@@ -507,7 +504,7 @@ impl RemoteSurface {
 
                 self.set_buffer(new_buffer, pool).location(loc!())?;
             },
-            Some(BufferAssignment::Removed) => {
+            Some(BitmapAssignment::Removed) => {
                 self.clear_buffer();
             },
             None => {},

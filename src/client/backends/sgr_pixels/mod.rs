@@ -16,7 +16,6 @@ use crate::protocols::wprs as proto;
 use crate::protocols::wprs::serializer::RecvType;
 use crate::protocols::wprs::types::Request;
 use crate::protocols::wprs::serializer::Serializer;
-use crate::utils::filtering;
 
 const UPPER_HALF_BLOCK: &str = "▀";
 
@@ -106,7 +105,7 @@ impl TerminalPresenter {
     fn handle_message(&mut self, msg: RecvType<Request>) -> Result<()> {
         match msg {
             RecvType::Object(Request::Surface(surface)) => {
-                use proto::wayland::BufferAssignment;
+                use proto::wayland::BitmapAssignment;
                 use proto::wayland::Role;
                 use proto::wayland::SurfaceRequestPayload;
 
@@ -123,16 +122,13 @@ impl TerminalPresenter {
                     return Ok(());
                 }
 
-                let Some(BufferAssignment::New(buf)) = state.buffer.take() else {
+                let Some(BitmapAssignment::New(buf)) = state.bitmap.take() else {
                     return Ok(());
                 };
-                if buf.data.as_ref().len() * 4 != buf.metadata.len() {
+                if buf.data.len() != buf.metadata.len() {
                     return Ok(());
                 }
-                let filtered = buf.data.0.clone();
-
-                let mut rgba = vec![0u8; buf.metadata.len()];
-                filtering::unfilter(filtered.as_ref(), &mut rgba);
+                let mut rgba = buf.data.as_slice().to_vec();
                 bgra_to_rgba_in_place(&mut rgba);
 
                 self.refresh_size().location(loc!())?;

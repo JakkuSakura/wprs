@@ -14,20 +14,17 @@ use crate::protocols::wprs::serializer::SendType;
 use crate::protocols::wprs::serializer::Serializer;
 use crate::protocols::wprs::types::Event;
 use crate::protocols::wprs::types::Request;
-use crate::protocols::wprs::wayland::Buffer;
-use crate::protocols::wprs::wayland::BufferAssignment;
+use crate::protocols::wprs::wayland::Bitmap;
+use crate::protocols::wprs::wayland::BitmapAssignment;
 use crate::protocols::wprs::wayland::Role;
 use crate::protocols::wprs::wayland::SurfaceRequestPayload;
 use crate::protocols::wprs::wayland::SurfaceState;
-use crate::protocols::wprs::wayland::UncompressedBufferData;
+use crate::protocols::wprs::wayland::BufferPoolHandle;
 use crate::protocols::wprs::wayland::WlSurfaceId;
 use crate::protocols::wprs::xdg_shell;
 use crate::server::backend::BackendObservation;
 use crate::server::backend::BackendSurfaceRole;
 use crate::server::backend::PollingBackend;
-use crate::utils::buffer_pointer::BufferPointer;
-use crate::utils::filtering;
-use crate::utils::vec4u8::Vec4u8s;
 
 struct State<B> {
     backend: B,
@@ -36,14 +33,14 @@ struct State<B> {
 }
 
 struct SurfaceBufferPool {
-    slots: [Arc<Vec4u8s>; 3],
+    slots: [Arc<Vec<u8>>; 3],
     next_slot: usize,
     size_bytes: usize,
 }
 
 impl SurfaceBufferPool {
     fn new(size_bytes: usize) -> Self {
-        let make = || Arc::new(Vec4u8s::with_total_size(size_bytes));
+        let make = || Arc::new(vec![0; size_bytes]);
         Self {
             slots: [make(), make(), make()],
             next_slot: 0,
@@ -51,9 +48,9 @@ impl SurfaceBufferPool {
         }
     }
 
-    fn write_slot<F>(&mut self, size_bytes: usize, fill: F) -> Arc<Vec4u8s>
+    fn write_slot<F>(&mut self, size_bytes: usize, fill: F) -> Arc<Vec<u8>>
     where
-        F: FnOnce(&mut Vec4u8s),
+        F: FnOnce(&mut [u8]),
     {
         if size_bytes != self.size_bytes {
             *self = Self::new(size_bytes);
@@ -64,11 +61,11 @@ impl SurfaceBufferPool {
 
         let slot = &mut self.slots[idx];
         if Arc::strong_count(slot) > 1 {
-            *slot = Arc::new(Vec4u8s::with_total_size(size_bytes));
+            *slot = Arc::new(vec![0; size_bytes]);
         }
 
         let slot_mut = Arc::get_mut(slot).expect("buffer slot should be uniquely owned");
-        fill(slot_mut);
+        fill(slot_mut.as_mut_slice());
 
         slot.clone()
     }
@@ -97,7 +94,7 @@ fn send_initial_snapshot<B: PollingBackend>(state: &mut State<B>) -> Result<()> 
 
 fn surface_state_for_descriptor(
     surface: &crate::server::backend::BackendSurfaceDescriptor,
-    buffer: Option<BufferAssignment>,
+    bitmap: Option<BitmapAssignment>,
 ) -> SurfaceState {
     let role = match &surface.role {
         BackendSurfaceRole::XdgToplevel { id, title, app_id } => {
@@ -116,8 +113,8 @@ fn surface_state_for_descriptor(
     SurfaceState {
         client: surface.client,
         id: surface.id,
-        buffer,
-        buffer_update: None,
+        bitmap,
+        bitmap_update: None,
         role: Some(role),
         buffer_scale: surface.buffer_scale,
         buffer_transform: None,
@@ -134,27 +131,23 @@ fn surface_state_for_descriptor(
 fn apply_observation<B: PollingBackend>(state: &mut State<B>, obs: BackendObservation) -> Result<()> {
     match obs {
         BackendObservation::SurfaceCommit { surface, frame } => {
-            let buffer = frame.as_ref().map(|frame| {
+            let bitmap = frame.as_ref().map(|frame| {
                 let size_bytes = frame.metadata.len();
-                let bgra_ptr = frame.bgra.as_ptr();
-                // SAFETY: `bgra_ptr` points to `bgra.len()` bytes for the duration of this call.
-                let data = unsafe { BufferPointer::new(&bgra_ptr, frame.bgra.len()) };
                 let pool = state
                     .buffers
                     .entry(surface.id)
                     .or_insert_with(|| SurfaceBufferPool::new(size_bytes));
-                let slot =
-                    pool.write_slot(size_bytes, |slot_mut| {
-                        filtering::filter_to_vec4u8s_in_place(data, slot_mut);
-                    });
+                let slot = pool.write_slot(size_bytes, |slot_mut| {
+                    slot_mut.copy_from_slice(&frame.bgra);
+                });
 
-                BufferAssignment::New(Buffer {
+                BitmapAssignment::New(Bitmap {
                     metadata: frame.metadata,
-                    data: UncompressedBufferData::from(slot),
+                    data: BufferPoolHandle::from(slot),
                 })
             });
 
-            let state_to_send = surface_state_for_descriptor(&surface, buffer);
+            let state_to_send = surface_state_for_descriptor(&surface, bitmap);
             for msg in handshake::surface_messages(state_to_send).location(loc!())? {
                 state.serializer.writer().send(msg);
             }

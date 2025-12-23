@@ -110,8 +110,8 @@ use crate::protocols::wprs::server_core::Backend;
 use crate::protocols::wprs::server_core::dispatch_event;
 use crate::protocols::wprs::handshake;
 use crate::protocols::wprs::tuple::Tuple2;
-use crate::protocols::wprs::wayland::BufferAssignment;
-use crate::protocols::wprs::wayland::Buffer;
+use crate::protocols::wprs::wayland::Bitmap;
+use crate::protocols::wprs::wayland::BitmapAssignment;
 use crate::protocols::wprs::wayland::BufferMetadata;
 use crate::protocols::wprs::wayland::ClientSurface;
 use crate::protocols::wprs::wayland::CursorImage;
@@ -126,10 +126,9 @@ use crate::protocols::wprs::wayland::SubSurfaceState;
 use crate::protocols::wprs::wayland::SubsurfacePosition;
 use crate::protocols::wprs::wayland::SurfaceState;
 use crate::protocols::wprs::wayland::Transform;
-use crate::protocols::wprs::wayland::UncompressedBufferData;
+use crate::protocols::wprs::wayland::BufferPoolHandle;
 use crate::protocols::wprs::wayland::WlSurfaceId;
 use crate::utils::filtering;
-use crate::utils::vec4u8::Vec4u8s;
 use crate::protocols::wprs::xdg_shell::DecorationMode;
 use crate::protocols::wprs::xdg_shell::Move;
 use crate::protocols::wprs::xdg_shell::PopupRequest;
@@ -405,7 +404,7 @@ impl XdgShellHandler for WprsServerState {
                 return;
             }
 
-            let surface_state_to_send = surface_state.clone_without_buffer();
+            let surface_state_to_send = surface_state.clone_without_bitmap();
             for msg in log_and_return!(handshake::surface_messages(surface_state_to_send)) {
                 self.serializer.writer().send(msg);
             }
@@ -772,7 +771,7 @@ pub fn commit_impl(
         .0
         .lock()
         .unwrap();
-    let prev_without_buffer = surface_state.clone_without_buffer();
+    let prev_without_bitmap = surface_state.clone_without_bitmap();
 
     if matches!(surface_data.role, Some("subsurface")) && surface_state.role.is_none() {
         // TODO: figure out why some subsurfaces don't have parents. Probably a
@@ -862,9 +861,9 @@ pub fn commit_impl(
         None => {},
     }
 
-    // This needs to be a clone_without_buffer, the extra copy of the buffer
-    // data arc will cause a deadlock otherwise.
-    let mut surface_state_to_send = surface_state.clone_without_buffer();
+    // This needs to be a clone_without_bitmap; copying the bitmap payload
+    // across threads can deadlock the compositor buffer lock.
+    let mut surface_state_to_send = surface_state.clone_without_bitmap();
 
     // TODO: make a function and dedupe with compositor.rs.
     debug!("buffer assignment: {:?}", &surface_attributes.buffer);
@@ -884,9 +883,9 @@ pub fn commit_impl(
             let raw_buffer_to_send =
                 raw_buffer_to_send.ok_or_else(|| anyhow!("missing raw buffer payload"))?;
 
-            surface_state_to_send.buffer = Some(BufferAssignment::New(Buffer {
+            surface_state_to_send.bitmap = Some(BitmapAssignment::New(Bitmap {
                 metadata,
-                data: UncompressedBufferData::from(Vec4u8s::new()),
+                data: BufferPoolHandle::from(Vec::new()),
             }));
 
             state
@@ -899,11 +898,11 @@ pub fn commit_impl(
                 }));
         },
         Some(SmithayBufferAssignment::Removed) => {
-            surface_state.buffer = None;
-            surface_state_to_send.buffer = Some(BufferAssignment::Removed);
+            surface_state.bitmap = None;
+            surface_state_to_send.bitmap = Some(BitmapAssignment::Removed);
         },
         Some(SmithayBufferAssignment::NewBuffer(_)) | None => {
-            if (surface_state_to_send == prev_without_buffer) && !children_dirty {
+            if (surface_state_to_send == prev_without_bitmap) && !children_dirty {
                 return Ok(false);
             }
             if children_dirty && sync {

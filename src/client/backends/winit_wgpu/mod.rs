@@ -36,7 +36,6 @@ use crate::client::config::KeyboardMode;
 use crate::client::coords;
 use crate::client::coords::ServerBufferScale;
 use crate::client::coords::UiScaleFactor;
-use crate::utils::filtering;
 use crate::prelude::*;
 use crate::protocols::wprs as proto;
 use crate::protocols::wprs::types::ClientId;
@@ -54,7 +53,7 @@ use crate::protocols::wprs::wayland::{
 };
 use crate::protocols::wprs::transport;
 use crate::protocols::wprs::wayland::{
-    BufferAssignment, Mode, OutputEvent, OutputInfo, Subpixel, SurfaceRequest,
+    BitmapAssignment, Mode, OutputEvent, OutputInfo, Subpixel, SurfaceRequest,
     SurfaceRequestPayload, Transform, WlSurfaceId,
 };
 use crate::protocols::wprs::xdg_shell::XdgPopupState;
@@ -89,7 +88,7 @@ pub struct DecodedFrame {
 struct DecodeJob {
     surface_id: WlSurfaceId,
     metadata: crate::protocols::wprs::wayland::BufferMetadata,
-    filtered: std::sync::Arc<crate::utils::vec4u8::Vec4u8s>,
+    raw: std::sync::Arc<Vec<u8>>,
 }
 
 #[derive(Clone)]
@@ -465,22 +464,19 @@ fn align_up(value: usize, alignment: usize) -> usize {
     (value + alignment - 1) & !(alignment - 1)
 }
 
-fn decode_filtered_to_padded_bgra(
+fn decode_raw_to_padded_bgra(
     metadata: &crate::protocols::wprs::wayland::BufferMetadata,
-    filtered: &crate::utils::vec4u8::Vec4u8s,
+    raw: &[u8],
 ) -> (u32, Vec<u8>) {
     let width = metadata.width as usize;
     let height = metadata.height as usize;
     let src_stride = metadata.stride as usize;
     let row_bytes = width * 4;
 
-    let mut unfiltered = vec![0u8; metadata.len()];
-    filtering::unfilter(filtered, &mut unfiltered);
-
     let padded_row_bytes = align_up(row_bytes, 256);
     let mut padded = vec![0u8; padded_row_bytes * height];
     for y in 0..height {
-        let src = &unfiltered[y * src_stride..y * src_stride + row_bytes];
+        let src = &raw[y * src_stride..y * src_stride + row_bytes];
         let dst = &mut padded[y * padded_row_bytes..y * padded_row_bytes + row_bytes];
         dst.copy_from_slice(src);
     }
@@ -799,13 +795,13 @@ impl App {
         &self,
         surface_id: WlSurfaceId,
         metadata: crate::protocols::wprs::wayland::BufferMetadata,
-        filtered: std::sync::Arc<crate::utils::vec4u8::Vec4u8s>,
+        raw: std::sync::Arc<Vec<u8>>,
     ) {
         // If the receiver is gone, we are shutting down.
         let _ = self.decode_tx.send(DecodeJob {
             surface_id,
             metadata,
-            filtered,
+            raw,
         });
     }
 
@@ -1501,7 +1497,7 @@ impl App {
                     // We don't reserve a separate titlebar region: on macOS the titlebar is
                     // transparent and the remote content can be visible behind it.
 
-                    if let Some(BufferAssignment::New(buf)) = &state.buffer {
+                    if let Some(BitmapAssignment::New(buf)) = &state.bitmap {
                         let w = buf.metadata.width.max(1) as u32;
                         let h = buf.metadata.height.max(1) as u32;
                         let server_scale = state.buffer_scale.max(1) as f64;
@@ -1598,17 +1594,16 @@ impl App {
                 }
 
                 // Apply buffer if present.
-                if let Some(BufferAssignment::New(buf)) = state.buffer.take() {
-                    if buf.data.as_ref().len() * 4 != buf.metadata.len() {
+                if let Some(BitmapAssignment::New(buf)) = state.bitmap.take() {
+                    if buf.data.len() != buf.metadata.len() {
                         debug!(
                             "Received buffer commit without inlined payload; skipping frame for {surface_id:?}"
                         );
                         return Ok(());
                     }
-                    let filtered = buf.data.0.clone();
-                    // Unfiltering can be expensive on non-SIMD platforms; do it
-                    // off the winit/UI thread to keep the window responsive.
-                    self.schedule_decode(surface_id, buf.metadata, filtered);
+                    let raw = buf.data.0.clone();
+                    // Copy/pad on a worker thread to keep the window responsive.
+                    self.schedule_decode(surface_id, buf.metadata, raw);
                 }
                 Ok(())
             },
@@ -2144,7 +2139,7 @@ pub fn run(
         thread::spawn(move || {
             while let Ok(job) = decode_rx.recv() {
                 let (padded_row_bytes, padded) =
-                    decode_filtered_to_padded_bgra(&job.metadata, job.filtered.as_ref());
+                    decode_raw_to_padded_bgra(&job.metadata, job.raw.as_ref());
                 if decoded_frame_tx
                     .send(DecodedFrame {
                         surface_id: job.surface_id,

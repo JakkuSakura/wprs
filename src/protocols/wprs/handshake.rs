@@ -21,7 +21,7 @@ use crate::protocols::wprs::wayland::SurfaceState;
 
 /// Builds messages to represent a surface snapshot.
 ///
-/// Note: buffer payloads are intentionally not produced here. Frame data is
+/// Note: bitmap payloads are intentionally not produced here. Frame data is
 /// transported via `RawBuffer` messages and associated to surfaces by the
 /// transport layer.
 pub fn surface_messages(state: SurfaceState) -> Result<Vec<SendType<Request>>> {
@@ -56,8 +56,8 @@ mod tests {
         SurfaceState {
             client: ClientId(1),
             id: WlSurfaceId(id),
-            buffer: None,
-            buffer_update: None,
+            bitmap: None,
+            bitmap_update: None,
             role: None,
             buffer_scale: 1,
             buffer_transform: None,

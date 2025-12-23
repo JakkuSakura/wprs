@@ -11,7 +11,7 @@ use crate::protocols::wprs::geometry::Rectangle;
 use crate::protocols::wprs::geometry::Size;
 use crate::protocols::wprs::tuple::Tuple2;
 use crate::protocols::wprs::xdg_shell;
-use crate::utils::vec4u8::Vec4u8s;
+use crate::utils::vec4u8::Vec4u8;
 
 /// Stable surface identifier.
 #[derive(Archive, Deserialize, Serialize, Debug, Copy, Clone, Hash, Eq, PartialEq)]
@@ -56,37 +56,64 @@ impl BufferMetadata {
 }
 
 #[derive(Clone, Eq, PartialEq)]
-pub struct UncompressedBufferData(pub Arc<Vec4u8s>);
+pub struct BufferPoolHandle(pub Arc<Vec<u8>>);
 
-impl std::fmt::Debug for UncompressedBufferData {
+impl std::fmt::Debug for BufferPoolHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("UncompressedBufferData")
-            .field(&format_args!("Vec4u8s[{}]", self.0.len()))
+        f.debug_tuple("BufferPoolHandle")
+            .field(&format_args!("bytes[{}]", self.0.len()))
             .finish()
     }
 }
 
-impl AsRef<Vec4u8s> for UncompressedBufferData {
-    fn as_ref(&self) -> &Vec4u8s {
-        self.0.as_ref()
+impl BufferPoolHandle {
+    pub fn new(size: usize) -> Self {
+        Self(Arc::new(vec![0; size]))
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn as_slice(&self) -> &[u8] {
+        self.0.as_slice()
+    }
+
+    pub fn as_mut_slice(&mut self) -> Option<&mut [u8]> {
+        Arc::get_mut(&mut self.0).map(Vec::as_mut_slice)
+    }
+
+    pub fn as_vec4u8s(&self) -> Option<&[Vec4u8]> {
+        if self.len() % 4 != 0 {
+            return None;
+        }
+        Some(bytemuck::cast_slice(self.as_slice()))
+    }
+
+    pub fn as_vec4u8s_mut(&mut self) -> Option<&mut [Vec4u8]> {
+        if self.len() % 4 != 0 {
+            return None;
+        }
+        self.as_mut_slice()
+            .map(|slice| bytemuck::cast_slice_mut(slice))
     }
 }
 
-impl From<Vec4u8s> for UncompressedBufferData {
-    fn from(value: Vec4u8s) -> Self {
+impl From<Vec<u8>> for BufferPoolHandle {
+    fn from(value: Vec<u8>) -> Self {
         Self(Arc::new(value))
     }
 }
 
-impl From<Arc<Vec4u8s>> for UncompressedBufferData {
-    fn from(value: Arc<Vec4u8s>) -> Self {
+impl From<Arc<Vec<u8>>> for BufferPoolHandle {
+    fn from(value: Arc<Vec<u8>>) -> Self {
         Self(value)
     }
 }
 
-impl Archive for UncompressedBufferData {
-    type Archived = <Vec4u8s as Archive>::Archived;
-    type Resolver = <Vec4u8s as Archive>::Resolver;
+impl Archive for BufferPoolHandle {
+    type Archived = rkyv::vec::ArchivedVec<u8>;
+    type Resolver = rkyv::vec::VecResolver;
 
     fn resolve(
         &self,
@@ -97,36 +124,54 @@ impl Archive for UncompressedBufferData {
     }
 }
 
-impl<S> Serialize<S> for UncompressedBufferData
+impl<S> Serialize<S> for BufferPoolHandle
 where
     S: Fallible,
-    Vec4u8s: Serialize<S>,
+    Vec<u8>: Serialize<S>,
 {
     fn serialize(&self, serializer: &mut S) -> Result<Self::Resolver, S::Error> {
         self.0.as_ref().serialize(serializer)
     }
 }
 
-impl<D> Deserialize<UncompressedBufferData, D> for <Vec4u8s as Archive>::Archived
+impl<D> Deserialize<BufferPoolHandle, D> for rkyv::vec::ArchivedVec<u8>
 where
     D: Fallible,
-    <Vec4u8s as Archive>::Archived: Deserialize<Vec4u8s, D>,
+    rkyv::vec::ArchivedVec<u8>: Deserialize<Vec<u8>, D>,
 {
-    fn deserialize(&self, deserializer: &mut D) -> Result<UncompressedBufferData, D::Error> {
-        let data = <Vec4u8s as Archive>::Archived::deserialize(self, deserializer)?;
-        Ok(UncompressedBufferData(Arc::new(data)))
+    fn deserialize(&self, deserializer: &mut D) -> Result<BufferPoolHandle, D::Error> {
+        let data = rkyv::vec::ArchivedVec::<u8>::deserialize(self, deserializer)?;
+        Ok(BufferPoolHandle(Arc::new(data)))
     }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Archive, Deserialize, Serialize)]
-pub struct Buffer {
+pub struct Bitmap {
     pub metadata: BufferMetadata,
-    pub data: UncompressedBufferData,
+    pub data: BufferPoolHandle,
+}
+
+impl Bitmap {
+    pub fn bytes(&self) -> &[u8] {
+        self.data.as_slice()
+    }
+
+    pub fn bytes_mut(&mut self) -> Option<&mut [u8]> {
+        self.data.as_mut_slice()
+    }
+
+    pub fn pixels(&self) -> Option<&[Vec4u8]> {
+        self.data.as_vec4u8s()
+    }
+
+    pub fn pixels_mut(&mut self) -> Option<&mut [Vec4u8]> {
+        self.data.as_vec4u8s_mut()
+    }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, EnumAsInner, Archive, Deserialize, Serialize)]
-pub enum BufferAssignment {
-    New(Buffer),
+pub enum BitmapAssignment {
+    New(Bitmap),
     Removed,
 }
 
@@ -184,8 +229,8 @@ pub struct SubsurfacePosition {
 pub struct SurfaceState {
     pub client: ClientId,
     pub id: WlSurfaceId,
-    pub buffer: Option<BufferAssignment>,
-    pub buffer_update: Option<BufferUpdate>,
+    pub bitmap: Option<BitmapAssignment>,
+    pub bitmap_update: Option<BitmapUpdate>,
     pub role: Option<Role>,
     pub buffer_scale: i32,
     pub buffer_transform: Option<Transform>,
@@ -199,13 +244,14 @@ pub struct SurfaceState {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Archive, Deserialize, Serialize)]
-pub enum BufferUpdate {
+pub enum BitmapUpdate {
     Patch {
         x: i32,
         y: i32,
         width: i32,
         height: i32,
         stride: i32,
+        data: BufferPoolHandle,
     },
 }
 

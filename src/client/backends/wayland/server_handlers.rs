@@ -57,7 +57,6 @@ use crate::protocols::wprs::wayland::DataToTransfer;
 use crate::protocols::wprs::wayland::SurfaceRequest;
 use crate::protocols::wprs::wayland::SurfaceRequestPayload;
 use crate::protocols::wprs::wayland::SurfaceState;
-use crate::protocols::wprs::wayland::UncompressedBufferData;
 use crate::protocols::wprs::wayland::WlSurfaceId;
 use crate::protocols::wprs::xdg_shell;
 use crate::protocols::wprs::xdg_shell::PopupRequest;
@@ -73,7 +72,7 @@ impl WprsClientState {
         surface_id: WlSurfaceId,
         mut surface_state: SurfaceState,
     ) -> Result<()> {
-        if surface_state.buffer_update.is_some() {
+        if surface_state.bitmap_update.is_some() {
             warn!(
                 "received buffer patch update in Wayland client backend; ignoring surface commit for {surface_id:?}"
             );
@@ -99,7 +98,7 @@ impl WprsClientState {
 
             remote_surface
                 .apply_buffer(
-                    surface_state.buffer.take(),
+                    surface_state.bitmap.take(),
                     &mut self.pool,
                 )
                 .location(loc!())?;

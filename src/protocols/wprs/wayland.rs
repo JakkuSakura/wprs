@@ -85,11 +85,12 @@ use super::xdg_shell;
 use crate::config;
 use crate::prelude::*;
 
-pub use crate::models::surface::Buffer;
-pub use crate::models::surface::BufferAssignment;
+pub use crate::models::surface::Bitmap;
+pub use crate::models::surface::BitmapAssignment;
+pub use crate::models::surface::BitmapUpdate;
 pub use crate::models::surface::BufferFormat;
 pub use crate::models::surface::BufferMetadata;
-pub use crate::models::surface::BufferUpdate;
+pub use crate::models::surface::BufferPoolHandle;
 pub use crate::models::surface::ClientSurface;
 pub use crate::models::surface::RectangleKind;
 pub use crate::models::surface::Region;
@@ -99,7 +100,6 @@ pub use crate::models::surface::SubSurfaceState;
 pub use crate::models::surface::SubsurfacePosition;
 pub use crate::models::surface::SurfaceState;
 pub use crate::models::surface::Transform;
-pub use crate::models::surface::UncompressedBufferData;
 pub use crate::models::surface::ViewportState;
 pub use crate::models::surface::WlSurfaceId;
 
@@ -615,12 +615,12 @@ impl From<Transform> for SmithayTransform {
 
 impl SurfaceState {
     #[cfg(feature = "wayland")]
-    pub fn new(surface: &WlSurface, buffer: Option<BufferAssignment>) -> Result<Self> {
+    pub fn new(surface: &WlSurface, bitmap: Option<BitmapAssignment>) -> Result<Self> {
         Ok(Self {
             client: ClientId::new(&surface.client().location(loc!())?),
             id: WlSurfaceId::new(surface),
-            buffer,
-            buffer_update: None,
+            bitmap,
+            bitmap_update: None,
             role: None,
             buffer_scale: 1,
             buffer_transform: None,
@@ -637,9 +637,9 @@ impl SurfaceState {
     }
 
     #[instrument(skip_all, level = "debug")]
-    pub fn clone_without_buffer(&self) -> Self {
+    pub fn clone_without_bitmap(&self) -> Self {
         let mut clone = self.clone();
-        clone.buffer = None;
+        clone.bitmap = None;
         clone
     }
 

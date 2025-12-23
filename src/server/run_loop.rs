@@ -19,12 +19,15 @@ use crate::protocols::wprs::serializer::SendType;
 use crate::protocols::wprs::serializer::Serializer;
 use crate::protocols::wprs::handshake;
 use crate::protocols::wprs::transport;
-use crate::protocols::wprs::wayland::BufferAssignment;
+use crate::protocols::wprs::wayland::Bitmap;
+use crate::protocols::wprs::wayland::BitmapAssignment;
 use crate::protocols::wprs::wayland::BufferMetadata;
+use crate::protocols::wprs::wayland::OutputEvent;
+use crate::protocols::wprs::wayland::OutputInfo;
 use crate::protocols::wprs::wayland::Role;
 use crate::protocols::wprs::wayland::SurfaceRequestPayload;
 use crate::protocols::wprs::wayland::SurfaceState;
-use crate::protocols::wprs::wayland::UncompressedBufferData;
+use crate::protocols::wprs::wayland::BufferPoolHandle;
 use crate::protocols::wprs::wayland::WlSurfaceId;
 use crate::server::backend::BackendObservation;
 use crate::server::backend::BackendSurfaceRole;
@@ -32,7 +35,6 @@ use crate::server::backend::PollingBackend;
 use crate::server::transport_policy;
 use crate::utils::sharding_compression::ShardingCompressor;
 use crate::utils::sharding_compression::CompressedShards;
-use crate::utils::vec4u8::Vec4u8s;
 use crate::protocols::wprs::xdg_shell;
 
 #[cfg(feature = "video-h264")]
@@ -58,6 +60,11 @@ struct State<B> {
     sent_bytes_since_update: u64,
     sent_bytes_by_surface_since_update: HashMap<WlSurfaceId, u64>,
     last_stats_update: Instant,
+    client_outputs: HashMap<u32, OutputInfo>,
+    client_max_fps: Option<u32>,
+    last_surface_commit: HashMap<WlSurfaceId, Instant>,
+    surface_fps_estimate: HashMap<WlSurfaceId, f32>,
+    last_surface_send: HashMap<WlSurfaceId, Instant>,
     tick_fps: u32,
     #[cfg(feature = "video-h264")]
     h264: HashMap<WlSurfaceId, H264EncodeState>,
@@ -94,6 +101,7 @@ fn maybe_update_observed_bandwidth<B: PollingBackend>(state: &mut State<B>) {
         let config = transport_policy::select_global_transport_config(
             hello,
             Some(state.observed_tx_kbps),
+            state.client_max_fps,
         );
         if state.transport_config != config {
             state.transport_config = config.clone();
@@ -104,6 +112,37 @@ fn maybe_update_observed_bandwidth<B: PollingBackend>(state: &mut State<B>) {
                 .send(SendType::Object(Request::Transport(
                     transport::TransportRequest::Config(config),
                 )));
+        }
+    }
+}
+
+fn update_client_outputs<B: PollingBackend>(state: &mut State<B>, output_event: &OutputEvent) {
+    match output_event {
+        OutputEvent::New(output) | OutputEvent::Update(output) => {
+            state.client_outputs.insert(output.id, output.clone());
+        }
+        OutputEvent::Destroy(output) => {
+            state.client_outputs.remove(&output.id);
+        }
+    }
+
+    let max_refresh_mhz = state
+        .client_outputs
+        .values()
+        .map(|info| info.mode.refresh_rate)
+        .filter(|rate| *rate > 0)
+        .max();
+    state.client_max_fps = max_refresh_mhz.map(|rate| (rate as u32 / 1000).max(1));
+}
+
+fn update_surface_fps<B: PollingBackend>(state: &mut State<B>, surface: WlSurfaceId) {
+    let now = Instant::now();
+    if let Some(last) = state.last_surface_commit.insert(surface, now) {
+        let dt = now.duration_since(last).as_secs_f64();
+        if dt > 0.0 {
+            let fps = (1.0 / dt) as f32;
+            let entry = state.surface_fps_estimate.entry(surface).or_insert(fps);
+            *entry = (*entry * 0.8) + (fps * 0.2);
         }
     }
 }
@@ -131,7 +170,7 @@ fn send_initial_snapshot<B: PollingBackend>(state: &mut State<B>) -> Result<()> 
 
 fn surface_state_for_descriptor(
     surface: &crate::server::backend::BackendSurfaceDescriptor,
-    buffer: Option<BufferAssignment>,
+    bitmap: Option<BitmapAssignment>,
 ) -> SurfaceState {
     let role = match &surface.role {
         BackendSurfaceRole::XdgToplevel { id, title, app_id } => {
@@ -150,8 +189,8 @@ fn surface_state_for_descriptor(
     SurfaceState {
         client: surface.client,
         id: surface.id,
-        buffer,
-        buffer_update: None,
+        bitmap,
+        bitmap_update: None,
         role: Some(role),
         buffer_scale: surface.buffer_scale,
         buffer_transform: None,
@@ -272,26 +311,28 @@ fn apply_observation<B: PollingBackend>(
 ) -> Result<()> {
     match obs {
         BackendObservation::SurfaceCommit { surface, frame } => {
-            let buffer = frame.as_ref().map(|frame| {
-                BufferAssignment::New(crate::protocols::wprs::wayland::Buffer {
-                    metadata: frame.metadata,
-                    data: UncompressedBufferData::from(Vec4u8s::new()),
-                })
-            });
-            let state_to_send = surface_state_for_descriptor(&surface, buffer);
+            let mut frame_to_send = frame;
+            let mut desired = None;
 
-            if let Some(frame) = frame {
+            if let Some(frame) = frame_to_send.as_ref() {
+                update_surface_fps(state, surface.id);
                 let observed_surface_tx = state.observed_tx_kbps_by_surface.get(&surface.id).copied();
-                let desired = transport_policy::select_surface_transport_config(
+                let surface_fps = state.surface_fps_estimate.get(&surface.id).copied();
+                let selected = transport_policy::select_surface_transport_config(
                     &state.transport_config,
                     state.client_hello.as_ref(),
-                    observed_surface_tx,
+                    transport_policy::SurfaceDecisionInput {
+                        surface_tx_kbps: observed_surface_tx,
+                        total_tx_kbps: Some(state.observed_tx_kbps),
+                        estimated_fps: surface_fps,
+                        client_max_fps: state.client_max_fps,
+                    },
                     surface.id,
                     &frame.metadata,
                 );
                 let prior = state.surface_transport_config.get(&surface.id);
-                if prior != Some(&desired) {
-                    state.surface_transport_config.insert(surface.id, desired.clone());
+                if prior != Some(&selected) {
+                    state.surface_transport_config.insert(surface.id, selected.clone());
 
                     // Best-effort: inform the client of the per-surface policy.
                     state
@@ -300,16 +341,42 @@ fn apply_observation<B: PollingBackend>(
                         .send(SendType::Object(Request::Transport(
                             transport::TransportRequest::ConfigScoped {
                                 scope: transport::TransportScope::Surface(surface.id),
-                                config: desired.clone(),
+                                config: selected.clone(),
                             },
                         )));
 
                     #[cfg(feature = "video-h264")]
-                    if desired.codec != transport::TransportCodec::H264 {
+                    if selected.codec != transport::TransportCodec::H264 {
                         state.h264.remove(&surface.id);
                     }
                 }
+                desired = Some(selected);
+            }
 
+            let should_send = match desired.as_ref().and_then(|cfg| cfg.max_fps) {
+                Some(max_fps) if max_fps > 0 => {
+                    let min_interval = Duration::from_secs_f64(1.0 / max_fps as f64);
+                    match state.last_surface_send.get(&surface.id) {
+                        Some(last) => last.elapsed() >= min_interval,
+                        None => true,
+                    }
+                }
+                _ => true,
+            };
+
+            if !should_send {
+                frame_to_send = None;
+            }
+
+            let bitmap = frame_to_send.as_ref().map(|frame| {
+                BitmapAssignment::New(Bitmap {
+                    metadata: frame.metadata,
+                    data: BufferPoolHandle::from(Vec::new()),
+                })
+            });
+            let state_to_send = surface_state_for_descriptor(&surface, bitmap);
+
+            if let (Some(frame), Some(desired)) = (frame_to_send, desired) {
                 let (kind, shards) = encode_bgra_frame(
                     surface.id,
                     &desired,
@@ -323,6 +390,7 @@ fn apply_observation<B: PollingBackend>(
                 .location(loc!())?;
                 record_sent_bytes(state, surface.id, shards.size());
                 maybe_update_observed_bandwidth(state);
+                state.last_surface_send.insert(surface.id, Instant::now());
                 state
                     .serializer
                     .writer()
@@ -344,6 +412,9 @@ fn apply_observation<B: PollingBackend>(
                 state.h264.remove(&surface);
             }
             state.surface_transport_config.remove(&surface);
+            state.last_surface_commit.remove(&surface);
+            state.surface_fps_estimate.remove(&surface);
+            state.last_surface_send.remove(&surface);
             state
                 .serializer
                 .writer()
@@ -387,6 +458,11 @@ pub fn run<B: PollingBackend>(
         sent_bytes_since_update: 0,
         sent_bytes_by_surface_since_update: HashMap::new(),
         last_stats_update: Instant::now(),
+        client_outputs: HashMap::new(),
+        client_max_fps: None,
+        last_surface_commit: HashMap::new(),
+        surface_fps_estimate: HashMap::new(),
+        last_surface_send: HashMap::new(),
         tick_fps,
         #[cfg(feature = "video-h264")]
         h264: HashMap::new(),
@@ -414,6 +490,7 @@ pub fn run<B: PollingBackend>(
                         let config = transport_policy::select_global_transport_config(
                             &hello,
                             Some(state.observed_tx_kbps),
+                            state.client_max_fps,
                         );
                         if state.transport_config != config {
                             state.transport_config = config.clone();
@@ -431,10 +508,11 @@ pub fn run<B: PollingBackend>(
                         // observed tx-kbps for transport policy.
                         state.client_stats = Some(stats);
                         if let Some(hello) = state.client_hello.as_ref() {
-        let config = transport_policy::select_global_transport_config(
-            hello,
-            Some(state.observed_tx_kbps),
-        );
+                            let config = transport_policy::select_global_transport_config(
+                                hello,
+                                Some(state.observed_tx_kbps),
+                                state.client_max_fps,
+                            );
                             if state.transport_config != config {
                                 state.transport_config = config.clone();
                                 state.surface_transport_config.clear();
@@ -446,6 +524,30 @@ pub fn run<B: PollingBackend>(
                                     )));
                             }
                         }
+                    }
+                    RecvType::Object(Event::Output(event)) => {
+                        update_client_outputs(state, &event);
+                        if let Some(hello) = state.client_hello.as_ref() {
+                            let config = transport_policy::select_global_transport_config(
+                                hello,
+                                Some(state.observed_tx_kbps),
+                                state.client_max_fps,
+                            );
+                            if state.transport_config != config {
+                                state.transport_config = config.clone();
+                                state.surface_transport_config.clear();
+                                state
+                                    .serializer
+                                    .writer()
+                                    .send(SendType::Object(Request::Transport(
+                                        transport::TransportRequest::Config(config),
+                                    )));
+                            }
+                        }
+                        state
+                            .backend
+                            .handle_client_event(Event::Output(event))
+                            .log_and_ignore(loc!());
                     }
                     RecvType::Object(Event::Transport(transport::TransportEvent::Ping(_))) => {},
                     RecvType::Object(other) => {
