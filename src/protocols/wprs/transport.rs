@@ -36,8 +36,8 @@ pub struct TransportPreferences {
     pub drop_tolerance: Option<DropTolerance>,
     /// Optional retransmit policy hint for quality-of-service decisions.
     pub retransmit_policy: Option<RetransmitPolicy>,
-    /// Whether the server may adjust transport settings per-surface.
-    pub dynamic_selection: bool,
+    /// How the server should select and update transport settings.
+    pub selection_mode: SelectionMode,
     /// Optional target bitrate hint, in kilobits/sec.
     pub target_bitrate_kbps: Option<u32>,
     /// Optional max RTT hint, in milliseconds.
@@ -74,6 +74,16 @@ pub enum RetransmitPolicy {
     Avoid,
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Archive, Deserialize, Serialize)]
+pub enum SelectionMode {
+    /// Manual selection: ignore heuristics and use the base codec.
+    Manual,
+    /// Static selection: use heuristics once without runtime adjustments.
+    Static,
+    /// Dynamic selection: allow runtime adjustments.
+    Dynamic,
+}
+
 /// Client-reported GPU / acceleration capabilities.
 ///
 /// This is not meant to be a perfect hardware database; it's a set of hints for
@@ -108,7 +118,7 @@ impl Default for TransportPreferences {
             usage_goal: None,
             drop_tolerance: None,
             retransmit_policy: None,
-            dynamic_selection: true,
+            selection_mode: SelectionMode::Dynamic,
             target_bitrate_kbps: None,
             max_rtt_ms: None,
             latency_weight: 25,

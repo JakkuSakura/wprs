@@ -229,7 +229,7 @@ fn dynamic_selection_can_be_disabled() {
             transport::TransportCodec::H264,
         ],
     );
-    hello.preferences.dynamic_selection = false;
+    hello.preferences.selection_mode = transport::SelectionMode::Manual;
     let global = transport_policy::select_global_transport_config(&hello, None);
     let meta = BufferMetadata {
         width: 1920,
@@ -250,7 +250,7 @@ fn dynamic_selection_can_be_disabled() {
 #[test]
 fn dynamic_selection_disables_global_heuristics() {
     let mut hello = hello_bandwidth_h264();
-    hello.preferences.dynamic_selection = false;
+    hello.preferences.selection_mode = transport::SelectionMode::Manual;
     let cfg = transport_policy::select_global_transport_config(&hello, Some(20_000));
     assert_eq!(cfg.codec, transport::TransportCodec::ShardedZstd { level: 1 });
 }

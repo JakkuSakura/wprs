@@ -30,10 +30,10 @@ pub fn select_global_transport_config(
     observed_tx_kbps: Option<u32>,
 ) -> transport::TransportConfig {
     let profile = preference_profile(&hello.preferences);
-    let network = network_hints(&hello.preferences, observed_tx_kbps);
+    let network = network_hints(&hello.preferences, observed_tx_kbps, profile.dynamic_selection);
     let mut codec = select_base_codec(hello);
 
-    if !profile.dynamic_selection {
+    if profile.selection_mode == transport::SelectionMode::Manual {
         return transport::TransportConfig {
             codec,
             buffer_patches: transport::BufferPatchConfig {
@@ -143,9 +143,9 @@ pub fn select_surface_transport_config(
         return cfg;
     };
     let profile = preference_profile(&hello.preferences);
-    let network = network_hints(&hello.preferences, observed_tx_kbps);
+    let network = network_hints(&hello.preferences, observed_tx_kbps, profile.dynamic_selection);
 
-    if !profile.dynamic_selection {
+    if profile.selection_mode == transport::SelectionMode::Manual {
         return cfg;
     }
 
@@ -171,6 +171,7 @@ struct PreferenceProfile {
     allow_lossy: bool,
     allow_droppy: bool,
     prefer_compression: bool,
+    selection_mode: transport::SelectionMode,
     dynamic_selection: bool,
     drop_tolerance: transport::DropTolerance,
     retransmit_policy: transport::RetransmitPolicy,
@@ -225,7 +226,8 @@ fn preference_profile(prefs: &transport::TransportPreferences) -> PreferenceProf
         allow_lossy,
         allow_droppy,
         prefer_compression: true,
-        dynamic_selection: prefs.dynamic_selection,
+        selection_mode: prefs.selection_mode,
+        dynamic_selection: prefs.selection_mode == transport::SelectionMode::Dynamic,
         drop_tolerance,
         retransmit_policy,
     }
@@ -241,11 +243,12 @@ struct NetworkHints {
 fn network_hints(
     prefs: &transport::TransportPreferences,
     observed_tx_kbps: Option<u32>,
+    allow_dynamic: bool,
 ) -> NetworkHints {
     NetworkHints {
         target_bitrate_kbps: prefs.target_bitrate_kbps,
         max_rtt_ms: prefs.max_rtt_ms,
-        observed_tx_kbps,
+        observed_tx_kbps: if allow_dynamic { observed_tx_kbps } else { None },
     }
 }
 
