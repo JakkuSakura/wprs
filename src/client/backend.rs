@@ -131,7 +131,6 @@ pub fn build_client_backend(
             }
         },
         config::ClientBackend::WinitWgpu => build_winit_wgpu_backend(config),
-        #[cfg(unix)]
         config::ClientBackend::TermwizImage => Ok(Box::new(
             crate::client::backends::termwiz_image::TermwizImageClientBackend::new(config),
         )),

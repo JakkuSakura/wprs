@@ -20,14 +20,18 @@ use std::collections::HashMap;
 use std::fs;
 use std::fs::File;
 use std::io;
-use std::os::unix::net::UnixListener;
 use std::panic;
 use std::path::Path;
 use std::process;
 use std::sync::Mutex;
 use std::thread::ScopedJoinHandle;
 
+#[cfg(unix)]
+use std::os::unix::net::UnixListener;
+
+#[cfg(unix)]
 use nix::sys::stat;
+#[cfg(unix)]
 use nix::sys::stat::Mode;
 #[cfg(feature = "wayland")]
 use smithay::utils::SERIAL_COUNTER;
@@ -240,6 +244,7 @@ pub fn n_chunks(len: usize, chunk_size: usize) -> usize {
     }
 }
 
+#[cfg(unix)]
 pub fn bind_user_socket<P: AsRef<Path>>(sock_path: P) -> Result<UnixListener> {
     if sock_path.as_ref().try_exists().location(loc!())? {
         fs::remove_file(&sock_path).location(loc!())?;

@@ -19,8 +19,6 @@ pub enum ClientBackend {
     Auto,
     Wayland,
     WinitWgpu,
-
-    #[cfg(unix)]
     TermwizImage,
 
     // --- Smithay feature bundle aliases ---

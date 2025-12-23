@@ -643,7 +643,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb9f6e1368bd4621d2c86baa7e37de77a938adf5221e5dd3d6133340101b309e"
 dependencies = [
  "bitflags 2.10.0",
- "nix 0.30.1",
  "polling",
  "rustix 1.1.2",
  "slab",

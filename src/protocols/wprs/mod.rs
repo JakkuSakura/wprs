@@ -25,6 +25,7 @@ use std::net::SocketAddr;
 use std::net::TcpListener;
 use std::net::TcpStream;
 use std::num::NonZeroUsize;
+#[cfg(unix)]
 use std::os::fd::AsFd;
 #[cfg(unix)]
 use std::os::unix::net::UnixListener;
@@ -50,8 +51,11 @@ use calloop::channel::Channel;
 use crossbeam_channel::Receiver;
 use crossbeam_channel::RecvTimeoutError;
 use crossbeam_channel::Sender;
+#[cfg(unix)]
 use nix::sys::socket;
+#[cfg(unix)]
 use nix::sys::socket::sockopt::RcvBuf;
+#[cfg(unix)]
 use nix::sys::socket::sockopt::SndBuf;
 use num_enum::IntoPrimitive;
 use num_enum::TryFromPrimitive;
@@ -70,7 +74,9 @@ use rkyv::util::AlignedVec;
 use smithay::reexports::wayland_server::Client;
 #[cfg(feature = "wayland")]
 use smithay::reexports::wayland_server::backend;
+#[cfg(unix)]
 use sysctl::Ctl;
+#[cfg(unix)]
 use sysctl::Sysctl;
 
 use crate::prelude::*;
@@ -739,9 +745,10 @@ impl<T> Serializable for T where
 {
 }
 
-fn socket_buffer_limits() -> Result<(usize, usize)> {
-    const DEFAULT_SOCKET_BUFFER: usize = 4 * 1024 * 1024;
+const DEFAULT_SOCKET_BUFFER: usize = 4 * 1024 * 1024;
 
+#[cfg(unix)]
+fn socket_buffer_limits() -> Result<(usize, usize)> {
     let rmem_max = match Ctl::new("net.core.rmem_max").and_then(|c| c.value_string()) {
         Ok(v) => v,
         Err(_) => {
@@ -760,6 +767,11 @@ fn socket_buffer_limits() -> Result<(usize, usize)> {
     let rmem_max: usize = rmem_max.parse().unwrap_or(DEFAULT_SOCKET_BUFFER);
     let wmem_max: usize = wmem_max.parse().unwrap_or(DEFAULT_SOCKET_BUFFER);
     Ok((rmem_max, wmem_max))
+}
+
+#[cfg(not(unix))]
+fn socket_buffer_limits() -> Result<(usize, usize)> {
+    Ok((DEFAULT_SOCKET_BUFFER, DEFAULT_SOCKET_BUFFER))
 }
 
 #[cfg(unix)]
