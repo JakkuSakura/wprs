@@ -7,10 +7,12 @@ use crate::client::backend::ClientBackendConfig;
 use crate::utils::filtering;
 use crate::prelude::*;
 use crate::protocols::wprs as proto;
-use crate::client::message_backend::MessageClientBackend;
 use crate::protocols::wprs::RecvType;
 use crate::protocols::wprs::Request;
 use crate::protocols::wprs::Serializer;
+
+use calloop::channel::Event as CalloopChannelEvent;
+use calloop::EventLoop as CalloopEventLoop;
 
 use termwiz::render::RenderTty;
 use termwiz::render::terminfo::TerminfoRenderer;
@@ -20,15 +22,11 @@ use termwiz::terminal::Terminal as _;
 
 pub struct TermwizImageClientBackend {
     _config: ClientBackendConfig,
-    presenter: Option<TerminalPresenter>,
 }
 
 impl TermwizImageClientBackend {
     pub fn new(config: ClientBackendConfig) -> Self {
-        Self {
-            _config: config,
-            presenter: None,
-        }
+        Self { _config: config }
     }
 
     pub fn new_for_wrun() -> Self {
@@ -50,8 +48,7 @@ impl ClientBackend for TermwizImageClientBackend {
     }
 
     fn run(self: Box<Self>, serializer: Serializer<proto::Event, proto::Request>) -> Result<()> {
-        let _ = serializer;
-        bail!("TermwizImageClientBackend must be wrapped in SyncedClientBackend")
+        run_event_loop(serializer).location(loc!())
     }
 }
 
@@ -181,19 +178,34 @@ impl TerminalPresenter {
     }
 }
 
-impl MessageClientBackend for TermwizImageClientBackend {
-    fn name(&self) -> &'static str {
-        "termwiz-image"
+fn run_event_loop(mut serializer: Serializer<proto::Event, proto::Request>) -> Result<()> {
+    let reader = serializer.reader().location(loc!())?;
+
+    struct State {
+        presenter: TerminalPresenter,
+        client_sync: crate::protocols::wprs::core::client_sync::ClientSync,
     }
 
-    fn handle_message(&mut self, msg: RecvType<Request>) -> Result<()> {
-        if self.presenter.is_none() {
-            self.presenter = Some(TerminalPresenter::new().location(loc!())?);
-        }
-        self.presenter
-            .as_mut()
-            .unwrap()
-            .handle_message(msg)
-            .location(loc!())
-    }
+    let mut loop_: CalloopEventLoop<State> = CalloopEventLoop::try_new().location(loc!())?;
+    let mut state = State {
+        presenter: TerminalPresenter::new().location(loc!())?,
+        client_sync: crate::protocols::wprs::core::client_sync::ClientSync::new(),
+    };
+
+    loop_
+        .handle()
+        .insert_source(reader, move |event, _metadata, state| {
+            if let CalloopChannelEvent::Msg(msg) = event {
+                match state.client_sync.handle_message(msg).location(loc!()) {
+                    Ok(Some(msg)) => state.presenter.handle_message(msg).log_and_ignore(loc!()),
+                    Ok(None) => {},
+                    Err(err) => warn!("client_sync failed: {err:?}"),
+                }
+            }
+        })
+        .map_err(|e| anyhow!("insert_source(serializer reader) failed: {e:?}"))?;
+
+    // Hold onto the serializer so its transport threads stay alive.
+    let _serializer = serializer;
+    loop_.run(None, &mut state, |_| {}).location(loc!())
 }

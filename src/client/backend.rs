@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 
 use crate::client::config;
-use crate::client::message_backend::SyncedClientBackend;
 use crate::prelude::*;
 use crate::protocols::wprs as proto;
 use crate::protocols::wprs::Serializer;
@@ -133,9 +132,9 @@ pub fn build_client_backend(
         },
         config::ClientBackend::WinitWgpu => build_winit_wgpu_backend(config),
         #[cfg(unix)]
-        config::ClientBackend::TermwizImage => Ok(Box::new(SyncedClientBackend::new(
+        config::ClientBackend::TermwizImage => Ok(Box::new(
             crate::client::backends::termwiz_image::TermwizImageClientBackend::new(config),
-        ))),
+        )),
         config::ClientBackend::Auto => {
             #[cfg(feature = "wayland-client")]
             {
