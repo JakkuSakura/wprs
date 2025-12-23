@@ -73,6 +73,21 @@ fn global_avoids_h264_without_decode_support() {
 }
 
 #[test]
+fn max_bitrate_cap_prefers_allowed_codec() {
+    let mut hello = hello_with_goal(
+        transport::UsageGoal::Office,
+        vec![
+            transport::TransportCodec::Png,
+            transport::TransportCodec::H264,
+        ],
+    );
+    hello.preferences.target_bitrate_kbps = Some(3_000);
+    hello.gpu.has_hw_video_decode = true;
+    let cfg = transport_policy::select_global_transport_config(&hello, Some(3_500));
+    assert_eq!(cfg.codec, transport::TransportCodec::H264);
+}
+
+#[test]
 fn surface_large_prefers_h264_if_supported_and_bandwidth_or_target_low() {
     let hello = hello_bandwidth_h264();
     let global = transport_policy::select_global_transport_config(&hello, None);

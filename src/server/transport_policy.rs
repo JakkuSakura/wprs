@@ -71,13 +71,12 @@ pub fn select_global_transport_config(
             .bandwidth_weight
             .saturating_sub(profile.clarity_weight)
             >= 30;
+        let max_bitrate_kbps = hello.preferences.target_bitrate_kbps;
         let observed_bandwidth_pressure = observed_tx_kbps
-            .map(|tx| tx > hello.preferences.target_bitrate_kbps.unwrap_or(12_000) * 12 / 10)
+            .zip(max_bitrate_kbps)
+            .map(|(tx, cap)| tx > cap)
             .unwrap_or(false);
-        let low_target_bitrate = hello
-            .preferences
-            .target_bitrate_kbps
-            .map_or(false, |kbps| kbps < 8_000);
+        let low_target_bitrate = max_bitrate_kbps.map_or(false, |kbps| kbps < 8_000);
         let allow_without_pressure = prefers_bandwidth && profile.latency_weight < 20;
 
         if profile.allow_lossy
@@ -109,13 +108,12 @@ pub fn select_global_transport_config(
         }
     }
 
+    let max_bitrate_kbps = hello.preferences.target_bitrate_kbps;
     let bandwidth_pressure = observed_tx_kbps
-        .map(|tx| tx > hello.preferences.target_bitrate_kbps.unwrap_or(12_000) * 12 / 10)
+        .zip(max_bitrate_kbps)
+        .map(|(tx, cap)| tx > cap)
         .unwrap_or(false);
-    let low_target_bitrate = hello
-        .preferences
-        .target_bitrate_kbps
-        .map_or(false, |kbps| kbps < 8_000);
+    let low_target_bitrate = max_bitrate_kbps.map_or(false, |kbps| kbps < 8_000);
     let avoid_raw = profile.drop_tolerance == transport::DropTolerance::Avoid
         || profile.retransmit_policy == transport::RetransmitPolicy::Avoid;
     if !avoid_raw
@@ -266,15 +264,15 @@ struct SurfaceHints {
 }
 
 fn codec_allowed_by_network(hints: &NetworkHints, codec: transport::TransportCodec) -> bool {
-    let Some(target_kbps) = hints.target_bitrate_kbps else {
+    let Some(max_kbps) = hints.target_bitrate_kbps else {
         return true;
     };
 
     match codec {
-        transport::TransportCodec::ShardedRaw => target_kbps >= 20_000,
-        transport::TransportCodec::Png => target_kbps >= 8_000,
-        transport::TransportCodec::Jpeg => target_kbps >= 5_000,
-        transport::TransportCodec::H264 => target_kbps >= 3_000,
+        transport::TransportCodec::ShardedRaw => max_kbps >= 20_000,
+        transport::TransportCodec::Png => max_kbps >= 8_000,
+        transport::TransportCodec::Jpeg => max_kbps >= 5_000,
+        transport::TransportCodec::H264 => max_kbps >= 3_000,
         _ => true,
     }
 }
@@ -303,13 +301,13 @@ fn select_codec_for_surface(
             .any(|c| c.eq_ignore_ascii_case("h264"))
         || hello.cpu.avx2
         || hello.cpu.neon;
+    let max_bitrate_kbps = network.target_bitrate_kbps;
     let bandwidth_pressure = network
         .observed_tx_kbps
-        .map(|tx| tx > network.target_bitrate_kbps.unwrap_or(12_000) * 12 / 10)
+        .zip(max_bitrate_kbps)
+        .map(|(tx, cap)| tx > cap)
         .unwrap_or(false);
-    let low_target_bitrate = network
-        .target_bitrate_kbps
-        .map_or(false, |kbps| kbps < 8_000);
+    let low_target_bitrate = max_bitrate_kbps.map_or(false, |kbps| kbps < 8_000);
     let tight_rtt = network.max_rtt_ms.map_or(false, |rtt| rtt < 20);
 
     let mut best = select_base_codec(hello);

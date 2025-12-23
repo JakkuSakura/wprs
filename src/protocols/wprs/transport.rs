@@ -40,7 +40,7 @@ pub struct TransportPreferences {
     pub selection_mode: SelectionMode,
     /// Explicit codec selection used when selection_mode is Manual.
     pub manual_codec: Option<TransportCodec>,
-    /// Optional target bitrate hint, in kilobits/sec.
+    /// Optional max bitrate cap, in kilobits/sec.
     pub target_bitrate_kbps: Option<u32>,
     /// Optional max RTT hint, in milliseconds.
     pub max_rtt_ms: Option<u32>,
