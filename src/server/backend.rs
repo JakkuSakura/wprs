@@ -101,6 +101,10 @@ impl<T: PollingBackend + 'static> ServerBackend for T {
         let tick_interval = tick_interval
             .ok_or_else(|| anyhow!("polling backend requires tick_interval"))
             .location(loc!())?;
-        crate::server::run_loop::run(*self, serializer, tick_interval).location(loc!())
+        if serializer.is_inproc() {
+            crate::server::inproc_run_loop::run(*self, serializer, tick_interval).location(loc!())
+        } else {
+            crate::server::run_loop::run(*self, serializer, tick_interval).location(loc!())
+        }
     }
 }

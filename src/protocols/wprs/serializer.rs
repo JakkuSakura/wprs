@@ -81,8 +81,6 @@ use super::framing::Framed;
 use super::raw_buffer::RawBufferHeader;
 use super::raw_buffer::RawBufferMessage;
 use super::raw_buffer::RawBufferPayload;
-use super::raw_buffer::decompress_shards_to_owned;
-use super::raw_buffer::extract_single_uncompressed_shard;
 
 const CHANNEL_SIZE: usize = 1024;
 
@@ -685,6 +683,7 @@ where
     on_connect_frames: Arc<Mutex<Vec<OnConnectFrame>>>,
     #[allow(dead_code)]
     transport_guard: Option<TransportGuard>,
+    inproc: bool,
 }
 
 impl<ST, RT> Serializer<ST, RT>
@@ -803,6 +802,7 @@ where
                 other_end_connected,
                 on_connect_frames,
                 transport_guard: None,
+                inproc: false,
             })
         }
     }
@@ -882,6 +882,7 @@ where
                 other_end_connected,
                 on_connect_frames,
                 transport_guard: None,
+                inproc: false,
             })
         }
     }
@@ -923,6 +924,7 @@ where
             other_end_connected,
             on_connect_frames,
             transport_guard: None,
+            inproc: false,
         })
     }
 
@@ -993,6 +995,7 @@ where
             other_end_connected,
             on_connect_frames,
             transport_guard: None,
+            inproc: false,
         })
     }
 
@@ -1026,6 +1029,10 @@ where
         self.on_connect_frames.lock().unwrap().push(frame);
         Ok(())
     }
+
+    pub fn is_inproc(&self) -> bool {
+        self.inproc
+    }
 }
 
 pub fn new_inproc_serializer_pair<ST, RT>() -> Result<(Serializer<ST, RT>, Serializer<RT, ST>)>
@@ -1049,24 +1056,8 @@ where
             for msg in input.iter() {
                 let out = match msg {
                     SendType::Object(obj) => RecvType::Object(obj),
-                    SendType::RawBuffer(payload) => {
-                        let header = RawBufferHeader {
-                            version: RawBufferHeader::V2,
-                            kind: payload.kind,
-                            surface: Some(payload.surface),
-                        };
-
-                        let bytes = match extract_single_uncompressed_shard(payload.shards) {
-                            Ok(bytes) => bytes,
-                            Err(shards) => match decompress_shards_to_owned(shards) {
-                                Ok(bytes) => bytes,
-                                Err(err) => {
-                                    warn!("inproc raw buffer decompress failed: {err:?}");
-                                    continue;
-                                },
-                            },
-                        };
-                        RecvType::RawBuffer(RawBufferMessage { header, bytes })
+                    SendType::RawBuffer(_) => {
+                        panic!("inproc serializer must not send RawBuffer payloads")
                     }
                 };
 
@@ -1102,6 +1093,7 @@ where
         other_end_connected: a_connected,
         on_connect_frames: Arc::new(Mutex::new(Vec::new())),
         transport_guard: None,
+        inproc: true,
     };
 
     let b = Serializer {
@@ -1113,6 +1105,7 @@ where
         other_end_connected: b_connected,
         on_connect_frames: Arc::new(Mutex::new(Vec::new())),
         transport_guard: None,
+        inproc: true,
     };
 
     Ok((a, b))

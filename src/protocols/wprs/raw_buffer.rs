@@ -125,6 +125,7 @@ pub struct RawBufferMessage {
     pub bytes: Vec<u8>,
 }
 
+#[allow(dead_code)]
 pub(crate) fn extract_single_uncompressed_shard(
     shards: CompressedShards,
 ) -> Result<Vec<u8>, CompressedShards> {
@@ -142,6 +143,7 @@ pub(crate) fn extract_single_uncompressed_shard(
     Ok(shard.data)
 }
 
+#[allow(dead_code)]
 pub(crate) fn decompress_shards_to_owned(shards: CompressedShards) -> Result<Vec<u8>> {
     if shards.is_empty() {
         return Ok(Vec::new());
