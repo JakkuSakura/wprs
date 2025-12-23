@@ -245,3 +245,31 @@ fn dynamic_selection_can_be_disabled() {
     );
     assert_eq!(cfg.codec, global.codec);
 }
+
+#[test]
+fn qos_drop_avoid_prefers_compressed_codecs() {
+    let mut hello = hello_with_goal(
+        transport::UsageGoal::Gaming,
+        vec![
+            transport::TransportCodec::ShardedRaw,
+            transport::TransportCodec::ShardedZstd { level: 1 },
+        ],
+    );
+    hello.preferences.drop_tolerance = Some(transport::DropTolerance::Avoid);
+    let cfg = transport_policy::select_global_transport_config(&hello, None);
+    assert_eq!(cfg.codec, transport::TransportCodec::ShardedZstd { level: 1 });
+}
+
+#[test]
+fn qos_retransmit_avoid_penalizes_raw() {
+    let mut hello = hello_with_goal(
+        transport::UsageGoal::Gaming,
+        vec![
+            transport::TransportCodec::ShardedRaw,
+            transport::TransportCodec::ShardedLz4,
+        ],
+    );
+    hello.preferences.retransmit_policy = Some(transport::RetransmitPolicy::Avoid);
+    let cfg = transport_policy::select_global_transport_config(&hello, None);
+    assert_eq!(cfg.codec, transport::TransportCodec::ShardedLz4);
+}

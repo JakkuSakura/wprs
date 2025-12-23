@@ -328,6 +328,8 @@ fn score_codec(
     let clarity = profile.clarity_weight as i32;
     let cpu = profile.cpu_weight as i32;
     let large_surface = surface.large_surface;
+    let drop_avoid = profile.drop_tolerance == transport::DropTolerance::Avoid;
+    let retransmit_avoid = profile.retransmit_policy == transport::RetransmitPolicy::Avoid;
 
     match codec {
         transport::TransportCodec::ShardedRaw => {
@@ -337,6 +339,12 @@ fn score_codec(
             }
             if large_surface {
                 score -= 30;
+            }
+            if drop_avoid {
+                score -= 30;
+            }
+            if retransmit_avoid {
+                score -= 25;
             }
             score
         }
@@ -348,6 +356,12 @@ fn score_codec(
             if large_surface {
                 score += 5;
             }
+            if drop_avoid {
+                score += 5;
+            }
+            if retransmit_avoid {
+                score += 10;
+            }
             score
         }
         transport::TransportCodec::ShardedZstd { .. } => {
@@ -357,6 +371,12 @@ fn score_codec(
             }
             if large_surface {
                 score += 5;
+            }
+            if drop_avoid {
+                score += 10;
+            }
+            if retransmit_avoid {
+                score += 15;
             }
             score
         }
@@ -371,6 +391,12 @@ fn score_codec(
             if tight_rtt {
                 score -= 10;
             }
+            if drop_avoid {
+                score += 5;
+            }
+            if retransmit_avoid {
+                score -= 10;
+            }
             score
         }
         transport::TransportCodec::Jpeg => {
@@ -383,6 +409,12 @@ fn score_codec(
             }
             if tight_rtt {
                 score -= 10;
+            }
+            if drop_avoid {
+                score += 10;
+            }
+            if retransmit_avoid {
+                score += 10;
             }
             score
         }
@@ -401,6 +433,12 @@ fn score_codec(
             }
             if tight_rtt {
                 score -= 20;
+            }
+            if drop_avoid {
+                score += 10;
+            }
+            if retransmit_avoid {
+                score += 15;
             }
             score
         }
