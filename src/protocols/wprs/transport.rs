@@ -41,7 +41,7 @@ pub struct TransportPreferences {
     /// Explicit codec selection used when selection_mode is Manual.
     pub manual_codec: Option<TransportCodec>,
     /// Optional max bitrate cap, in kilobits/sec.
-    pub target_bitrate_kbps: Option<u32>,
+    pub max_bitrate_kbps: Option<u32>,
     /// Optional max RTT hint, in milliseconds.
     pub max_rtt_ms: Option<u32>,
 
@@ -122,7 +122,7 @@ impl Default for TransportPreferences {
             retransmit_policy: None,
             selection_mode: SelectionMode::Dynamic,
             manual_codec: None,
-            target_bitrate_kbps: None,
+            max_bitrate_kbps: None,
             max_rtt_ms: None,
             latency_weight: 25,
             bandwidth_weight: 25,

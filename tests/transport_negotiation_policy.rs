@@ -23,7 +23,7 @@ fn hello_bandwidth_h264() -> transport::ClientHello {
     ]);
     hello.preferences.bandwidth_weight = 80;
     hello.preferences.clarity_weight = 10;
-    hello.preferences.target_bitrate_kbps = Some(5_000);
+    hello.preferences.max_bitrate_kbps = Some(5_000);
     hello.gpu.has_hw_video_decode = true;
     hello
 }
@@ -81,7 +81,7 @@ fn max_bitrate_cap_prefers_allowed_codec() {
             transport::TransportCodec::H264,
         ],
     );
-    hello.preferences.target_bitrate_kbps = Some(3_000);
+    hello.preferences.max_bitrate_kbps = Some(3_000);
     hello.gpu.has_hw_video_decode = true;
     let cfg = transport_policy::select_global_transport_config(&hello, Some(3_500));
     assert_eq!(cfg.codec, transport::TransportCodec::H264);
@@ -217,7 +217,7 @@ fn media_large_surface_prefers_h264_if_supported() {
         ],
     );
     hello.gpu.has_hw_video_decode = true;
-    hello.preferences.target_bitrate_kbps = Some(6_000);
+    hello.preferences.max_bitrate_kbps = Some(6_000);
     let global = transport_policy::select_global_transport_config(&hello, None);
     let meta = BufferMetadata {
         width: 1920,

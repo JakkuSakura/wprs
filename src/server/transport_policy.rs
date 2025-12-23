@@ -71,7 +71,7 @@ pub fn select_global_transport_config(
             .bandwidth_weight
             .saturating_sub(profile.clarity_weight)
             >= 30;
-        let max_bitrate_kbps = hello.preferences.target_bitrate_kbps;
+        let max_bitrate_kbps = hello.preferences.max_bitrate_kbps;
         let observed_bandwidth_pressure = observed_tx_kbps
             .zip(max_bitrate_kbps)
             .map(|(tx, cap)| tx > cap)
@@ -108,7 +108,7 @@ pub fn select_global_transport_config(
         }
     }
 
-    let max_bitrate_kbps = hello.preferences.target_bitrate_kbps;
+    let max_bitrate_kbps = hello.preferences.max_bitrate_kbps;
     let bandwidth_pressure = observed_tx_kbps
         .zip(max_bitrate_kbps)
         .map(|(tx, cap)| tx > cap)
@@ -240,7 +240,7 @@ fn preference_profile(prefs: &transport::TransportPreferences) -> PreferenceProf
 
 #[derive(Debug, Clone, Copy)]
 struct NetworkHints {
-    target_bitrate_kbps: Option<u32>,
+    max_bitrate_kbps: Option<u32>,
     max_rtt_ms: Option<u32>,
     observed_tx_kbps: Option<u32>,
 }
@@ -251,7 +251,7 @@ fn network_hints(
     allow_dynamic: bool,
 ) -> NetworkHints {
     NetworkHints {
-        target_bitrate_kbps: prefs.target_bitrate_kbps,
+        max_bitrate_kbps: prefs.max_bitrate_kbps,
         max_rtt_ms: prefs.max_rtt_ms,
         observed_tx_kbps: if allow_dynamic { observed_tx_kbps } else { None },
     }
@@ -264,7 +264,7 @@ struct SurfaceHints {
 }
 
 fn codec_allowed_by_network(hints: &NetworkHints, codec: transport::TransportCodec) -> bool {
-    let Some(max_kbps) = hints.target_bitrate_kbps else {
+    let Some(max_kbps) = hints.max_bitrate_kbps else {
         return true;
     };
 
@@ -301,7 +301,7 @@ fn select_codec_for_surface(
             .any(|c| c.eq_ignore_ascii_case("h264"))
         || hello.cpu.avx2
         || hello.cpu.neon;
-    let max_bitrate_kbps = network.target_bitrate_kbps;
+    let max_bitrate_kbps = network.max_bitrate_kbps;
     let bandwidth_pressure = network
         .observed_tx_kbps
         .zip(max_bitrate_kbps)
