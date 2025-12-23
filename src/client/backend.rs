@@ -134,8 +134,8 @@ pub fn build_client_backend(
             }
         },
         config::ClientBackend::WinitWgpu => build_winit_wgpu_backend(config),
-        config::ClientBackend::TermwizImage => Ok(Box::new(
-            crate::client::backends::termwiz_image::TermwizImageClientBackend::new(config),
+        config::ClientBackend::SgrPixels => Ok(Box::new(
+            crate::client::backends::sgr_pixels::SgrPixelsClientBackend::new(config),
         )),
     }
 }
@@ -166,7 +166,7 @@ fn resolve_auto_backend() -> Result<config::ClientBackend> {
     return Ok(config::ClientBackend::WinitWgpu);
 
     #[cfg(not(feature = "winit-wgpu-client"))]
-    Ok(config::ClientBackend::TermwizImage)
+    Ok(config::ClientBackend::SgrPixels)
 }
 
 #[cfg(test)]
@@ -176,8 +176,8 @@ mod resolve_tests {
     #[test]
     fn explicit_backend_is_not_modified() {
         assert_eq!(
-            resolve_client_backend(config::ClientBackend::TermwizImage).unwrap(),
-            config::ClientBackend::TermwizImage
+            resolve_client_backend(config::ClientBackend::SgrPixels).unwrap(),
+            config::ClientBackend::SgrPixels
         );
     }
 

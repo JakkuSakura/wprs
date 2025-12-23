@@ -4,4 +4,4 @@ pub mod wayland;
 #[cfg(feature = "winit-wgpu-client")]
 pub mod winit_wgpu;
 
-pub mod termwiz_image;
+pub mod sgr_pixels;

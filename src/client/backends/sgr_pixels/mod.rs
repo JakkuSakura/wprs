@@ -1,30 +1,30 @@
+use std::fmt::Write as _;
 use std::io::Write;
 
 use anyhow::ensure;
 
+use calloop::channel::Event as CalloopChannelEvent;
+use calloop::EventLoop as CalloopEventLoop;
+
+use termwiz::terminal::ScreenSize;
+use termwiz::terminal::Terminal as _;
+
 use crate::client::backend::ClientBackend;
 use crate::client::backend::ClientBackendConfig;
-use crate::utils::filtering;
 use crate::prelude::*;
 use crate::protocols::wprs as proto;
 use crate::protocols::wprs::RecvType;
 use crate::protocols::wprs::Request;
 use crate::protocols::wprs::Serializer;
+use crate::utils::filtering;
 
-use calloop::channel::Event as CalloopChannelEvent;
-use calloop::EventLoop as CalloopEventLoop;
+const UPPER_HALF_BLOCK: &str = "▀";
 
-use termwiz::render::RenderTty;
-use termwiz::render::terminfo::TerminfoRenderer;
-use termwiz::surface::Change;
-use termwiz::terminal::ScreenSize;
-use termwiz::terminal::Terminal as _;
-
-pub struct TermwizImageClientBackend {
+pub struct SgrPixelsClientBackend {
     _config: ClientBackendConfig,
 }
 
-impl TermwizImageClientBackend {
+impl SgrPixelsClientBackend {
     pub fn new(config: ClientBackendConfig) -> Self {
         Self { _config: config }
     }
@@ -33,7 +33,7 @@ impl TermwizImageClientBackend {
         Self::new(ClientBackendConfig {
             title_prefix: String::new(),
             control_socket: std::env::temp_dir()
-                .join(format!("wrun-termwiz-{}-ctrl.sock", std::process::id())),
+                .join(format!("wrun-sgr-pixels-{}-ctrl.sock", std::process::id())),
             keyboard_mode: crate::client::config::KeyboardMode::default(),
             xkb_keymap_file: None,
             ui_scale_factor: 1.0,
@@ -42,34 +42,13 @@ impl TermwizImageClientBackend {
     }
 }
 
-impl ClientBackend for TermwizImageClientBackend {
+impl ClientBackend for SgrPixelsClientBackend {
     fn name(&self) -> &'static str {
-        "termwiz-image"
+        "sgr-pixels"
     }
 
     fn run(self: Box<Self>, serializer: Serializer<proto::Event, proto::Request>) -> Result<()> {
         run_event_loop(serializer).location(loc!())
-    }
-}
-
-struct StdoutRenderTty<'a> {
-    out: &'a mut dyn Write,
-    size: ScreenSize,
-}
-
-impl Write for StdoutRenderTty<'_> {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.out.write(buf)
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        self.out.flush()
-    }
-}
-
-impl RenderTty for StdoutRenderTty<'_> {
-    fn get_size_in_cells(&mut self) -> termwiz::Result<(usize, usize)> {
-        Ok((self.size.cols, self.size.rows))
     }
 }
 
@@ -80,7 +59,7 @@ fn bgra_to_rgba_in_place(buf: &mut [u8]) {
 }
 
 struct TerminalPresenter {
-    renderer: TerminfoRenderer,
+    terminal: Box<dyn termwiz::terminal::Terminal>,
     screen_size: ScreenSize,
     selected_surface: Option<proto::wayland::WlSurfaceId>,
 }
@@ -88,15 +67,15 @@ struct TerminalPresenter {
 impl TerminalPresenter {
     fn new() -> Result<Self> {
         let termwiz_caps = termwiz::caps::Capabilities::new_from_env().location(loc!())?;
-        let mut term = termwiz::terminal::new_terminal(termwiz_caps.clone()).location(loc!())?;
-        let size = term.get_screen_size().location(loc!())?;
+        let mut terminal = termwiz::terminal::new_terminal(termwiz_caps).location(loc!())?;
+        let size = terminal.get_screen_size().location(loc!())?;
         ensure!(
             size.cols > 0 && size.rows > 0,
             "terminal reported zero size"
         );
 
         Ok(Self {
-            renderer: TerminfoRenderer::new(termwiz_caps),
+            terminal,
             screen_size: ScreenSize {
                 rows: size.rows,
                 cols: size.cols,
@@ -105,6 +84,21 @@ impl TerminalPresenter {
             },
             selected_surface: None,
         })
+    }
+
+    fn refresh_size(&mut self) -> Result<()> {
+        let size = self.terminal.get_screen_size().location(loc!())?;
+        ensure!(
+            size.cols > 0 && size.rows > 0,
+            "terminal reported zero size"
+        );
+        self.screen_size = ScreenSize {
+            rows: size.rows,
+            cols: size.cols,
+            xpixel: size.xpixel,
+            ypixel: size.ypixel,
+        };
+        Ok(())
     }
 
     fn handle_message(&mut self, msg: RecvType<Request>) -> Result<()> {
@@ -119,10 +113,10 @@ impl TerminalPresenter {
                     return Ok(());
                 };
 
-                if self.selected_surface.is_none() {
-                    if matches!(state.role.as_ref(), Some(Role::XdgToplevel(_))) {
-                        self.selected_surface = Some(surface.surface);
-                    }
+                if self.selected_surface.is_none()
+                    && matches!(state.role.as_ref(), Some(Role::XdgToplevel(_)))
+                {
+                    self.selected_surface = Some(surface.surface);
                 }
                 if Some(surface.surface) != self.selected_surface {
                     return Ok(());
@@ -136,46 +130,84 @@ impl TerminalPresenter {
                     _ => return Ok(()),
                 };
 
-                let mut bgra = vec![0u8; buf.metadata.len()];
-                filtering::unfilter(&filtered, &mut bgra);
-                bgra_to_rgba_in_place(&mut bgra);
+                let mut rgba = vec![0u8; buf.metadata.len()];
+                filtering::unfilter(&filtered, &mut rgba);
+                bgra_to_rgba_in_place(&mut rgba);
 
-                let png =
-                    crate::protocols::image::png::encode_png_rgba(&bgra, buf.metadata.width as u32, buf.metadata.height as u32)
-                        .location(loc!())?;
-
-                let cols = self.screen_size.cols;
-                let rows = self.screen_size.rows;
-                let image = termwiz::surface::Image {
-                    width: cols,
-                    height: rows,
-                    top_left: termwiz::image::TextureCoordinate::new_f32(0.0, 0.0),
-                    bottom_right: termwiz::image::TextureCoordinate::new_f32(1.0, 1.0),
-                    image: std::sync::Arc::new(termwiz::image::ImageData::with_data(
-                        termwiz::image::ImageDataType::EncodedFile(png),
-                    )),
-                };
-
-                let mut out = std::io::stdout().lock();
-                let mut tty = StdoutRenderTty {
-                    out: &mut out,
-                    size: self.screen_size,
-                };
-                self.renderer
-                    .render_to(
-                        &[
-                            Change::ClearScreen(Default::default()),
-                            Change::Image(image),
-                        ],
-                        &mut tty,
-                    )
-                    .location(loc!())?;
-                tty.flush().location(loc!())?;
+                self.refresh_size().location(loc!())?;
+                self.render_rgba(
+                    &rgba,
+                    buf.metadata.width as usize,
+                    buf.metadata.height as usize,
+                )
+                .location(loc!())?;
             },
             _ => {},
         }
         Ok(())
     }
+
+    fn render_rgba(&self, rgba: &[u8], src_width: usize, src_height: usize) -> Result<()> {
+        let out_cols = self.screen_size.cols as usize;
+        let out_rows = self.screen_size.rows as usize;
+        if out_cols == 0 || out_rows == 0 || src_width == 0 || src_height == 0 {
+            return Ok(());
+        }
+
+        let out_pixel_height = out_rows.saturating_mul(2);
+        if out_pixel_height == 0 {
+            return Ok(());
+        }
+
+        let mut output = String::new();
+        output.push_str("\x1b[2J\x1b[H\x1b[0m");
+
+        let mut last_fg: Option<[u8; 3]> = None;
+        let mut last_bg: Option<[u8; 3]> = None;
+
+        for row in 0..out_rows {
+            let y_top = row * 2;
+            let y_bottom = y_top + 1;
+
+            for col in 0..out_cols {
+                let src_x = col * src_width / out_cols;
+                let src_y_top = y_top * src_height / out_pixel_height;
+                let src_y_bottom = y_bottom * src_height / out_pixel_height;
+
+                let fg = read_pixel(rgba, src_width, src_x, src_y_top);
+                let bg = read_pixel(rgba, src_width, src_x, src_y_bottom);
+
+                if last_fg != Some(fg) {
+                    write!(output, "\x1b[38;2;{};{};{}m", fg[0], fg[1], fg[2])?;
+                    last_fg = Some(fg);
+                }
+                if last_bg != Some(bg) {
+                    write!(output, "\x1b[48;2;{};{};{}m", bg[0], bg[1], bg[2])?;
+                    last_bg = Some(bg);
+                }
+
+                output.push_str(UPPER_HALF_BLOCK);
+            }
+
+            output.push_str("\x1b[0m");
+            if row + 1 < out_rows {
+                output.push('\n');
+            }
+            last_fg = None;
+            last_bg = None;
+        }
+
+        let mut out = std::io::stdout().lock();
+        out.write_all(output.as_bytes()).location(loc!())?;
+        out.flush().location(loc!())?;
+
+        Ok(())
+    }
+}
+
+fn read_pixel(rgba: &[u8], width: usize, x: usize, y: usize) -> [u8; 3] {
+    let idx = (y * width + x) * 4;
+    [rgba[idx], rgba[idx + 1], rgba[idx + 2]]
 }
 
 fn run_event_loop(mut serializer: Serializer<proto::Event, proto::Request>) -> Result<()> {
@@ -205,7 +237,6 @@ fn run_event_loop(mut serializer: Serializer<proto::Event, proto::Request>) -> R
         })
         .map_err(|e| anyhow!("insert_source(serializer reader) failed: {e:?}"))?;
 
-    // Hold onto the serializer so its transport threads stay alive.
     let _serializer = serializer;
     loop_.run(None, &mut state, |_| {}).location(loc!())
 }
