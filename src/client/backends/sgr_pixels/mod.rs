@@ -107,7 +107,6 @@ impl TerminalPresenter {
         match msg {
             RecvType::Object(Request::Surface(surface)) => {
                 use proto::wayland::BufferAssignment;
-                use proto::wayland::BufferData;
                 use proto::wayland::Role;
                 use proto::wayland::SurfaceRequestPayload;
 
@@ -127,10 +126,10 @@ impl TerminalPresenter {
                 let Some(BufferAssignment::New(buf)) = state.buffer.take() else {
                     return Ok(());
                 };
-                let filtered = match buf.data {
-                    BufferData::Uncompressed(data) => data.0.clone(),
-                    _ => return Ok(()),
-                };
+                if buf.data.as_ref().len() * 4 != buf.metadata.len() {
+                    return Ok(());
+                }
+                let filtered = buf.data.0.clone();
 
                 let mut rgba = vec![0u8; buf.metadata.len()];
                 filtering::unfilter(filtered.as_ref(), &mut rgba);

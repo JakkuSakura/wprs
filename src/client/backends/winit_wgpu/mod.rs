@@ -54,7 +54,7 @@ use crate::protocols::wprs::wayland::{
 };
 use crate::protocols::wprs::transport;
 use crate::protocols::wprs::wayland::{
-    BufferAssignment, BufferData, Mode, OutputEvent, OutputInfo, Subpixel, SurfaceRequest,
+    BufferAssignment, Mode, OutputEvent, OutputInfo, Subpixel, SurfaceRequest,
     SurfaceRequestPayload, Transform, WlSurfaceId,
 };
 use crate::protocols::wprs::xdg_shell::XdgPopupState;
@@ -1599,21 +1599,13 @@ impl App {
 
                 // Apply buffer if present.
                 if let Some(BufferAssignment::New(buf)) = state.buffer.take() {
-                    let filtered = match buf.data {
-                        BufferData::Uncompressed(data) => data.0.clone(),
-                        BufferData::External => {
-                            if self.surfaces_with_frame.contains(&surface_id) {
-                                warn!(
-                                    "Received buffer commit with External data (no cached RawBuffer); skipping frame for {surface_id:?}"
-                                );
-                            } else {
-                                debug!(
-                                    "Received initial External buffer commit without a cached RawBuffer; waiting for first frame for {surface_id:?}"
-                                );
-                            }
-                            return Ok(());
-                        },
-                    };
+                    if buf.data.as_ref().len() * 4 != buf.metadata.len() {
+                        debug!(
+                            "Received buffer commit without inlined payload; skipping frame for {surface_id:?}"
+                        );
+                        return Ok(());
+                    }
+                    let filtered = buf.data.0.clone();
                     // Unfiltering can be expensive on non-SIMD platforms; do it
                     // off the winit/UI thread to keep the window responsive.
                     self.schedule_decode(surface_id, buf.metadata, filtered);

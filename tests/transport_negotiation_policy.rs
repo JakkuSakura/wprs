@@ -74,13 +74,10 @@ fn global_avoids_h264_without_decode_support() {
 
 #[test]
 fn max_bitrate_cap_prefers_allowed_codec() {
-    let mut hello = hello_with_goal(
-        transport::UsageGoal::Office,
-        vec![
-            transport::TransportCodec::Png,
-            transport::TransportCodec::H264,
-        ],
-    );
+    let mut hello = hello_with_codecs(vec![
+        transport::TransportCodec::Png,
+        transport::TransportCodec::H264,
+    ]);
     hello.preferences.max_bitrate_kbps = Some(3_000);
     hello.gpu.has_hw_video_decode = true;
     let cfg = transport_policy::select_global_transport_config(&hello, Some(3_500));
@@ -202,6 +199,7 @@ fn gaming_with_bandwidth_pressure_prefers_h264() {
         ],
     );
     hello.gpu.has_hw_video_decode = true;
+    hello.preferences.max_bitrate_kbps = Some(12_000);
     let cfg = transport_policy::select_global_transport_config(&hello, Some(20_000));
     assert_eq!(cfg.codec, transport::TransportCodec::H264);
 }

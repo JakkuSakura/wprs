@@ -118,16 +118,10 @@ where
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, EnumAsInner, Archive, Deserialize, Serialize)]
-pub enum BufferData {
-    External,
-    Uncompressed(UncompressedBufferData),
-}
-
 #[derive(Debug, Clone, Eq, PartialEq, Archive, Deserialize, Serialize)]
 pub struct Buffer {
     pub metadata: BufferMetadata,
-    pub data: BufferData,
+    pub data: UncompressedBufferData,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, EnumAsInner, Archive, Deserialize, Serialize)]

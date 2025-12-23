@@ -16,7 +16,6 @@ use crate::protocols::wprs::types::Event;
 use crate::protocols::wprs::types::Request;
 use crate::protocols::wprs::wayland::Buffer;
 use crate::protocols::wprs::wayland::BufferAssignment;
-use crate::protocols::wprs::wayland::BufferData;
 use crate::protocols::wprs::wayland::Role;
 use crate::protocols::wprs::wayland::SurfaceRequestPayload;
 use crate::protocols::wprs::wayland::SurfaceState;
@@ -151,7 +150,7 @@ fn apply_observation<B: PollingBackend>(state: &mut State<B>, obs: BackendObserv
 
                 BufferAssignment::New(Buffer {
                     metadata: frame.metadata,
-                    data: BufferData::Uncompressed(UncompressedBufferData::from(slot)),
+                    data: UncompressedBufferData::from(slot),
                 })
             });
 

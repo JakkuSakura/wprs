@@ -87,7 +87,6 @@ use crate::prelude::*;
 
 pub use crate::models::surface::Buffer;
 pub use crate::models::surface::BufferAssignment;
-pub use crate::models::surface::BufferData;
 pub use crate::models::surface::BufferFormat;
 pub use crate::models::surface::BufferMetadata;
 pub use crate::models::surface::BufferUpdate;

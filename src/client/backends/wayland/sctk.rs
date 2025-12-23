@@ -69,7 +69,6 @@ use crate::protocols::wprs::geometry::Point;
 use crate::protocols::wprs::geometry::Rectangle;
 use crate::protocols::wprs::wayland::Buffer;
 use crate::protocols::wprs::wayland::BufferAssignment;
-use crate::protocols::wprs::wayland::BufferData;
 use crate::protocols::wprs::wayland::BufferMetadata;
 use crate::protocols::wprs::wayland::Region;
 use crate::protocols::wprs::wayland::SubsurfacePosition;
@@ -499,9 +498,9 @@ impl RemoteSurface {
     ) -> Result<()> {
         match new_buffer {
             Some(BufferAssignment::New(mut new_buffer)) => {
-                if new_buffer.data.is_external() {
+                if new_buffer.data.as_ref().len() * 4 != new_buffer.metadata.len() {
                     debug!(
-                        "received buffer commit with External data and no inlined payload; skipping"
+                        "received buffer commit without inlined payload; skipping"
                     );
                     return Ok(());
                 }

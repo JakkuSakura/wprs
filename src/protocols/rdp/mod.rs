@@ -32,7 +32,6 @@ use crate::protocols::wprs::serializer::SerializerClientOptions;
 use crate::protocols::wprs::wayland::AxisScroll;
 use crate::protocols::wprs::wayland::AxisSource;
 use crate::protocols::wprs::wayland::BufferAssignment;
-use crate::protocols::wprs::wayland::BufferData;
 use crate::protocols::wprs::wayland::KeyInner;
 use crate::protocols::wprs::wayland::KeyState;
 use crate::protocols::wprs::wayland::KeyboardEvent;
@@ -391,16 +390,13 @@ pub fn run_bridge(
 
                                     if let Some(BufferAssignment::New(mut buf)) = state.buffer.take()
                                     {
-                                        if buf.data.is_external() {
+                                        if buf.data.as_ref().len() * 4 != buf.metadata.len() {
                                             if let Some(cache) = buffer_cache.take() {
-                                                buf.data = BufferData::Uncompressed(cache);
+                                                buf.data = cache;
                                             }
                                         }
 
-                                        let filtered = match buf.data {
-                                            BufferData::Uncompressed(data) => data.as_ref(),
-                                            _ => return,
-                                        };
+                                        let filtered = buf.data.as_ref();
 
                                         let width = buf.metadata.width.max(1) as usize;
                                         let height = buf.metadata.height.max(1) as usize;

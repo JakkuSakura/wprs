@@ -112,7 +112,6 @@ use crate::protocols::wprs::handshake;
 use crate::protocols::wprs::tuple::Tuple2;
 use crate::protocols::wprs::wayland::BufferAssignment;
 use crate::protocols::wprs::wayland::Buffer;
-use crate::protocols::wprs::wayland::BufferData;
 use crate::protocols::wprs::wayland::BufferMetadata;
 use crate::protocols::wprs::wayland::ClientSurface;
 use crate::protocols::wprs::wayland::CursorImage;
@@ -127,8 +126,10 @@ use crate::protocols::wprs::wayland::SubSurfaceState;
 use crate::protocols::wprs::wayland::SubsurfacePosition;
 use crate::protocols::wprs::wayland::SurfaceState;
 use crate::protocols::wprs::wayland::Transform;
+use crate::protocols::wprs::wayland::UncompressedBufferData;
 use crate::protocols::wprs::wayland::WlSurfaceId;
 use crate::utils::filtering;
+use crate::utils::vec4u8::Vec4u8s;
 use crate::protocols::wprs::xdg_shell::DecorationMode;
 use crate::protocols::wprs::xdg_shell::Move;
 use crate::protocols::wprs::xdg_shell::PopupRequest;
@@ -885,7 +886,7 @@ pub fn commit_impl(
 
             surface_state_to_send.buffer = Some(BufferAssignment::New(Buffer {
                 metadata,
-                data: BufferData::External,
+                data: UncompressedBufferData::from(Vec4u8s::new()),
             }));
 
             state

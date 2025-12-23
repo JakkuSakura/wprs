@@ -20,11 +20,11 @@ use crate::protocols::wprs::serializer::Serializer;
 use crate::protocols::wprs::handshake;
 use crate::protocols::wprs::transport;
 use crate::protocols::wprs::wayland::BufferAssignment;
-use crate::protocols::wprs::wayland::BufferData;
 use crate::protocols::wprs::wayland::BufferMetadata;
 use crate::protocols::wprs::wayland::Role;
 use crate::protocols::wprs::wayland::SurfaceRequestPayload;
 use crate::protocols::wprs::wayland::SurfaceState;
+use crate::protocols::wprs::wayland::UncompressedBufferData;
 use crate::protocols::wprs::wayland::WlSurfaceId;
 use crate::server::backend::BackendObservation;
 use crate::server::backend::BackendSurfaceRole;
@@ -32,6 +32,7 @@ use crate::server::backend::PollingBackend;
 use crate::server::transport_policy;
 use crate::utils::sharding_compression::ShardingCompressor;
 use crate::utils::sharding_compression::CompressedShards;
+use crate::utils::vec4u8::Vec4u8s;
 use crate::protocols::wprs::xdg_shell;
 
 #[cfg(feature = "video-h264")]
@@ -274,7 +275,7 @@ fn apply_observation<B: PollingBackend>(
             let buffer = frame.as_ref().map(|frame| {
                 BufferAssignment::New(crate::protocols::wprs::wayland::Buffer {
                     metadata: frame.metadata,
-                    data: BufferData::External,
+                    data: UncompressedBufferData::from(Vec4u8s::new()),
                 })
             });
             let state_to_send = surface_state_for_descriptor(&surface, buffer);
