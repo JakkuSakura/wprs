@@ -5,6 +5,7 @@ use clap::Parser;
 
 use wprs::client::config::ClientBackend;
 use wprs::config;
+use wprs::config::SerializableLevel;
 use wprs::launcher;
 use wprs::prelude::*;
 use wprs::server::config::WprsdConfig;
@@ -43,9 +44,13 @@ fn main() -> Result<()> {
         args.config_file
             .clone()
             .unwrap_or_else(|| config::default_config_file("wprsd"));
-    let wprsd_config =
-        config::maybe_read_ron_file::<WprsdConfig>(&config_file).location(loc!())?
-            .unwrap_or_default();
+    let wprsd_config_from_file =
+        config::maybe_read_ron_file::<WprsdConfig>(&config_file).location(loc!())?;
+    let config_from_file_missing = wprsd_config_from_file.is_none();
+    let mut wprsd_config = wprsd_config_from_file.unwrap_or_default();
+    if config_from_file_missing {
+        wprsd_config.stderr_log_level = SerializableLevel(tracing::Level::DEBUG);
+    }
 
     config::set_log_priv_data(wprsd_config.log_priv_data);
     utils::configure_tracing(

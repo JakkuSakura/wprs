@@ -25,7 +25,7 @@ pub fn default_config_file_dir() -> PathBuf {
     Path::join(
         &env::var_os("XDG_CONFIG_HOME")
             .map(Into::into)
-            .or(fallback_config_parent_dir().log(loc!()).ok())
+            .or(fallback_config_parent_dir().ok())
             .unwrap_or_else(|| "/etc".into()),
         "wprs",
     )
