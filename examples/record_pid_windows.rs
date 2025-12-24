@@ -20,6 +20,9 @@ use wprs::server::backends::macos::MacosWindowBackendConfig;
 struct RecorderBackend {
     inner: MacosWindowBackend,
     output_dir: PathBuf,
+    frame_seq: std::collections::HashMap<u64, u64>,
+    window_idx: std::collections::HashMap<u64, u64>,
+    next_idx: u64,
 }
 
 #[cfg(target_os = "macos")]
@@ -32,6 +35,9 @@ impl RecorderBackend {
                 target_pid: Some(pid),
             }),
             output_dir,
+            frame_seq: std::collections::HashMap::new(),
+            window_idx: std::collections::HashMap::new(),
+            next_idx: 0,
         })
     }
 
@@ -74,16 +80,23 @@ impl RecorderBackend {
                     let png =
                         transport::encode_png_from_bgra(width, height, stride, &frame.bgra)
                             .location(loc!())?;
-                    let path = self
-                        .output_dir
-                        .join(format!("window-{}.png", surface.id.0));
+                    let idx = self
+                        .window_idx
+                        .entry(surface.id.0)
+                        .or_insert_with(|| {
+                            let idx = self.next_idx;
+                            self.next_idx += 1;
+                            idx
+                        });
+                    let seq = self.frame_seq.entry(surface.id.0).or_insert(0);
+                    let filename = format!("window_{}_{}.png", idx, *seq);
+                    *seq += 1;
+                    let path = self.output_dir.join(filename);
                     std::fs::write(&path, png).location(loc!())?;
                 }
                 BackendObservation::SurfaceDestroyed { surface, .. } => {
-                    let path = self
-                        .output_dir
-                        .join(format!("window-{}.png", surface.0));
-                    let _ = std::fs::remove_file(path);
+                    self.frame_seq.remove(&surface.0);
+                    self.window_idx.remove(&surface.0);
                 }
             }
         }
@@ -102,7 +115,7 @@ impl ServerBackend for RecorderBackend {
         _serializer: wprs::protocols::wprs::serializer::Serializer<Request, Event>,
         tick_interval: Option<Duration>,
     ) -> Result<()> {
-        let tick_interval = tick_interval.unwrap_or(Duration::from_millis(200));
+        let tick_interval = tick_interval.unwrap_or(Duration::from_secs(1));
 
         let snapshot = self.inner.initial_snapshot().location(loc!())?;
         self.handle_observations(snapshot).location(loc!())?;
@@ -119,7 +132,7 @@ fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
         eprintln!(
-            "usage: record_pid_windows <pid> [output_dir] [interval_ms]\n\nExample:\n  record_pid_windows 1234 /tmp/wprs-png 200"
+            "usage: record_pid_windows <pid> [output_dir]\n\nExample:\n  record_pid_windows 1234 target/record/pid_1234"
         );
         return Ok(());
     }
@@ -130,23 +143,14 @@ fn main() -> Result<()> {
     let output_dir = args
         .get(2)
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(format!("wprs-windows-{pid}")));
-    let interval_ms: u64 = args
-        .get(3)
-        .map(|value| {
-            value
-                .parse()
-                .map_err(|_| Error::InvalidArgument("interval_ms must be a u64".to_string()))
-        })
-        .transpose()?
-        .unwrap_or(200);
-    let tick_interval = Duration::from_millis(interval_ms);
+        .unwrap_or_else(|| PathBuf::from(format!("target/record/pid_{pid}")));
+    let tick_interval = Duration::from_secs(1);
 
     #[cfg(target_os = "macos")]
     {
         let backend = RecorderBackend::new(pid, output_dir).location(loc!())?;
         let (serializer, _client) = new_inproc_serializer_pair::<Request, Event>().location(loc!())?;
-        backend
+        Box::new(backend)
             .run(serializer, Some(tick_interval))
             .location(loc!())
     }
