@@ -6,103 +6,168 @@ if (!surfaceId) {
   document.body.textContent = "missing surface id";
 }
 
-const gl = canvas.getContext("webgl2") || canvas.getContext("webgl");
-if (!gl) {
-  document.body.textContent = "WebGL unavailable";
+let gpuContext;
+let device;
+let texture;
+let textureWidth = 0;
+let textureHeight = 0;
+let sampler;
+let pipeline;
+let bindGroup;
+let vertexBuffer;
+let indexBuffer;
+let canvasFormat;
+
+async function initWebGpu() {
+  if (!navigator.gpu) {
+    throw new Error("WebGPU unavailable");
+  }
+
+  const adapter = await navigator.gpu.requestAdapter();
+  if (!adapter) {
+    throw new Error("WebGPU adapter unavailable");
+  }
+
+  device = await adapter.requestDevice();
+  gpuContext = canvas.getContext("webgpu");
+  canvasFormat = navigator.gpu.getPreferredCanvasFormat();
+  gpuContext.configure({
+    device,
+    format: canvasFormat,
+    alphaMode: "opaque",
+  });
+
+  const shaderModule = device.createShaderModule({
+    code: `
+      struct VertexOut {
+        @builtin(position) position: vec4<f32>,
+        @location(0) uv: vec2<f32>,
+      };
+
+      @vertex
+      fn vs_main(@location(0) position: vec2<f32>, @location(1) uv: vec2<f32>) -> VertexOut {
+        var out: VertexOut;
+        out.position = vec4<f32>(position, 0.0, 1.0);
+        out.uv = uv;
+        return out;
+      }
+
+      @group(0) @binding(0) var tex: texture_2d<f32>;
+      @group(0) @binding(1) var samp: sampler;
+
+      @fragment
+      fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
+        return textureSample(tex, samp, uv);
+      }
+    `,
+  });
+
+  const bindGroupLayout = device.createBindGroupLayout({
+    entries: [
+      { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: {} },
+      { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
+    ],
+  });
+
+  pipeline = device.createRenderPipeline({
+    layout: device.createPipelineLayout({ bindGroupLayouts: [bindGroupLayout] }),
+    vertex: {
+      module: shaderModule,
+      entryPoint: "vs_main",
+      buffers: [
+        {
+          arrayStride: 16,
+          attributes: [
+            { shaderLocation: 0, offset: 0, format: "float32x2" },
+            { shaderLocation: 1, offset: 8, format: "float32x2" },
+          ],
+        },
+      ],
+    },
+    fragment: {
+      module: shaderModule,
+      entryPoint: "fs_main",
+      targets: [{ format: canvasFormat }],
+    },
+    primitive: { topology: "triangle-list" },
+  });
+
+  const vertices = new Float32Array([
+    -1, -1, 0, 1,
+     1, -1, 1, 1,
+     1,  1, 1, 0,
+    -1,  1, 0, 0,
+  ]);
+  vertexBuffer = device.createBuffer({
+    size: vertices.byteLength,
+    usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+  });
+  device.queue.writeBuffer(vertexBuffer, 0, vertices);
+
+  const indices = new Uint16Array([0, 1, 2, 2, 3, 0]);
+  indexBuffer = device.createBuffer({
+    size: indices.byteLength,
+    usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
+  });
+  device.queue.writeBuffer(indexBuffer, 0, indices);
+
+  sampler = device.createSampler({
+    magFilter: "nearest",
+    minFilter: "nearest",
+  });
+
+  return true;
 }
-
-function createShader(type, source) {
-  const shader = gl.createShader(type);
-  gl.shaderSource(shader, source);
-  gl.compileShader(shader);
-  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-    const info = gl.getShaderInfoLog(shader) || "";
-    gl.deleteShader(shader);
-    throw new Error(info);
-  }
-  return shader;
-}
-
-function createProgram(vertexSource, fragmentSource) {
-  const program = gl.createProgram();
-  const vs = createShader(gl.VERTEX_SHADER, vertexSource);
-  const fs = createShader(gl.FRAGMENT_SHADER, fragmentSource);
-  gl.attachShader(program, vs);
-  gl.attachShader(program, fs);
-  gl.linkProgram(program);
-  gl.deleteShader(vs);
-  gl.deleteShader(fs);
-  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-    const info = gl.getProgramInfoLog(program) || "";
-    gl.deleteProgram(program);
-    throw new Error(info);
-  }
-  return program;
-}
-
-const vertexSource = `
-  attribute vec2 a_position;
-  attribute vec2 a_texCoord;
-  varying vec2 v_texCoord;
-  void main() {
-    v_texCoord = a_texCoord;
-    gl_Position = vec4(a_position, 0.0, 1.0);
-  }
-`;
-
-const fragmentSource = `
-  precision mediump float;
-  varying vec2 v_texCoord;
-  uniform sampler2D u_texture;
-  void main() {
-    gl_FragColor = texture2D(u_texture, v_texCoord);
-  }
-`;
-
-const program = createProgram(vertexSource, fragmentSource);
-gl.useProgram(program);
-
-const positionLoc = gl.getAttribLocation(program, "a_position");
-const texCoordLoc = gl.getAttribLocation(program, "a_texCoord");
-
-const vertexBuffer = gl.createBuffer();
-gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
-const vertices = new Float32Array([
-  -1, -1, 0, 1,
-   1, -1, 1, 1,
-  -1,  1, 0, 0,
-   1,  1, 1, 0,
-]);
-gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
-
-const stride = 4 * Float32Array.BYTES_PER_ELEMENT;
-const texOffset = 2 * Float32Array.BYTES_PER_ELEMENT;
-
-gl.enableVertexAttribArray(positionLoc);
-gl.vertexAttribPointer(positionLoc, 2, gl.FLOAT, false, stride, 0);
-
-gl.enableVertexAttribArray(texCoordLoc);
-gl.vertexAttribPointer(texCoordLoc, 2, gl.FLOAT, false, stride, texOffset);
-
-const texture = gl.createTexture();
-gl.bindTexture(gl.TEXTURE_2D, texture);
-gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-
-gl.clearColor(0.1, 0.1, 0.1, 1.0);
 
 function updateTexture(width, height, rgba) {
   if (canvas.width !== width || canvas.height !== height) {
     canvas.width = width;
     canvas.height = height;
   }
-  gl.viewport(0, 0, width, height);
-  gl.bindTexture(gl.TEXTURE_2D, texture);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, rgba);
-  gl.clear(gl.COLOR_BUFFER_BIT);
-  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+  if (!texture || textureWidth !== width || textureHeight !== height) {
+    texture = device.createTexture({
+      size: { width, height },
+      format: "rgba8unorm",
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+    });
+    textureWidth = width;
+    textureHeight = height;
+
+    bindGroup = device.createBindGroup({
+      layout: pipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: texture.createView() },
+        { binding: 1, resource: sampler },
+      ],
+    });
+  }
+
+  device.queue.writeTexture(
+    { texture },
+    rgba,
+    { bytesPerRow: width * 4 },
+    { width, height }
+  );
+
+  const encoder = device.createCommandEncoder();
+  const pass = encoder.beginRenderPass({
+    colorAttachments: [
+      {
+        view: gpuContext.getCurrentTexture().createView(),
+        loadOp: "clear",
+        storeOp: "store",
+        clearValue: { r: 0.1, g: 0.1, b: 0.1, a: 1.0 },
+      },
+    ],
+  });
+  pass.setPipeline(pipeline);
+  pass.setBindGroup(0, bindGroup);
+  pass.setVertexBuffer(0, vertexBuffer);
+  pass.setIndexBuffer(indexBuffer, "uint16");
+  pass.drawIndexed(6);
+  pass.end();
+  device.queue.submit([encoder.finish()]);
 }
 
 function connect() {
@@ -137,4 +202,8 @@ function connect() {
   };
 }
 
-connect();
+initWebGpu()
+  .then(() => connect())
+  .catch((err) => {
+    document.body.textContent = err.message || String(err);
+  });
