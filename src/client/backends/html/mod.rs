@@ -28,7 +28,6 @@ use crate::client::window_manager::WindowInfo;
 use crate::client::window_manager::WindowManager;
 use crate::prelude::*;
 use crate::protocols::wprs as proto;
-use crate::protocols::wprs::transport;
 use crate::protocols::wprs::wayland::WlSurfaceId;
 
 pub struct HtmlClientBackend {
@@ -140,7 +139,7 @@ impl HtmlPresenter {
         }
 
         for updated in batch.surfaces.updated {
-            if let Some(frame) = encode_surface_png(&updated)? {
+            if let Some(frame) = encode_surface_rgba(&updated)? {
                 let msg = encode_frame_message(updated.id, frame);
                 let _ = self.broadcaster.send(WireMessage::Binary(msg));
             }
@@ -187,10 +186,10 @@ impl HtmlPresenter {
 struct EncodedFrame {
     width: u32,
     height: u32,
-    png: Vec<u8>,
+    rgba: Vec<u8>,
 }
 
-fn encode_surface_png(state: &proto::wayland::SurfaceState) -> Result<Option<EncodedFrame>> {
+fn encode_surface_rgba(state: &proto::wayland::SurfaceState) -> Result<Option<EncodedFrame>> {
     let Some(proto::wayland::BitmapAssignment::New(buf)) = state.bitmap.as_ref() else {
         return Ok(None);
     };
@@ -211,17 +210,41 @@ fn encode_surface_png(state: &proto::wayland::SurfaceState) -> Result<Option<Enc
         return Ok(None);
     }
 
-    let png = transport::encode_png_from_bgra(width, height, stride, bytes).location(loc!())?;
-    Ok(Some(EncodedFrame { width, height, png }))
+    let rgba = bgra_to_tight_rgba(width, height, stride, bytes)?;
+    Ok(Some(EncodedFrame { width, height, rgba }))
 }
 
 fn encode_frame_message(surface_id: WlSurfaceId, frame: EncodedFrame) -> Vec<u8> {
-    let mut out = Vec::with_capacity(16 + frame.png.len());
+    let mut out = Vec::with_capacity(17 + frame.rgba.len());
+    out.push(1);
     out.extend_from_slice(&surface_id.0.to_le_bytes());
     out.extend_from_slice(&frame.width.to_le_bytes());
     out.extend_from_slice(&frame.height.to_le_bytes());
-    out.extend_from_slice(&frame.png);
+    out.extend_from_slice(&frame.rgba);
     out
+}
+
+fn bgra_to_tight_rgba(
+    width: u32,
+    height: u32,
+    stride_bytes: usize,
+    bgra: &[u8],
+) -> Result<Vec<u8>> {
+    let width_usize = width as usize;
+    let height_usize = height as usize;
+    let mut rgba = vec![0u8; width_usize * height_usize * 4];
+    for y in 0..height_usize {
+        let in_row = &bgra[y * stride_bytes..y * stride_bytes + width_usize * 4];
+        let out_row = &mut rgba[y * width_usize * 4..(y + 1) * width_usize * 4];
+        for x in 0..width_usize {
+            let i = x * 4;
+            out_row[i] = in_row[i + 2];
+            out_row[i + 1] = in_row[i + 1];
+            out_row[i + 2] = in_row[i];
+            out_row[i + 3] = in_row[i + 3];
+        }
+    }
+    Ok(rgba)
 }
 
 fn surface_event_json(surface_id: WlSurfaceId, title: Option<&str>) -> String {
@@ -382,14 +405,15 @@ mod tests {
         let frame = EncodedFrame {
             width: 10,
             height: 20,
-            png: vec![1, 2, 3],
+            rgba: vec![1, 2, 3],
         };
         let msg = encode_frame_message(id, frame);
-        assert_eq!(msg.len(), 16 + 3);
-        assert_eq!(&msg[0..8], &42u64.to_le_bytes());
-        assert_eq!(&msg[8..12], &10u32.to_le_bytes());
-        assert_eq!(&msg[12..16], &20u32.to_le_bytes());
-        assert_eq!(&msg[16..], &[1, 2, 3]);
+        assert_eq!(msg.len(), 17 + 3);
+        assert_eq!(msg[0], 1);
+        assert_eq!(&msg[1..9], &42u64.to_le_bytes());
+        assert_eq!(&msg[9..13], &10u32.to_le_bytes());
+        assert_eq!(&msg[13..17], &20u32.to_le_bytes());
+        assert_eq!(&msg[17..], &[1, 2, 3]);
     }
 
     #[test]
