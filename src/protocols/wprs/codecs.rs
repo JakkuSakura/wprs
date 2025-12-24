@@ -42,6 +42,15 @@ pub fn select_global_transport_config(
                 codec = manual;
             }
         }
+        let surface_hints = SurfaceHints {
+            surface_px: 0,
+            large_surface: false,
+            estimated_fps: None,
+            surface_tx_kbps: None,
+            total_tx_kbps: observed_tx_kbps,
+            client_max_fps,
+        };
+        let params = choose_codec_params(codec, &profile, &network, &surface_hints);
         return transport::TransportConfig {
             codec,
             buffer_patches: transport::BufferPatchConfig {
@@ -49,6 +58,8 @@ pub fn select_global_transport_config(
                 ..Default::default()
             },
             max_fps: client_max_fps,
+            jpeg_quality: params.jpeg_quality,
+            h264_bitrate_kbps: params.h264_bitrate_kbps,
         };
     }
 
@@ -127,6 +138,15 @@ pub fn select_global_transport_config(
         codec = transport::TransportCodec::ShardedRaw;
     }
 
+    let surface_hints = SurfaceHints {
+        surface_px: 0,
+        large_surface: false,
+        estimated_fps: None,
+        surface_tx_kbps: None,
+        total_tx_kbps: observed_tx_kbps,
+        client_max_fps,
+    };
+    let params = choose_codec_params(codec, &profile, &network, &surface_hints);
     transport::TransportConfig {
         codec,
         buffer_patches: transport::BufferPatchConfig {
@@ -134,6 +154,8 @@ pub fn select_global_transport_config(
             ..Default::default()
         },
         max_fps: client_max_fps,
+        jpeg_quality: params.jpeg_quality,
+        h264_bitrate_kbps: params.h264_bitrate_kbps,
     }
 }
 
@@ -182,6 +204,9 @@ pub fn select_surface_transport_config(
     cfg.max_fps = choose_max_fps(&profile, &network, stats.client_max_fps)
         .or(cfg.max_fps);
     cfg.buffer_patches = choose_buffer_patches(hello, &profile, &network, &surface_hints);
+    let params = choose_codec_params(cfg.codec, &profile, &network, &surface_hints);
+    cfg.jpeg_quality = params.jpeg_quality;
+    cfg.h264_bitrate_kbps = params.h264_bitrate_kbps;
 
     cfg
 }
@@ -311,6 +336,143 @@ enum Behavior {
     Codec,
     BufferPatches,
     Fps,
+    JpegQuality,
+    H264Bitrate,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct CodecParams {
+    jpeg_quality: Option<u8>,
+    h264_bitrate_kbps: Option<u32>,
+}
+
+fn choose_codec_params(
+    codec: transport::TransportCodec,
+    profile: &PreferenceProfile,
+    network: &NetworkHints,
+    surface: &SurfaceHints,
+) -> CodecParams {
+    match codec {
+        transport::TransportCodec::Jpeg => CodecParams {
+            jpeg_quality: Some(choose_jpeg_quality(profile, network, surface)),
+            h264_bitrate_kbps: None,
+        },
+        transport::TransportCodec::H264 => CodecParams {
+            jpeg_quality: None,
+            h264_bitrate_kbps: Some(choose_h264_bitrate_kbps(profile, network, surface)),
+        },
+        _ => CodecParams::default(),
+    }
+}
+
+fn choose_jpeg_quality(
+    profile: &PreferenceProfile,
+    network: &NetworkHints,
+    surface: &SurfaceHints,
+) -> u8 {
+    let candidates = [95u8, 90, 85, 75, 65, 50];
+    let bandwidth_pressure = network
+        .observed_tx_kbps
+        .zip(network.max_bitrate_kbps)
+        .map(|(tx, cap)| tx > cap)
+        .unwrap_or(false);
+    let low_target_bitrate = network.max_bitrate_kbps.map_or(false, |kbps| kbps < 8_000);
+    let high_fps = match surface.client_max_fps {
+        Some(max_fps) if max_fps > 0 => surface.estimated_fps.unwrap_or(0.0)
+            >= (max_fps as f32 * 0.8),
+        _ => surface.estimated_fps.unwrap_or(0.0) >= 30.0,
+    };
+
+    let mut best = candidates[0];
+    let mut best_score = i32::MIN;
+
+    for quality in candidates {
+        let q = quality as i32;
+        let mut scores = DimensionScores {
+            latency: 0,
+            bandwidth: -(q / 2),
+            clarity: q,
+            cpu: -(q / 3),
+        };
+        if bandwidth_pressure || low_target_bitrate {
+            scores.bandwidth -= q / 2;
+        }
+        if surface.large_surface || high_fps {
+            scores.bandwidth -= q / 3;
+        }
+        if profile.drop_tolerance == transport::DropTolerance::Avoid {
+            scores.clarity += 5;
+        }
+        let score = score_behavior(Behavior::JpegQuality, profile, scores);
+        if score > best_score {
+            best_score = score;
+            best = quality;
+        }
+    }
+
+    best
+}
+
+fn choose_h264_bitrate_kbps(
+    profile: &PreferenceProfile,
+    network: &NetworkHints,
+    surface: &SurfaceHints,
+) -> u32 {
+    let mut candidates: Vec<u32> = if let Some(cap) = network.max_bitrate_kbps {
+        let cap = cap.max(1_000);
+        vec![cap / 2, (cap * 3) / 4, cap]
+    } else {
+        vec![2_000, 4_000, 6_000, 8_000, 12_000]
+    };
+    candidates.retain(|kbps| *kbps > 0);
+    candidates.sort_unstable();
+    candidates.dedup();
+
+    let bandwidth_pressure = network
+        .observed_tx_kbps
+        .zip(network.max_bitrate_kbps)
+        .map(|(tx, cap)| tx > cap)
+        .unwrap_or(false);
+    let low_target_bitrate = network.max_bitrate_kbps.map_or(false, |kbps| kbps < 8_000);
+    let high_fps = match surface.client_max_fps {
+        Some(max_fps) if max_fps > 0 => surface.estimated_fps.unwrap_or(0.0)
+            >= (max_fps as f32 * 0.8),
+        _ => surface.estimated_fps.unwrap_or(0.0) >= 30.0,
+    };
+
+    let mut best = *candidates.first().unwrap_or(&4_000);
+    let mut best_score = i32::MIN;
+
+    for kbps in candidates {
+        let kbps_i32 = kbps as i32;
+        let mut scores = DimensionScores {
+            latency: 0,
+            bandwidth: -(kbps_i32 / 250),
+            clarity: kbps_i32 / 200,
+            cpu: 0,
+        };
+        if surface.large_surface {
+            scores.clarity += 10;
+        }
+        if high_fps {
+            scores.latency += 5;
+            scores.clarity += 5;
+        }
+        if bandwidth_pressure || low_target_bitrate {
+            scores.bandwidth -= kbps_i32 / 250;
+            scores.clarity -= kbps_i32 / 400;
+        }
+        if profile.drop_tolerance == transport::DropTolerance::Avoid {
+            scores.clarity += 5;
+        }
+        let score = score_behavior(Behavior::H264Bitrate, profile, scores);
+        if score > best_score {
+            best_score = score;
+            best = kbps;
+        }
+    }
+
+    best
 }
 
 fn codec_allowed_by_network(hints: &NetworkHints, codec: transport::TransportCodec) -> bool {
@@ -824,6 +986,18 @@ fn behavior_weights(profile: &PreferenceProfile, behavior: Behavior) -> Dimensio
             latency: base.latency * 2,
             bandwidth: base.bandwidth,
             clarity: base.clarity,
+            cpu: base.cpu,
+        },
+        Behavior::JpegQuality => DimensionWeights {
+            latency: base.latency,
+            bandwidth: base.bandwidth * 2,
+            clarity: base.clarity * 2,
+            cpu: base.cpu,
+        },
+        Behavior::H264Bitrate => DimensionWeights {
+            latency: base.latency,
+            bandwidth: base.bandwidth * 2,
+            clarity: base.clarity * 2,
             cpu: base.cpu,
         },
     }

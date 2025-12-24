@@ -3,13 +3,14 @@ use wprs::protocols::wprs::wayland::BufferFormat;
 use wprs::protocols::wprs::wayland::BufferMetadata;
 use wprs::protocols::wprs::wayland::WlSurfaceId;
 use wprs::protocols::wprs::codecs;
+use wprs::protocols::wprs::capabilities;
 
 fn hello_with_codecs(codecs: Vec<transport::TransportCodec>) -> transport::ClientHello {
     transport::ClientHello {
         supported_codecs: codecs,
         supports_buffer_patches: false,
-        cpu: transport::CpuFeatures::default(),
-        gpu: transport::GpuFeatures::default(),
+        cpu: capabilities::CpuFeatures::default(),
+        gpu: capabilities::GpuFeatures::default(),
         preferences: transport::TransportPreferences::default(),
     }
 }
@@ -184,6 +185,36 @@ fn usage_goal_office_prefers_png_over_lossy_codecs() {
     );
     let cfg = codecs::select_global_transport_config(&hello, None, None);
     assert_eq!(cfg.codec, transport::TransportCodec::Png);
+}
+
+#[test]
+fn jpeg_quality_prefers_lower_under_bandwidth_pressure() {
+    let mut hello = hello_with_codecs(vec![transport::TransportCodec::Jpeg]);
+    hello.preferences.bandwidth_weight = 90;
+    hello.preferences.clarity_weight = 5;
+    hello.preferences.cpu_weight = 5;
+    hello.preferences.latency_weight = 0;
+    hello.preferences.max_bitrate_kbps = Some(2_000);
+
+    let cfg = codecs::select_global_transport_config(&hello, Some(5_000), None);
+    assert_eq!(cfg.codec, transport::TransportCodec::Jpeg);
+    assert_eq!(cfg.jpeg_quality, Some(50));
+}
+
+#[test]
+fn h264_bitrate_prefers_higher_for_clarity() {
+    let mut hello = hello_with_codecs(vec![transport::TransportCodec::H264]);
+    hello.preferences.selection_mode = transport::SelectionMode::Manual;
+    hello.preferences.manual_codec = Some(transport::TransportCodec::H264);
+    hello.preferences.bandwidth_weight = 5;
+    hello.preferences.clarity_weight = 90;
+    hello.preferences.cpu_weight = 5;
+    hello.preferences.latency_weight = 0;
+    hello.gpu.has_hw_video_decode = true;
+
+    let cfg = codecs::select_global_transport_config(&hello, None, None);
+    assert_eq!(cfg.codec, transport::TransportCodec::H264);
+    assert_eq!(cfg.h264_bitrate_kbps, Some(12_000));
 }
 
 #[test]

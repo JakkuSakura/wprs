@@ -44,6 +44,8 @@ use crate::protocols::video::h264::H264Encoder;
 struct H264EncodeState {
     width: u32,
     height: u32,
+    bitrate_kbps: Option<u32>,
+    fps: u32,
     encoder: H264Encoder,
 }
 
@@ -120,6 +122,28 @@ fn record_sent_bytes<B: PollingBackend>(state: &mut State<B>, surface: WlSurface
     *entry = entry.saturating_add(bytes as u64);
 }
 
+fn log_global_transport_config(config: &transport::TransportConfig) {
+    info!(
+        "transport config updated: codec={:?} max_fps={:?} buffer_patches={} jpeg_quality={:?} h264_bitrate_kbps={:?}",
+        config.codec,
+        config.max_fps,
+        config.buffer_patches.enabled,
+        config.jpeg_quality,
+        config.h264_bitrate_kbps,
+    );
+}
+
+fn log_surface_transport_config(surface: WlSurfaceId, config: &transport::TransportConfig) {
+    debug!(
+        "surface transport config updated: surface={surface:?} codec={:?} max_fps={:?} buffer_patches={} jpeg_quality={:?} h264_bitrate_kbps={:?}",
+        config.codec,
+        config.max_fps,
+        config.buffer_patches.enabled,
+        config.jpeg_quality,
+        config.h264_bitrate_kbps,
+    );
+}
+
 fn maybe_update_observed_bandwidth<B: PollingBackend>(state: &mut State<B>) {
     let elapsed = state.last_stats_update.elapsed();
     if elapsed < Duration::from_secs(1) {
@@ -147,6 +171,7 @@ fn maybe_update_observed_bandwidth<B: PollingBackend>(state: &mut State<B>) {
         if state.transport_config != config {
             state.transport_config = config.clone();
             state.surface_transport_config.clear();
+            log_global_transport_config(&config);
             state
                 .serializer
                 .writer()
@@ -292,17 +317,26 @@ fn encode_bgra_frame(
                 })
                 .location(loc!())?;
 
+            let bitrate_kbps = transport_config.h264_bitrate_kbps;
             let should_reinit = match h264.get(&surface_id) {
-                Some(existing) => existing.width != width || existing.height != height,
+                Some(existing) => {
+                    existing.width != width
+                        || existing.height != height
+                        || existing.bitrate_kbps != bitrate_kbps
+                        || existing.fps != tick_fps
+                }
                 None => true,
             };
             if should_reinit {
-                let encoder = H264Encoder::new(width, height, tick_fps).location(loc!())?;
+                let encoder =
+                    H264Encoder::new(width, height, tick_fps, bitrate_kbps).location(loc!())?;
                 h264.insert(
                     surface_id,
                     H264EncodeState {
                         width,
                         height,
+                        bitrate_kbps,
+                        fps: tick_fps,
                         encoder,
                     },
                 );
@@ -332,11 +366,13 @@ fn encode_bgra_frame(
             ))
         }
         transport::TransportCodec::Jpeg => {
-            let jpeg_bytes = crate::protocols::wprs::transport::encode_jpeg_from_bgra(
+            let quality = transport_config.jpeg_quality.unwrap_or(85);
+            let jpeg_bytes = crate::protocols::wprs::transport::encode_jpeg_from_bgra_with_quality(
                 metadata.width as u32,
                 metadata.height as u32,
                 metadata.stride as usize,
                 bgra,
+                quality,
             )
             .location(loc!())?;
             Ok((
@@ -410,6 +446,7 @@ fn apply_observation<B: PollingBackend>(
                 let prior = state.surface_transport_config.get(&surface.id);
                 if prior != Some(&selected) {
                     state.surface_transport_config.insert(surface.id, selected.clone());
+                    log_surface_transport_config(surface.id, &selected);
 
                     // Best-effort: inform the client of the per-surface policy.
                     state
@@ -579,6 +616,7 @@ pub fn run<B: PollingBackend>(
                         if state.transport_config != config {
                             state.transport_config = config.clone();
                             state.surface_transport_config.clear();
+                            log_global_transport_config(&config);
                         }
                         state
                             .serializer
@@ -604,6 +642,7 @@ pub fn run<B: PollingBackend>(
                             if state.transport_config != config {
                                 state.transport_config = config.clone();
                                 state.surface_transport_config.clear();
+                                log_global_transport_config(&config);
                                 state
                                     .serializer
                                     .writer()
@@ -624,6 +663,7 @@ pub fn run<B: PollingBackend>(
                             if state.transport_config != config {
                                 state.transport_config = config.clone();
                                 state.surface_transport_config.clear();
+                                log_global_transport_config(&config);
                                 state
                                     .serializer
                                     .writer()

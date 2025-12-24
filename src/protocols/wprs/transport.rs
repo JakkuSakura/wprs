@@ -216,6 +216,16 @@ pub fn encode_jpeg_from_bgra(
     stride_bytes: usize,
     bgra: &[u8],
 ) -> Result<Vec<u8>> {
+    encode_jpeg_from_bgra_with_quality(width, height, stride_bytes, bgra, 85)
+}
+
+pub fn encode_jpeg_from_bgra_with_quality(
+    width: u32,
+    height: u32,
+    stride_bytes: usize,
+    bgra: &[u8],
+    quality: u8,
+) -> Result<Vec<u8>> {
     let height_usize = height as usize;
     let width_usize = width as usize;
     ensure!(
@@ -251,7 +261,8 @@ pub fn encode_jpeg_from_bgra(
     }
 
     let mut out = Vec::new();
-    let enc = jpeg_encoder::Encoder::new(&mut out, 85);
+    let quality = quality.clamp(1, 100);
+    let enc = jpeg_encoder::Encoder::new(&mut out, quality);
     enc.encode(&rgb, width as u16, height as u16, jpeg_encoder::ColorType::Rgb)
         .location(loc!())?;
     Ok(out)
@@ -303,6 +314,10 @@ pub struct TransportConfig {
     pub buffer_patches: BufferPatchConfig,
     /// Optional server-side frame rate cap.
     pub max_fps: Option<u32>,
+    /// Optional negotiated JPEG quality (1..=100).
+    pub jpeg_quality: Option<u8>,
+    /// Optional negotiated H.264 target bitrate in kbps.
+    pub h264_bitrate_kbps: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Archive, Deserialize, Serialize)]
@@ -317,6 +332,8 @@ impl Default for TransportConfig {
             codec: TransportCodec::default(),
             buffer_patches: BufferPatchConfig::default(),
             max_fps: None,
+            jpeg_quality: None,
+            h264_bitrate_kbps: None,
         }
     }
 }

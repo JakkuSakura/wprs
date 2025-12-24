@@ -29,13 +29,14 @@ pub struct H264Encoder {
     next_pts: i64,
     width: u32,
     height: u32,
+    bitrate_kbps: Option<u32>,
     avcc_nal_length_size: Option<usize>,
     annexb_config: Vec<u8>,
     sent_config: bool,
 }
 
 impl H264Encoder {
-    pub fn new(width: u32, height: u32, fps: u32) -> Result<Self> {
+    pub fn new(width: u32, height: u32, fps: u32, bitrate_kbps: Option<u32>) -> Result<Self> {
         ensure_ffmpeg().location(loc!())?;
         #[cfg(target_os = "macos")]
         let codec = ffmpeg::encoder::find_by_name("h264_videotoolbox")
@@ -61,7 +62,10 @@ impl H264Encoder {
         encoder.set_gop(fps);
         encoder.set_max_b_frames(0);
         let base_rate = width as usize * height as usize * fps as usize;
-        encoder.set_bit_rate(base_rate.max(500_000));
+        let target_bitrate = bitrate_kbps
+            .map(|kbps| (kbps as usize).saturating_mul(1_000))
+            .unwrap_or(base_rate.max(500_000));
+        encoder.set_bit_rate(target_bitrate.max(250_000));
         let mut options = ffmpeg::Dictionary::new();
         options.set("preset", "veryfast");
         options.set("tune", "zerolatency");
@@ -94,6 +98,7 @@ impl H264Encoder {
             next_pts: 0,
             width,
             height,
+            bitrate_kbps,
             avcc_nal_length_size,
             annexb_config,
             sent_config: false,
@@ -124,6 +129,9 @@ impl H264Encoder {
             match self.encoder.receive_packet(&mut packet) {
                 Ok(()) => {
                     if let Some(data) = packet.data() {
+                        if self.annexb_config.is_empty() {
+                            self.refresh_config_from_encoder();
+                        }
                         if !self.sent_config && !self.annexb_config.is_empty() {
                             out.extend_from_slice(&self.annexb_config);
                             self.sent_config = true;
@@ -136,6 +144,16 @@ impl H264Encoder {
                                         warn!("h264 avcc->annexb conversion failed: {err}");
                                         data.to_vec()
                                     }
+                                }
+                            }
+                            None if !looks_like_annexb(data) => {
+                                let inferred = infer_nal_length_size_from_avcc(data);
+                                match inferred.and_then(|len| avcc_packet_to_annexb(data, len).ok()) {
+                                    Some(converted) => {
+                                        self.avcc_nal_length_size = inferred;
+                                        converted
+                                    }
+                                    None => data.to_vec(),
                                 }
                             }
                             _ => data.to_vec(),
@@ -151,6 +169,18 @@ impl H264Encoder {
             }
         }
         Ok(out)
+    }
+
+    fn refresh_config_from_encoder(&mut self) {
+        let Some((nal_length_size, annexb_config)) = extract_h264_config(&self.encoder) else {
+            return;
+        };
+        if self.annexb_config.is_empty() {
+            self.annexb_config = annexb_config;
+        }
+        if self.avcc_nal_length_size.is_none() {
+            self.avcc_nal_length_size = nal_length_size;
+        }
     }
 }
 
@@ -323,6 +353,26 @@ fn avcc_packet_to_annexb(data: &[u8], nal_length_size: usize) -> Result<Vec<u8>>
         Error::InvalidArgument("trailing avcc bytes".to_string())
     );
     Ok(out)
+}
+
+fn infer_nal_length_size_from_avcc(data: &[u8]) -> Option<usize> {
+    for nal_length_size in [4usize, 3, 2, 1] {
+        let mut offset = 0usize;
+        let mut ok = true;
+        while offset + nal_length_size <= data.len() {
+            let len = read_be_nal_length(&data[offset..offset + nal_length_size]);
+            offset += nal_length_size;
+            if offset + len > data.len() {
+                ok = false;
+                break;
+            }
+            offset += len;
+        }
+        if ok && offset == data.len() {
+            return Some(nal_length_size);
+        }
+    }
+    None
 }
 
 fn read_be_nal_length(bytes: &[u8]) -> usize {

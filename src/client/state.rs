@@ -101,6 +101,14 @@ impl ClientState {
             Request::Transport(req) => {
                 match req {
                     transport::TransportRequest::Config(cfg) => {
+                        info!(
+                            "transport config updated: codec={:?} max_fps={:?} buffer_patches={} jpeg_quality={:?} h264_bitrate_kbps={:?}",
+                            cfg.codec,
+                            cfg.max_fps,
+                            cfg.buffer_patches.enabled,
+                            cfg.jpeg_quality,
+                            cfg.h264_bitrate_kbps,
+                        );
                         *self.transport_config.lock().unwrap() = cfg.clone();
                         self.events
                             .lock()
@@ -109,6 +117,14 @@ impl ClientState {
                     }
                     transport::TransportRequest::ConfigScoped { scope, config } => match scope {
                         transport::TransportScope::Global => {
+                            info!(
+                                "transport config updated: codec={:?} max_fps={:?} buffer_patches={} jpeg_quality={:?} h264_bitrate_kbps={:?}",
+                                config.codec,
+                                config.max_fps,
+                                config.buffer_patches.enabled,
+                                config.jpeg_quality,
+                                config.h264_bitrate_kbps,
+                            );
                             *self.transport_config.lock().unwrap() = config.clone();
                             self.events
                                 .lock()
@@ -116,6 +132,14 @@ impl ClientState {
                                 .push(ClientEvent::TransportConfig(config));
                         }
                         transport::TransportScope::Surface(surface) => {
+                            debug!(
+                                "surface transport config updated: surface={surface:?} codec={:?} max_fps={:?} buffer_patches={} jpeg_quality={:?} h264_bitrate_kbps={:?}",
+                                config.codec,
+                                config.max_fps,
+                                config.buffer_patches.enabled,
+                                config.jpeg_quality,
+                                config.h264_bitrate_kbps,
+                            );
                             self.transport_config_by_surface
                                 .lock()
                                 .unwrap()
