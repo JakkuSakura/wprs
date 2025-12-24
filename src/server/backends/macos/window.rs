@@ -325,7 +325,7 @@ impl MacosWindowBackend {
             .filter(|w| allowed.contains(&w.owner_pid))
             .collect();
         if filtered.is_empty() {
-            info!(
+            debug!(
                 "macos backend: target pid={root_pid} has no windows in subtree (tracked_pids={allowed_len})"
             );
         }
