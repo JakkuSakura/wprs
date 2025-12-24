@@ -10,13 +10,15 @@ enum Security {
 }
 
 impl std::str::FromStr for Security {
-    type Err = anyhow::Error;
+    type Err = wprs::error::Error;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s {
             "none" => Ok(Self::None),
             "tls" => Ok(Self::Tls),
-            other => bail!("invalid --security {other:?} (expected: none|tls)"),
+            other => bail!(Error::InvalidArgument(format!(
+                "invalid --security {other:?} (expected: none|tls)"
+            ))),
         }
     }
 }
