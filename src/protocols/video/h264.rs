@@ -34,6 +34,17 @@ pub struct H264Encoder {
 impl H264Encoder {
     pub fn new(width: u32, height: u32, fps: u32) -> Result<Self> {
         ensure_ffmpeg().location(loc!())?;
+        #[cfg(target_os = "macos")]
+        let codec = ffmpeg::encoder::find_by_name("h264_videotoolbox")
+            .or_else(|| ffmpeg::encoder::find(ffmpeg::codec::Id::H264))
+            .ok_or_else(|| {
+                Error::Unsupported(
+                    "H264 encoder not available (try enabling h264_videotoolbox)".to_string(),
+                )
+            })
+            .location(loc!())?;
+
+        #[cfg(not(target_os = "macos"))]
         let codec = ffmpeg::encoder::find(ffmpeg::codec::Id::H264)
             .ok_or_else(|| Error::Unsupported("H264 encoder not available".to_string()))
             .location(loc!())?;
@@ -48,7 +59,18 @@ impl H264Encoder {
         encoder.set_max_b_frames(0);
         let base_rate = width as usize * height as usize * fps as usize;
         encoder.set_bit_rate(base_rate.max(500_000));
-        let encoder = encoder.open_as(codec).location(loc!())?;
+        let mut options = ffmpeg::Dictionary::new();
+        options.set("preset", "veryfast");
+        options.set("tune", "zerolatency");
+        options.set("profile", "baseline");
+        let encoder = encoder
+            .open_as_with(codec, options)
+            .map_err(|err| {
+                Error::Unsupported(format!(
+                    "H264 encoder init failed ({err}); try disabling H264 or install libx264"
+                ))
+            })
+            .location(loc!())?;
         let scaler = ffmpeg::software::scaling::Context::get(
             ffmpeg::format::Pixel::BGRA,
             width,
