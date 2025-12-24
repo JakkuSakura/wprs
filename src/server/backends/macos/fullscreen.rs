@@ -203,7 +203,7 @@ fn display_scale_factor_and_dpi() -> Result<(i32, Option<u32>)> {
 #[cfg(target_os = "macos")]
 mod macos {
     use super::*;
-    use anyhow::ensure;
+    use crate::error::ensure;
     use std::ffi::c_void;
     use std::ptr;
 
@@ -308,7 +308,10 @@ mod macos {
             let image = CGDisplayCreateImage(display);
             ensure!(
                 !image.is_null(),
-                "CGDisplayCreateImage returned null (Screen Recording permission?)"
+                Error::Internal(
+                    "CGDisplayCreateImage returned null (Screen Recording permission?)"
+                        .to_string(),
+                ),
             );
 
             let width = CGImageGetWidth(image) as i32;
@@ -318,27 +321,38 @@ mod macos {
             let bpc = CGImageGetBitsPerComponent(image);
 
             let provider = CGImageGetDataProvider(image);
-            ensure!(!provider.is_null(), "CGImageGetDataProvider returned null");
+            ensure!(
+                !provider.is_null(),
+                Error::Internal("CGImageGetDataProvider returned null".to_string()),
+            );
             let cf_data = CGDataProviderCopyData(provider);
-            ensure!(!cf_data.is_null(), "CGDataProviderCopyData returned null");
+            ensure!(
+                !cf_data.is_null(),
+                Error::Internal("CGDataProviderCopyData returned null".to_string()),
+            );
 
             let len = CFDataGetLength(cf_data) as usize;
             let ptr = CFDataGetBytePtr(cf_data);
-            ensure!(!ptr.is_null(), "CFDataGetBytePtr returned null");
+            ensure!(
+                !ptr.is_null(),
+                Error::Internal("CFDataGetBytePtr returned null".to_string()),
+            );
 
             // Best-effort: most systems will produce a 32bpp image. If not,
             // bail with a clear message rather than silently corrupting.
             ensure!(
                 bpp == 32 && bpc == 8,
-                "unsupported capture format: bpp={bpp}, bpc={bpc}"
+                Error::Unsupported(format!(
+                    "unsupported capture format: bpp={bpp}, bpc={bpc}"
+                )),
             );
             ensure!(
                 stride > 0 && width > 0 && height > 0,
-                "invalid captured dimensions"
+                Error::Internal("invalid captured dimensions".to_string()),
             );
             ensure!(
                 len >= (height as usize) * (stride as usize),
-                "captured buffer is smaller than expected"
+                Error::Internal("captured buffer is smaller than expected".to_string()),
             );
 
             let bytes = std::slice::from_raw_parts(ptr, (height as usize) * (stride as usize));
@@ -377,7 +391,10 @@ mod macos {
             };
 
             let ev = CGEventCreateMouseEvent(ptr::null(), event_type, p, mouse_button);
-            ensure!(!ev.is_null(), "CGEventCreateMouseEvent returned null");
+            ensure!(
+                !ev.is_null(),
+                Error::Internal("CGEventCreateMouseEvent returned null".to_string()),
+            );
             CGEventPost(K_CG_EVENT_TAP_HID, ev);
             CFRelease(ev as CFTypeRef);
             Ok(())
@@ -421,7 +438,10 @@ mod macos {
             };
 
             let ev = CGEventCreateMouseEvent(ptr::null(), event_type, p, mouse_button);
-            ensure!(!ev.is_null(), "CGEventCreateMouseEvent returned null");
+            ensure!(
+                !ev.is_null(),
+                Error::Internal("CGEventCreateMouseEvent returned null".to_string()),
+            );
             CGEventPost(K_CG_EVENT_TAP_HID, ev);
             CFRelease(ev as CFTypeRef);
             Ok(())
@@ -440,7 +460,10 @@ mod macos {
                 super::ScrollUnit::Pixel => K_CG_SCROLL_EVENT_UNIT_PIXEL,
             };
             let ev = CGEventCreateScrollWheelEvent(ptr::null(), units, 2, vertical, horizontal);
-            ensure!(!ev.is_null(), "CGEventCreateScrollWheelEvent returned null");
+            ensure!(
+                !ev.is_null(),
+                Error::Internal("CGEventCreateScrollWheelEvent returned null".to_string()),
+            );
             if control {
                 CGEventSetFlags(ev, K_CG_EVENT_FLAG_MASK_CONTROL);
             }
@@ -454,7 +477,10 @@ mod macos {
         unsafe {
             let display = CGMainDisplayID();
             let image = CGDisplayCreateImage(display);
-            ensure!(!image.is_null(), "CGDisplayCreateImage returned null");
+            ensure!(
+                !image.is_null(),
+                Error::Internal("CGDisplayCreateImage returned null".to_string()),
+            );
             let w = CGImageGetWidth(image);
             let h = CGImageGetHeight(image);
             CFRelease(image as CFTypeRef);
@@ -466,7 +492,10 @@ mod macos {
         unsafe {
             let display = CGMainDisplayID();
             let mode = CGDisplayCopyDisplayMode(display);
-            ensure!(!mode.is_null(), "CGDisplayCopyDisplayMode returned null");
+            ensure!(
+                !mode.is_null(),
+                Error::Internal("CGDisplayCopyDisplayMode returned null".to_string()),
+            );
 
             let width_points = CGDisplayModeGetWidth(mode) as f64;
             let height_points = CGDisplayModeGetHeight(mode) as f64;
@@ -478,11 +507,11 @@ mod macos {
 
             ensure!(
                 width_points > 0.0 && height_points > 0.0,
-                "invalid display mode size"
+                Error::Internal("invalid display mode size".to_string()),
             );
             ensure!(
                 width_pixels > 0.0 && height_pixels > 0.0,
-                "invalid display mode pixel size"
+                Error::Internal("invalid display mode pixel size".to_string()),
             );
 
             let scale_w = width_pixels / width_points;
@@ -523,7 +552,9 @@ use macos::post_scroll;
 
 #[cfg(not(target_os = "macos"))]
 fn capture_main_display_bgra() -> Result<(BufferMetadata, Vec<u8>)> {
-    bail!("macOS fullscreen backend is only supported on macOS")
+    bail!(Error::Unsupported(
+        "macOS fullscreen backend is only supported on macOS".to_string(),
+    ))
 }
 
 #[cfg(not(target_os = "macos"))]

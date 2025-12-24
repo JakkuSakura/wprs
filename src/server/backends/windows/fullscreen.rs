@@ -19,11 +19,15 @@ impl PollingBackend for WindowsFullscreenBackend {
     }
 
     fn initial_snapshot(&mut self) -> Result<Vec<BackendObservation>> {
-        bail!("Windows fullscreen capture backend is not implemented yet")
+        bail!(Error::Unsupported(
+            "Windows fullscreen capture backend is not implemented yet".to_string(),
+        ))
     }
 
     fn poll(&mut self) -> Result<Vec<BackendObservation>> {
-        bail!("Windows fullscreen capture backend is not implemented yet")
+        bail!(Error::Unsupported(
+            "Windows fullscreen capture backend is not implemented yet".to_string(),
+        ))
     }
 
     fn handle_client_event(&mut self, _event: Event) -> Result<()> {

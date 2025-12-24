@@ -193,7 +193,7 @@ pub fn run<B: PollingBackend>(
     let reader = state
         .serializer
         .reader()
-        .ok_or_else(|| anyhow!("serializer reader already taken"))
+        .ok_or_else(|| Error::Internal("serializer reader already taken".to_string()))
         .location(loc!())?;
 
     event_loop
@@ -217,7 +217,9 @@ pub fn run<B: PollingBackend>(
                 }
             }
         })
-        .map_err(|e| anyhow!("insert_source(serializer reader) failed: {e:?}"))?;
+        .map_err(|e| {
+            Error::Internal(format!("insert_source(serializer reader) failed: {e:?}"))
+        })?;
 
     event_loop
         .handle()
@@ -239,7 +241,7 @@ pub fn run<B: PollingBackend>(
 
             TimeoutAction::ToDuration(tick_interval)
         })
-        .map_err(|e| anyhow!("insert_source(timer) failed: {e:?}"))?;
+        .map_err(|e| Error::Internal(format!("insert_source(timer) failed: {e:?}")))?;
 
     event_loop.run(None, &mut state, |_| {}).location(loc!())?;
     Ok(())

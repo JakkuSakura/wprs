@@ -343,7 +343,7 @@ impl WprsClientState {
                         serial,
                         // The error type is (). :(
                         edge.try_into()
-                            .map_err(|_| anyhow!("invalid edge"))
+                            .map_err(|_| Error::InvalidArgument("invalid edge".to_string()))
                             .location(loc!())?,
                     );
                 },
@@ -469,7 +469,9 @@ impl WprsClientState {
                         source_metadata
                             .dnd_actions
                             .try_into()
-                            .map_err(|_| anyhow!("invalid dnd actions"))
+                            .map_err(|_| {
+                                Error::InvalidArgument("invalid dnd actions".to_string())
+                            })
                             .location(loc!())?,
                     );
                     source.start_drag(
@@ -540,7 +542,9 @@ impl WprsClientState {
                         let cur_offer = self
                             .primary_selection_offer
                             .clone()
-                            .ok_or(anyhow!("primary_selection_offer was empty"))?;
+                            .ok_or_else(|| {
+                                Error::Missing("primary_selection_offer was empty".to_string())
+                            })?;
 
                         cur_offer.receive(mime_type.clone()).ok()
                     },
@@ -548,7 +552,9 @@ impl WprsClientState {
                         let cur_offer = self
                             .selection_offer
                             .clone()
-                            .ok_or(anyhow!("selection_offer was empty"))?;
+                            .ok_or_else(|| {
+                                Error::Missing("selection_offer was empty".to_string())
+                            })?;
 
                         cur_offer.receive(mime_type.clone()).ok()
                     },
@@ -556,7 +562,7 @@ impl WprsClientState {
                         let cur_offer = self
                             .dnd_offer
                             .clone()
-                            .ok_or(anyhow!("dnd_offer was empty"))?;
+                            .ok_or_else(|| Error::Missing("dnd_offer was empty".to_string()))?;
 
                         cur_offer.receive(mime_type.clone()).ok()
                     },
@@ -592,7 +598,7 @@ impl WprsClientState {
                 if let Some(dnd_offer) = &self.dnd_offer {
                     let action = action
                         .try_into()
-                        .map_err(|_| anyhow!("invalid dnd action"))
+                        .map_err(|_| Error::InvalidArgument("invalid dnd action".to_string()))
                         .location(loc!())?;
                     dnd_offer.set_actions(action, action);
                 }
@@ -633,7 +639,9 @@ impl WprsClientState {
         info!("server capabilities: xwayland={}", caps.xwayland);
         self.capabilities
             .set(caps)
-            .map_err(|_| anyhow!("attempted to set capabilities more than once"))
+            .map_err(|_| {
+                Error::Internal("attempted to set capabilities more than once".to_string())
+            })
             .location(loc!())
     }
 

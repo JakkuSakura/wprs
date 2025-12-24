@@ -2,9 +2,6 @@ use rkyv::Archive;
 use rkyv::Deserialize;
 use rkyv::Serialize;
 
-use anyhow::bail;
-use anyhow::ensure;
-
 use crate::prelude::*;
 
 use super::wayland::WlSurfaceId;
@@ -165,16 +162,23 @@ pub fn encode_png_from_bgra(
 ) -> Result<Vec<u8>> {
     let height_usize = height as usize;
     let width_usize = width as usize;
-    ensure!(width_usize != 0 && height_usize != 0, "invalid image size");
+    ensure!(
+        width_usize != 0 && height_usize != 0,
+        Error::InvalidArgument("invalid image size".to_string()),
+    );
     ensure!(
         stride_bytes >= width_usize * 4,
-        "stride too small: stride={stride_bytes} width={width}"
+        Error::InvalidArgument(format!(
+            "stride too small: stride={stride_bytes} width={width}"
+        )),
     );
     ensure!(
         bgra.len() >= stride_bytes.saturating_mul(height_usize),
-        "bgra buffer too small: len={} expected_at_least={}",
-        bgra.len(),
-        stride_bytes.saturating_mul(height_usize)
+        Error::InvalidArgument(format!(
+            "bgra buffer too small: len={} expected_at_least={}",
+            bgra.len(),
+            stride_bytes.saturating_mul(height_usize)
+        )),
     );
 
     // Convert BGRA (with stride) into tightly packed RGBA.
@@ -207,7 +211,7 @@ pub fn decode_png_to_bgra(png_bytes: &[u8]) -> Result<(u32, u32, Vec<u8>)> {
     let mut reader = decoder.read_info().location(loc!())?;
     let buf_size = reader
         .output_buffer_size()
-        .ok_or_else(|| anyhow!("png output buffer size unknown"))
+        .ok_or_else(|| Error::Internal("png output buffer size unknown".to_string()))
         .location(loc!())?;
     let mut buf = vec![0u8; buf_size];
     let info = reader.next_frame(&mut buf).location(loc!())?;
@@ -217,7 +221,10 @@ pub fn decode_png_to_bgra(png_bytes: &[u8]) -> Result<(u32, u32, Vec<u8>)> {
     let mut bgra = vec![0u8; info.width as usize * info.height as usize * 4];
     match info.color_type {
         png::ColorType::Rgb => {
-            ensure!(info.bit_depth == png::BitDepth::Eight, "unsupported PNG bit depth");
+            ensure!(
+                info.bit_depth == png::BitDepth::Eight,
+                Error::Unsupported("unsupported PNG bit depth".to_string()),
+            );
             for (i, pixel) in bytes.chunks_exact(3).enumerate() {
                 let o = i * 4;
                 bgra[o] = pixel[2];
@@ -227,7 +234,10 @@ pub fn decode_png_to_bgra(png_bytes: &[u8]) -> Result<(u32, u32, Vec<u8>)> {
             }
         }
         png::ColorType::Rgba => {
-            ensure!(info.bit_depth == png::BitDepth::Eight, "unsupported PNG bit depth");
+            ensure!(
+                info.bit_depth == png::BitDepth::Eight,
+                Error::Unsupported("unsupported PNG bit depth".to_string()),
+            );
             for (i, pixel) in bytes.chunks_exact(4).enumerate() {
                 let o = i * 4;
                 bgra[o] = pixel[2];
@@ -236,7 +246,9 @@ pub fn decode_png_to_bgra(png_bytes: &[u8]) -> Result<(u32, u32, Vec<u8>)> {
                 bgra[o + 3] = pixel[3];
             }
         }
-        other => bail!("unsupported PNG color type: {other:?}"),
+        other => bail!(Error::Unsupported(format!(
+            "unsupported PNG color type: {other:?}"
+        ))),
     }
 
     Ok((info.width, info.height, bgra))
@@ -252,16 +264,23 @@ pub fn encode_jpeg_from_bgra(
     {
         let height_usize = height as usize;
         let width_usize = width as usize;
-        ensure!(width_usize != 0 && height_usize != 0, "invalid image size");
+        ensure!(
+            width_usize != 0 && height_usize != 0,
+            Error::InvalidArgument("invalid image size".to_string()),
+        );
         ensure!(
             stride_bytes >= width_usize * 4,
-            "stride too small: stride={stride_bytes} width={width}"
+            Error::InvalidArgument(format!(
+                "stride too small: stride={stride_bytes} width={width}"
+            )),
         );
         ensure!(
             bgra.len() >= stride_bytes.saturating_mul(height_usize),
-            "bgra buffer too small: len={} expected_at_least={}",
-            bgra.len(),
-            stride_bytes.saturating_mul(height_usize)
+            Error::InvalidArgument(format!(
+                "bgra buffer too small: len={} expected_at_least={}",
+                bgra.len(),
+                stride_bytes.saturating_mul(height_usize)
+            )),
         );
 
         let mut rgb = vec![0u8; width_usize * height_usize * 3];
@@ -287,7 +306,9 @@ pub fn encode_jpeg_from_bgra(
     #[cfg(not(feature = "image-jpeg"))]
     {
         let _ = (width, height, stride_bytes, bgra);
-        bail!("JPEG transport codec requires the image-jpeg feature")
+        bail!(Error::Unsupported(
+            "JPEG transport codec requires the image-jpeg feature".to_string(),
+        ))
     }
 }
 
@@ -296,7 +317,9 @@ pub fn decode_jpeg_to_bgra(jpeg_bytes: &[u8]) -> Result<(u32, u32, Vec<u8>)> {
     {
         let mut decoder = jpeg_decoder::Decoder::new(jpeg_bytes);
         let pixels = decoder.decode().location(loc!())?;
-        let info = decoder.info().ok_or_else(|| anyhow!("missing JPEG info"))?;
+        let info = decoder
+            .info()
+            .ok_or_else(|| Error::Missing("JPEG info".to_string()))?;
         let width = info.width as u32;
         let height = info.height as u32;
 
@@ -315,7 +338,9 @@ pub fn decode_jpeg_to_bgra(jpeg_bytes: &[u8]) -> Result<(u32, u32, Vec<u8>)> {
     #[cfg(not(feature = "image-jpeg"))]
     {
         let _ = jpeg_bytes;
-        bail!("JPEG transport codec requires the image-jpeg feature")
+        bail!(Error::Unsupported(
+            "JPEG transport codec requires the image-jpeg feature".to_string(),
+        ))
     }
 }
 

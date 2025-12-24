@@ -310,9 +310,9 @@ where
                                 .location(loc!())?,
                         );
                         debug!("read obj: {obj:?}");
-                        output_channel.send(obj)
-                        // The error type is not Send + Sync, which anyhow requires.
-                            .map_err(|e| anyhow!("{e}"))
+                        output_channel
+                            .send(obj)
+                            .map_err(|e| Error::Internal(format!("{e}")))
                             .location(loc!())?;
                         Ok(())
                     },
@@ -328,9 +328,9 @@ where
                 .location(loc!())?;
                 let obj = RecvType::RawBuffer(RawBufferMessage { header, bytes });
                 debug!("read obj: {obj:?}");
-                output_channel.send(obj)
-                // The error type is not Send + Sync, which anyhow requires.
-                    .map_err(|e| anyhow!("{e}"))
+                output_channel
+                    .send(obj)
+                    .map_err(|e| Error::Internal(format!("{e}")))
                     .location(loc!())?;
             },
         }
@@ -716,7 +716,9 @@ where
                 })
             },
             SendType::RawBuffer(_) => {
-                bail!("RawBuffer payloads are not allowed in on_connect frames")
+                bail!(Error::InvalidArgument(
+                    "RawBuffer payloads are not allowed in on_connect frames".to_string(),
+                ))
             },
         }
     }
@@ -728,9 +730,10 @@ where
             Endpoint::Unix { path } => Self::new_server(&path),
             Endpoint::Tcp { addr } => Self::new_server_tcp(addr),
             Endpoint::Ssh { .. } => {
-                bail!(
+                bail!(Error::Unsupported(
                     "ssh endpoint is only supported for clients (use ssh port forwarding to expose a local tcp/unix endpoint for the server)"
-                )
+                        .to_string(),
+                ))
             },
         }
     }
@@ -762,7 +765,9 @@ where
         #[cfg(not(unix))]
         {
             let _ = sock_path;
-            bail!("unix socket server is not supported on this platform")
+            bail!(Error::Unsupported(
+                "unix socket server is not supported on this platform".to_string(),
+            ))
         }
 
         #[cfg(unix)]
@@ -818,7 +823,9 @@ where
         #[cfg(not(unix))]
         {
             let _ = sock_path;
-            bail!("unix socket client is not supported on this platform")
+            bail!(Error::Unsupported(
+                "unix socket client is not supported on this platform".to_string(),
+            ))
         }
 
         #[cfg(unix)]

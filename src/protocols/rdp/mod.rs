@@ -71,7 +71,7 @@ impl RdpServerDisplay for DisplayHandler {
         let receiver = self
             .receiver
             .take()
-            .ok_or_else(|| anyhow!("DisplayUpdates already taken"))?;
+            .ok_or_else(|| anyhow::Error::msg("DisplayUpdates already taken"))?;
         Ok(Box::new(Updates { receiver }))
     }
 }
@@ -330,7 +330,7 @@ pub fn run_bridge(
         .location(loc!())?;
     let reader = serializer
         .reader()
-        .ok_or_else(|| anyhow!("serializer reader already taken"))
+        .ok_or_else(|| Error::Internal("serializer reader already taken".to_string()))
         .location(loc!())?;
     let writer = serializer.writer().into_inner();
 

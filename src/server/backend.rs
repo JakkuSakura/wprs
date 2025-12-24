@@ -99,7 +99,7 @@ impl<T: PollingBackend + 'static> ServerBackend for T {
         tick_interval: Option<std::time::Duration>,
     ) -> Result<()> {
         let tick_interval = tick_interval
-            .ok_or_else(|| anyhow!("polling backend requires tick_interval"))
+            .ok_or_else(|| Error::Config("polling backend requires tick_interval".to_string()))
             .location(loc!())?;
         if serializer.is_inproc() {
             crate::server::inproc_run_loop::run(*self, serializer, tick_interval).location(loc!())

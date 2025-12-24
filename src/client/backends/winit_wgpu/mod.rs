@@ -394,7 +394,9 @@ impl WindowRenderer {
                 return Ok(());
             },
             Err(wgpu::SurfaceError::Timeout) => return Ok(()),
-            Err(err) => return Err(anyhow!("surface acquire failed: {err:?}")),
+            Err(err) => {
+                return Err(Error::Internal(format!("surface acquire failed: {err:?}")))
+            }
         };
         let view = frame
             .texture
@@ -1055,7 +1057,10 @@ impl App {
             .output()
             .location(loc!())?;
         if !setxkbmap_output.status.success() {
-            bail!("setxkbmap -print failed: {:?}", setxkbmap_output.status);
+            bail!(Error::Internal(format!(
+                "setxkbmap -print failed: {:?}",
+                setxkbmap_output.status
+            )));
         }
 
         let mut xkbcomp = std::process::Command::new("xkbcomp")
@@ -1074,11 +1079,11 @@ impl App {
 
         let output = xkbcomp.wait_with_output().location(loc!())?;
         if !output.status.success() {
-            bail!(
+            bail!(Error::Internal(format!(
                 "xkbcomp -xkb - - failed: {:?}: {}",
                 output.status,
                 String::from_utf8_lossy(&output.stderr)
-            );
+            )));
         }
         Ok(String::from_utf8(output.stdout).location(loc!())?)
     }
@@ -2105,7 +2110,8 @@ impl ApplicationHandler for App {
 
 pub fn run(ctx: ClientContext, options: WinitWgpuOptions) -> Result<()> {
     let serializer = ctx.serializer;
-    let event_loop = EventLoop::new()?;
+    let event_loop =
+        EventLoop::new().map_err(|err| Error::Internal(format!("event loop init failed: {err:?}")))?;
     event_loop.set_control_flow(ControlFlow::Wait);
     let proxy = event_loop.create_proxy();
 
@@ -2220,7 +2226,9 @@ pub fn run(ctx: ClientContext, options: WinitWgpuOptions) -> Result<()> {
         warned_low_buffer_scale_on_hidpi: false,
     };
 
-    event_loop.run_app(app)?;
+    event_loop
+        .run_app(app)
+        .map_err(|err| Error::Internal(format!("event loop run failed: {err:?}")))?;
     Ok(())
 }
 

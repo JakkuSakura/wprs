@@ -44,9 +44,10 @@ pub fn infer_backend(config: &WprsdConfig) -> Result<WprsdBackend> {
         return Ok(WprsdBackend::WindowsFullscreen);
     }
     if cfg!(unix) {
-        bail!(
+        bail!(Error::Config(
             "no backend selected; set `backend = \"wayland\"` and rebuild with `--features wayland`, or explicitly select a capture backend"
-        )
+                .to_string(),
+        ))
     }
 
     Ok(WprsdBackend::WindowsFullscreen)
@@ -108,7 +109,9 @@ pub fn run_with_serializer(
     }
 
     if config.enable_rdp && wprs_endpoint.starts_with("inproc://") {
-        bail!("embedded inproc wprs transport does not support rdp integration")
+        bail!(Error::Unsupported(
+            "embedded inproc wprs transport does not support rdp integration".to_string(),
+        ))
     }
 
     let _rdp_bridge = maybe_start_rdp_bridge(config).location(loc!())?;
@@ -200,7 +203,9 @@ fn maybe_start_rdp_bridge(config: &WprsdConfig) -> Result<Option<ChildGuard>> {
 
             #[cfg(not(feature = "rdp"))]
             {
-                bail!("rdp_mode=embedded requires building wprsd with `--features rdp`")
+                bail!(Error::Unsupported(
+                    "rdp_mode=embedded requires building wprsd with `--features rdp`".to_string(),
+                ))
             }
         },
 
@@ -284,7 +289,10 @@ fn build_backend(
             #[cfg(not(feature = "wayland"))]
             {
                 let _ = config;
-                bail!("wayland backend requires building wprsd with `--features wayland`")
+                bail!(Error::Unsupported(
+                    "wayland backend requires building wprsd with `--features wayland`"
+                        .to_string(),
+                ))
             }
         },
     }

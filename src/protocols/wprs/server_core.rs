@@ -94,7 +94,9 @@ pub trait Backend {
 pub fn dispatch_event<B: Backend>(backend: &mut B, event: Event) -> Result<()> {
     match event {
         Event::WprsClientConnect => {
-            bail!("WprsClientConnect must be handled by the transport adapter")
+            bail!(Error::InvalidArgument(
+                "WprsClientConnect must be handled by the transport adapter".to_string(),
+            ))
         },
         Event::Transport(event) => backend.on_transport_event(event).location(loc!())?,
         Event::Toplevel(event) => backend.on_toplevel_event(event).location(loc!())?,

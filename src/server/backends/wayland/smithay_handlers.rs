@@ -727,7 +727,7 @@ pub fn set_xdg_toplevel_attributes(
     };
     let toplevel_attributes = toplevel_attributes
         .lock()
-        .map_err(|_| anyhow!("XdgToplevelSurfaceData lock poisoned"))?;
+        .map_err(|_| Error::Internal("XdgToplevelSurfaceData lock poisoned".to_string()))?;
     // Be careful about not moving objects out of
     // toplevel_attributes here.
     toplevel_state.parent = toplevel_attributes.parent.as_ref().map(WlSurfaceId::new);
@@ -879,9 +879,11 @@ pub fn commit_impl(
             .location(loc!())?
             .location(loc!())?;
 
-            let metadata = metadata.ok_or_else(|| anyhow!("missing buffer metadata"))?;
+            let metadata = metadata
+                .ok_or_else(|| Error::Missing("buffer metadata".to_string()))?;
             let raw_buffer_to_send =
-                raw_buffer_to_send.ok_or_else(|| anyhow!("missing raw buffer payload"))?;
+                raw_buffer_to_send
+                    .ok_or_else(|| Error::Missing("raw buffer payload".to_string()))?;
 
             surface_state_to_send.bitmap = Some(BitmapAssignment::New(Bitmap {
                 metadata,

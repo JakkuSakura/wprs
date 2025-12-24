@@ -1,7 +1,6 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-use anyhow::ensure;
 use clap::Parser;
 use clap::ValueEnum;
 use serde_derive::Deserialize;
@@ -307,7 +306,10 @@ impl WprscArgs {
         }
 
         if let Some(scale) = cfg.min_output_scale_factor {
-            ensure!(scale >= 1, "min_output_scale_factor must be >= 1");
+            ensure!(
+                scale >= 1,
+                Error::InvalidArgument("min_output_scale_factor must be >= 1".to_string()),
+            );
         }
         if self.forward_only {
             cfg.forward_only = true;

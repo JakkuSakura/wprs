@@ -20,6 +20,7 @@ inherits = "release-lto"
 
 [dependencies]
 anyhow = "1.0.99"
+thiserror = "1.0.69"
 bimap = "0.6.3"
 bytemuck = { version = "1.23.2", features = ["extern_crate_alloc"] }
 bytes = { version = "1.10.1", optional = true }

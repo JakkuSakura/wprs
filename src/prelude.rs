@@ -12,9 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub use anyhow::Result;
-pub use anyhow::anyhow;
-pub use anyhow::bail;
+pub use crate::error::Error;
+pub use crate::error::Result;
+pub use crate::error::bail;
+pub use crate::error::ensure;
 pub use tracing::debug;
 pub use tracing::debug_span;
 pub use tracing::error;

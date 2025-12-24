@@ -53,7 +53,9 @@ impl Framed for RawBufferKind {
             2 => Ok(Self::H264),
             3 => Ok(Self::Png),
             4 => Ok(Self::Jpeg),
-            other => bail!("invalid RawBufferKind {other}"),
+            other => bail!(Error::InvalidArgument(format!(
+                "invalid RawBufferKind {other}"
+            ))),
         }
     }
 }
@@ -77,7 +79,9 @@ impl Framed for RawBufferHeader {
         if self.version >= Self::V2 {
             let surface = self
                 .surface
-                .ok_or_else(|| anyhow!("RawBufferHeader v2 requires surface"))
+                .ok_or_else(|| {
+                    Error::InvalidArgument("RawBufferHeader v2 requires surface".to_string())
+                })
                 .location(loc!())?;
             surface.framed_write(stream).location(loc!())?;
         }
@@ -128,7 +132,7 @@ pub struct RawBufferMessage {
 #[allow(dead_code)]
 pub(crate) fn extract_single_uncompressed_shard(
     shards: CompressedShards,
-) -> Result<Vec<u8>, CompressedShards> {
+) -> std::result::Result<Vec<u8>, CompressedShards> {
     if shards.shards.len() != 1 {
         return Err(shards);
     }
@@ -154,7 +158,7 @@ pub(crate) fn decompress_shards_to_owned(shards: CompressedShards) -> Result<Vec
     let shards_iter = shards
         .shards
         .into_iter()
-        .map(Ok::<_, anyhow::Error>)
+        .map(Ok::<_, crate::error::Error>)
         .transpose_into_fallible();
 
     // Avoid spawning lots of decompressor threads; in-process transport is

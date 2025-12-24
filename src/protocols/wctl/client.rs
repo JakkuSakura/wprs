@@ -22,8 +22,12 @@ impl Client {
         let resp = self.request(wctl::Request::Ping).location(loc!())?;
         match resp {
             wctl::Response::Pong => Ok(()),
-            wctl::Response::Error { message } => bail!("wctl ping failed: {message}"),
-            other => bail!("unexpected wctl response: {other:?}"),
+            wctl::Response::Error { message } => {
+                bail!(Error::Internal(format!("wctl ping failed: {message}")))
+            }
+            other => bail!(Error::Internal(format!(
+                "unexpected wctl response: {other:?}"
+            ))),
         }
     }
 
@@ -31,8 +35,12 @@ impl Client {
         let resp = self.request(wctl::Request::ServerInfo).location(loc!())?;
         match resp {
             wctl::Response::ServerInfo(info) => Ok(info),
-            wctl::Response::Error { message } => bail!("wctl server_info failed: {message}"),
-            other => bail!("unexpected wctl response: {other:?}"),
+            wctl::Response::Error { message } => {
+                bail!(Error::Internal(format!("wctl server_info failed: {message}")))
+            }
+            other => bail!(Error::Internal(format!(
+                "unexpected wctl response: {other:?}"
+            ))),
         }
     }
 
@@ -43,9 +51,11 @@ impl Client {
         match resp {
             wctl::Response::Ok => Ok(()),
             wctl::Response::Error { message } => {
-                bail!("wctl start session failed: {message}")
-            },
-            other => bail!("unexpected wctl response: {other:?}"),
+                bail!(Error::Internal(format!("wctl start session failed: {message}")))
+            }
+            other => bail!(Error::Internal(format!(
+                "unexpected wctl response: {other:?}"
+            ))),
         }
     }
 
@@ -54,9 +64,11 @@ impl Client {
         match resp {
             wctl::Response::Ok => Ok(()),
             wctl::Response::Error { message } => {
-                bail!("wctl stop session failed: {message}")
-            },
-            other => bail!("unexpected wctl response: {other:?}"),
+                bail!(Error::Internal(format!("wctl stop session failed: {message}")))
+            }
+            other => bail!(Error::Internal(format!(
+                "unexpected wctl response: {other:?}"
+            ))),
         }
     }
 

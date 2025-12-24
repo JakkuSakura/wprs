@@ -209,7 +209,7 @@ impl RemoteXdgToplevel {
             .location(loc!())?
             .into_xdg_toplevel()
             // The error type is the enum. :(
-            .map_err(|_| anyhow!("role wasn't xdg toplevel"))
+            .map_err(|_| Error::InvalidArgument("role wasn't xdg toplevel".to_string()))
             .location(loc!())?;
 
         remote_toplevel.set_title(toplevel_state.title);
@@ -272,13 +272,13 @@ impl RemoteXdgPopup {
         new_positioner.set_anchor(
             xdg_positioner::Anchor::try_from(positioner.anchor_edges)
                 // The error type is (). :(
-                .map_err(|_| anyhow!("invalid anchor"))
+                .map_err(|_| Error::InvalidArgument("invalid anchor".to_string()))
                 .location(loc!())?,
         );
         new_positioner.set_gravity(
             xdg_positioner::Gravity::try_from(positioner.gravity)
                 // The error type is (). :(
-                .map_err(|_| anyhow!("invalid anchor"))
+                .map_err(|_| Error::InvalidArgument("invalid anchor".to_string()))
                 .location(loc!())?,
         );
         new_positioner.set_constraint_adjustment(

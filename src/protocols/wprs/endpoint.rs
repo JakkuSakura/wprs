@@ -23,8 +23,6 @@ use std::time::Duration;
 use std::time::Instant;
 use std::time::SystemTime;
 
-use anyhow::ensure;
-
 use crate::prelude::*;
 
 #[derive(Debug, Clone, Eq, PartialEq, serde_derive::Serialize, serde_derive::Deserialize)]
@@ -163,15 +161,17 @@ pub fn setup_client_transport(
 }
 
 impl std::str::FromStr for Endpoint {
-    type Err = anyhow::Error;
+    type Err = crate::error::Error;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         // Note: check the URI form first, otherwise `strip_prefix("tcp:")` would
         // accept `tcp://...` and leave a leading `//`.
         if let Some(rest) = s.strip_prefix("tcp://") {
             let addr: SocketAddr = rest
                 .parse()
-                .map_err(|e| anyhow!("invalid tcp endpoint {rest:?}: {e}"))?;
+                .map_err(|e| {
+                    Error::InvalidArgument(format!("invalid tcp endpoint {rest:?}: {e}"))
+                })?;
             return Ok(Self::Tcp { addr });
         }
 
@@ -179,7 +179,9 @@ impl std::str::FromStr for Endpoint {
             let rest = rest.strip_prefix("//").unwrap_or(rest);
             let addr: SocketAddr = rest
                 .parse()
-                .map_err(|e| anyhow!("invalid tcp endpoint {rest:?}: {e}"))?;
+                .map_err(|e| {
+                    Error::InvalidArgument(format!("invalid tcp endpoint {rest:?}: {e}"))
+                })?;
             return Ok(Self::Tcp { addr });
         }
 
@@ -205,7 +207,9 @@ impl std::str::FromStr for Endpoint {
             #[cfg(not(unix))]
             {
                 let _ = rest;
-                bail!("unix endpoint is not supported on this platform")
+                bail!(Error::Unsupported(
+                    "unix endpoint is not supported on this platform".to_string(),
+                ))
             }
         }
 
@@ -219,7 +223,9 @@ impl std::str::FromStr for Endpoint {
         });
 
         #[cfg(not(unix))]
-        bail!("invalid endpoint {s:?} (expected: tcp:IP:PORT)")
+        bail!(Error::InvalidArgument(format!(
+            "invalid endpoint {s:?} (expected: tcp:IP:PORT)"
+        )))
     }
 }
 
@@ -244,22 +250,30 @@ fn parse_ssh_endpoint(rest: &str) -> Result<Endpoint> {
         for pair in query.split('&').filter(|p| !p.is_empty()) {
             let (k, v) = pair
                 .split_once('=')
-                .ok_or_else(|| anyhow!("invalid ssh endpoint query item {pair:?} (expected k=v)"))
+                .ok_or_else(|| {
+                    Error::InvalidArgument(format!(
+                        "invalid ssh endpoint query item {pair:?} (expected k=v)"
+                    ))
+                })
                 .location(loc!())?;
 
             match k {
                 "remote" => remote_str = Some(v),
                 "local" => local_str = Some(v),
                 "ssh-arg" => ssh_args.push(v.to_string()),
-                other => bail!(
+                other => bail!(Error::InvalidArgument(format!(
                     "unknown ssh endpoint query key {other:?} (expected: remote|local|ssh-arg)"
-                ),
+                ))),
             }
         }
     }
 
     let remote_str = remote_str
-        .ok_or_else(|| anyhow!("ssh endpoint requires remote=<endpoint> or ssh://HOST/<endpoint>"))
+        .ok_or_else(|| {
+            Error::InvalidArgument(
+                "ssh endpoint requires remote=<endpoint> or ssh://HOST/<endpoint>".to_string(),
+            )
+        })
         .location(loc!())?;
     let remote: Endpoint = remote_str.parse().location(loc!())?;
 
@@ -292,7 +306,11 @@ fn parse_ssh_destination(authority: &str) -> Result<SshDestination> {
     let (host, port) = if let Some(hp) = hostport.strip_prefix('[') {
         let (host, rest) = hp
             .split_once(']')
-            .ok_or_else(|| anyhow!("invalid ssh host {hostport:?} (missing ']')"))?;
+            .ok_or_else(|| {
+                Error::InvalidArgument(format!(
+                    "invalid ssh host {hostport:?} (missing ']')"
+                ))
+            })?;
         let port = rest
             .strip_prefix(':')
             .map(|p| p.parse::<u16>())
@@ -307,7 +325,10 @@ fn parse_ssh_destination(authority: &str) -> Result<SshDestination> {
         }
     };
 
-    ensure!(!host.is_empty(), "ssh destination host is empty");
+    ensure!(
+        !host.is_empty(),
+        Error::InvalidArgument("ssh destination host is empty".to_string()),
+    );
     Ok(SshDestination { user, host, port })
 }
 
@@ -361,7 +382,7 @@ fn setup_ssh_forwarding(
             // Local binds to loopback to avoid exposing an unauthenticated TCP port.
             ensure!(
                 l.ip().is_loopback(),
-                "ssh local tcp endpoint must be loopback"
+                Error::InvalidArgument("ssh local tcp endpoint must be loopback".to_string()),
             );
             cmd.arg("-L")
                 .arg(format!("{}:{}:{}:{}", l.ip(), l.port(), r.ip(), r.port()));
@@ -374,11 +395,14 @@ fn setup_ssh_forwarding(
         },
         #[cfg(not(unix))]
         (Endpoint::Unix { .. }, _) | (_, Endpoint::Unix { .. }) => {
-            bail!("unix socket forwarding over ssh is not supported on this platform")
+            bail!(Error::Unsupported(
+                "unix socket forwarding over ssh is not supported on this platform".to_string(),
+            ))
         },
-        _ => bail!(
+        _ => bail!(Error::InvalidArgument(
             "ssh forwarding requires local and remote endpoints to have the same type (tcp or unix)"
-        ),
+                .to_string(),
+        )),
     }
 
     for a in ssh_args {
@@ -417,14 +441,18 @@ fn choose_local_forward_endpoint(
             Endpoint::Tcp { addr } => {
                 ensure!(
                     addr.ip().is_loopback(),
-                    "ssh local tcp endpoint must be loopback"
+                    Error::InvalidArgument("ssh local tcp endpoint must be loopback".to_string()),
                 )
             },
             Endpoint::Unix { .. } => {
                 #[cfg(not(unix))]
-                bail!("unix endpoint is not supported on this platform")
+                bail!(Error::Unsupported(
+                    "unix endpoint is not supported on this platform".to_string(),
+                ))
             },
-            Endpoint::Ssh { .. } => bail!("nested ssh endpoints are not supported"),
+            Endpoint::Ssh { .. } => bail!(Error::InvalidArgument(
+                "nested ssh endpoints are not supported".to_string(),
+            )),
         }
         return Ok((local, None));
     }
@@ -447,9 +475,13 @@ fn choose_local_forward_endpoint(
             }
 
             #[cfg(not(unix))]
-            bail!("unix endpoint is not supported on this platform")
+            bail!(Error::Unsupported(
+                "unix endpoint is not supported on this platform".to_string(),
+            ))
         },
-        Endpoint::Ssh { .. } => bail!("nested ssh endpoints are not supported"),
+        Endpoint::Ssh { .. } => bail!(Error::InvalidArgument(
+            "nested ssh endpoints are not supported".to_string(),
+        )),
     }
 }
 
@@ -488,7 +520,9 @@ fn wait_for_local_forward_ready(endpoint: &Endpoint, timeout: Duration) -> Resul
                 }
             },
             Endpoint::Ssh { .. } => {
-                bail!("nested ssh endpoints are not supported")
+                bail!(Error::InvalidArgument(
+                    "nested ssh endpoints are not supported".to_string(),
+                ))
             },
         };
 
@@ -496,7 +530,9 @@ fn wait_for_local_forward_ready(endpoint: &Endpoint, timeout: Duration) -> Resul
             return Ok(());
         }
         if Instant::now() - start > timeout {
-            bail!("ssh local forward failed to open within timeout")
+            bail!(Error::Internal(
+                "ssh local forward failed to open within timeout".to_string(),
+            ))
         }
         std::thread::sleep(Duration::from_millis(50));
     }

@@ -423,15 +423,12 @@ impl ShardingDecompressor {
     /// * If indices.len() > compressed_shards.len(), the decompressed data will
     ///   be incomplete or have chunks missing.
     #[instrument(skip_all, level = "debug")]
-    fn decompress_impl<E: std::convert::From<anyhow::Error> + Send + Sync + 'static>(
+    fn decompress_impl(
         &mut self,
         indices: &[usize],
         uncompressed_size: usize,
-        mut compressed_shards: impl FallibleIterator<Item = CompressedShard, Error = E>,
-    ) -> std::result::Result<(), E>
-    where
-        Result<(), E>: anyhow::Context<(), E>,
-    {
+        mut compressed_shards: impl FallibleIterator<Item = CompressedShard, Error = Error>,
+    ) -> Result<()> {
         // TODO(https://github.com/rust-lang/rust/issues/78485): use
         // DivShared.uninitialized to allocate the buffer on demand here. The
         // allocation is fast enough and it simplifies the code, but until the
@@ -498,19 +495,20 @@ impl ShardingDecompressor {
 
     /// IMPORTANT: see note on decompress_impl.
     #[instrument(skip_all, level = "debug")]
-    pub fn decompress_with<F, T, E: std::convert::From<anyhow::Error> + Send + Sync + 'static>(
+    pub fn decompress_with<F, T>(
         &mut self,
         indices: &[usize],
         uncompressed_size: usize,
-        compressed_shards: impl FallibleIterator<Item = CompressedShard, Error = E>,
+        compressed_shards: impl FallibleIterator<Item = CompressedShard, Error = Error>,
         f: F,
     ) -> Result<T>
     where
-        Result<(), E>: anyhow::Context<(), E>,
         F: FnOnce(&[u8]) -> Result<T>,
     {
         if indices.is_empty() {
-            bail!("Cannot call decompress_with on empty indices.");
+            bail!(Error::InvalidArgument(
+                "Cannot call decompress_with on empty indices.".to_string(),
+            ));
         }
 
         self.decompress_impl(indices, uncompressed_size, compressed_shards)
@@ -525,14 +523,12 @@ impl ShardingDecompressor {
 
     /// IMPORTANT: see note on decompress_impl.
     #[instrument(skip_all, level = "debug")]
-    pub fn decompress_to_owned<E: std::convert::From<anyhow::Error> + Send + Sync + 'static>(
+    pub fn decompress_to_owned(
         &mut self,
         indices: &[usize],
         uncompressed_size: usize,
-        compressed_shards: impl FallibleIterator<Item = CompressedShard, Error = E>,
+        compressed_shards: impl FallibleIterator<Item = CompressedShard, Error = Error>,
     ) -> Result<Vec<u8>>
-    where
-        Result<(), E>: anyhow::Context<(), E>,
     {
         if indices.is_empty() {
             return Ok(vec![]);

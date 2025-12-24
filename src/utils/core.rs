@@ -43,7 +43,7 @@ use tracing::instrument;
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::prelude::*;
 
-use anyhow::Result;
+use crate::error::Result;
 use tracing::error;
 
 use crate::utils::error::LocationContextExt;

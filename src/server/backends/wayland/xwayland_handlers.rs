@@ -68,10 +68,11 @@ impl WprsServerState {
                         Stdio::inherit(),
                         |_| {},
                     )
-                    .map_err(|e| anyhow!("failed to start Xwayland: {e:?}"))
+                    .map_err(|e| Error::Internal(format!("failed to start Xwayland: {e:?}")))
                     .location(loc!())?
                 } else {
-                    return Err(anyhow!("failed to start Xwayland: {err:?}")).location(loc!());
+                    return Err(Error::Internal(format!("failed to start Xwayland: {err:?}")))
+                        .location(loc!());
                 }
             },
         };

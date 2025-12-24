@@ -1,11 +1,10 @@
 use crate::client::config::WprscConfig;
 use crate::prelude::*;
-use anyhow::ensure;
 
 pub fn run(config: WprscConfig) -> Result<()> {
     ensure!(
         !config.forward_only,
-        "--forward-only is only meaningful for role=viewer"
+        Error::InvalidArgument("--forward-only is only meaningful for role=viewer".to_string()),
     );
 
     #[cfg(feature = "wayland")]
@@ -14,7 +13,9 @@ pub fn run(config: WprscConfig) -> Result<()> {
     #[cfg(not(feature = "wayland"))]
     {
         let _ = config;
-        bail!("role=wayland-server requires building wprsc with `--features wayland`")
+        bail!(Error::Unsupported(
+            "role=wayland-server requires building wprsc with `--features wayland`".to_string(),
+        ))
     }
 }
 

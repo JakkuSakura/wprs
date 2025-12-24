@@ -15,6 +15,7 @@
 pub mod client;
 pub mod config;
 pub mod constants;
+pub mod error;
 pub mod launcher;
 pub mod models;
 pub mod prelude;

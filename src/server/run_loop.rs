@@ -3,7 +3,7 @@ use std::num::NonZeroUsize;
 use std::time::Duration;
 use std::time::Instant;
 
-use anyhow::ensure;
+use crate::error::ensure;
 use calloop::EventLoop as CalloopEventLoop;
 use calloop::channel::Event as CalloopChannelEvent;
 use calloop::timer::TimeoutAction;
@@ -217,8 +217,10 @@ fn encode_bgra_frame(
     let expected_len = metadata.len();
     ensure!(
         bgra.len() == expected_len,
-        "bgra size mismatch: expected {expected_len} bytes, got {}",
-        bgra.len()
+        Error::InvalidArgument(format!(
+            "bgra size mismatch: expected {expected_len} bytes, got {}",
+            bgra.len()
+        )),
     );
 
     let bgra_ptr = bgra.as_ptr();
@@ -231,12 +233,22 @@ fn encode_bgra_frame(
             let width = u32::try_from(metadata.width)
                 .ok()
                 .filter(|w| *w > 0)
-                .ok_or_else(|| anyhow!("invalid h264 width: {}", metadata.width))
+                .ok_or_else(|| {
+                    Error::InvalidArgument(format!(
+                        "invalid h264 width: {}",
+                        metadata.width
+                    ))
+                })
                 .location(loc!())?;
             let height = u32::try_from(metadata.height)
                 .ok()
                 .filter(|h| *h > 0)
-                .ok_or_else(|| anyhow!("invalid h264 height: {}", metadata.height))
+                .ok_or_else(|| {
+                    Error::InvalidArgument(format!(
+                        "invalid h264 height: {}",
+                        metadata.height
+                    ))
+                })
                 .location(loc!())?;
 
             let should_reinit = match h264.get(&surface_id) {
@@ -471,7 +483,7 @@ pub fn run<B: PollingBackend>(
     let reader = state
         .serializer
         .reader()
-        .ok_or_else(|| anyhow!("serializer reader already taken"))
+        .ok_or_else(|| Error::Internal("serializer reader already taken".to_string()))
         .location(loc!())?;
 
     event_loop
@@ -562,7 +574,9 @@ pub fn run<B: PollingBackend>(
                 }
             }
         })
-        .map_err(|e| anyhow!("insert_source(serializer reader) failed: {e:?}"))?;
+        .map_err(|e| {
+            Error::Internal(format!("insert_source(serializer reader) failed: {e:?}"))
+        })?;
 
     event_loop
         .handle()
@@ -584,7 +598,7 @@ pub fn run<B: PollingBackend>(
 
             TimeoutAction::ToDuration(tick_interval)
         })
-        .map_err(|e| anyhow!("insert_source(timer) failed: {e:?}"))?;
+        .map_err(|e| Error::Internal(format!("insert_source(timer) failed: {e:?}")))?;
 
     event_loop.run(None, &mut state, |_| {}).location(loc!())?;
     Ok(())

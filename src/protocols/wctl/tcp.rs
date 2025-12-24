@@ -3,8 +3,6 @@ use std::net::TcpListener;
 use std::net::TcpStream;
 use std::sync::Arc;
 
-use anyhow::ensure;
-
 use crate::prelude::*;
 use crate::protocols::wctl::Request;
 use crate::protocols::wctl::codec;
@@ -13,7 +11,9 @@ use crate::protocols::wctl::server::Handler;
 pub fn serve(addr: SocketAddr, handler: Arc<dyn Handler>) -> Result<()> {
     ensure!(
         addr.ip().is_loopback(),
-        "wctl tcp endpoint must use a loopback address: {addr}"
+        Error::InvalidArgument(format!(
+            "wctl tcp endpoint must use a loopback address: {addr}"
+        )),
     );
 
     let listener = TcpListener::bind(addr).location(loc!())?;

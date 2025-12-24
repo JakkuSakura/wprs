@@ -211,25 +211,16 @@ impl WprsServerState {
             Err(err) => {
                 let msg = match err {
                     UnknownSurfaceErr::ObjectId(surface_id) => {
-                        anyhow!(
-                            "Ignoring pointer gesture event for unknown object {:?}",
-                            surface_id
-                        )
+                        format!("Ignoring pointer gesture event for unknown object {:?}", surface_id)
                     }
                     UnknownSurfaceErr::Client(object_id) => {
-                        anyhow!(
-                            "Ignoring pointer gesture event for unknown client {:?}",
-                            object_id
-                        )
+                        format!("Ignoring pointer gesture event for unknown client {:?}", object_id)
                     }
                     UnknownSurfaceErr::Surface(client) => {
-                        anyhow!(
-                            "Ignoring pointer gesture event for unknown surface {:?}",
-                            client
-                        )
+                        format!("Ignoring pointer gesture event for unknown surface {:?}", client)
                     }
                 };
-                warn!("{msg:?}");
+                warn!("{msg}");
                 return Ok(());
             }
         };
@@ -366,15 +357,18 @@ impl WprsServerState {
             let res = self
                 .object_client_surface_from_id(&event.surface_id)
                 .map_err(|err| match err {
-                    UnknownSurfaceErr::ObjectId(surface_id) => {
-                        anyhow!("Ignoring pointer event for unknown object {:?}", surface_id)
-                    }
-                    UnknownSurfaceErr::Client(object_id) => {
-                        anyhow!("Ignoring pointer event for unknown client {:?}", object_id)
-                    }
-                    UnknownSurfaceErr::Surface(client) => {
-                        anyhow!("Ignoring pointer event for unknown surface {:?}", client)
-                    }
+                    UnknownSurfaceErr::ObjectId(surface_id) => Error::Internal(format!(
+                        "Ignoring pointer event for unknown object {:?}",
+                        surface_id
+                    )),
+                    UnknownSurfaceErr::Client(object_id) => Error::Internal(format!(
+                        "Ignoring pointer event for unknown client {:?}",
+                        object_id
+                    )),
+                    UnknownSurfaceErr::Surface(client) => Error::Internal(format!(
+                        "Ignoring pointer event for unknown surface {:?}",
+                        client
+                    )),
                 })
                 .warn(loc!());
 
@@ -661,16 +655,18 @@ impl WprsServerState {
                 let (_, client, surface) = self
                     .object_client_surface_from_id(&surface_id)
                     .map_err(|err| match err {
-                        UnknownSurfaceErr::ObjectId(surface_id) => anyhow!(
+                        UnknownSurfaceErr::ObjectId(surface_id) => Error::Internal(format!(
                             "Ignoring keyboard event for unknown object {:?}",
                             surface_id
-                        ),
-                        UnknownSurfaceErr::Client(object_id) => {
-                            anyhow!("Ignoring keyboard event for unknown client {:?}", object_id)
-                        }
-                        UnknownSurfaceErr::Surface(client) => {
-                            anyhow!("Ignoring keyboard event for unknown surface {:?}", client)
-                        }
+                        )),
+                        UnknownSurfaceErr::Client(object_id) => Error::Internal(format!(
+                            "Ignoring keyboard event for unknown client {:?}",
+                            object_id
+                        )),
+                        UnknownSurfaceErr::Surface(client) => Error::Internal(format!(
+                            "Ignoring keyboard event for unknown surface {:?}",
+                            client
+                        )),
                     })
                     .warn(loc!())?;
 
@@ -1067,7 +1063,9 @@ impl WprsServerState {
                     source.action(
                         action.try_into()
                             // The error type is (). :(
-                            .map_err(|_| anyhow!("invalid dnd source action"))
+                            .map_err(|_| {
+                                Error::InvalidArgument("invalid dnd source action".to_string())
+                            })
                             .location(loc!())?,
                     );
                 }
@@ -1124,16 +1122,18 @@ impl WprsServerState {
                 let (_, _, surface) = self
                     .object_client_surface_from_id(&drag_enter.surface)
                     .map_err(|err| match err {
-                        UnknownSurfaceErr::ObjectId(surface_id) => anyhow!(
+                        UnknownSurfaceErr::ObjectId(surface_id) => Error::Internal(format!(
                             "Ignoring DnDEnter event for unknown object {:?}",
                             surface_id
-                        ),
-                        UnknownSurfaceErr::Client(object_id) => {
-                            anyhow!("Ignoring DnDEnter event for unknown client {:?}", object_id)
-                        }
-                        UnknownSurfaceErr::Surface(client) => {
-                            anyhow!("Ignoring DnDEnter event for unknown surface {:?}", client)
-                        }
+                        )),
+                        UnknownSurfaceErr::Client(object_id) => Error::Internal(format!(
+                            "Ignoring DnDEnter event for unknown client {:?}",
+                            object_id
+                        )),
+                        UnknownSurfaceErr::Surface(client) => Error::Internal(format!(
+                            "Ignoring DnDEnter event for unknown surface {:?}",
+                            client
+                        )),
                     })
                     .warn(loc!())?;
 
@@ -1161,7 +1161,9 @@ impl WprsServerState {
                             .source_actions
                             .try_into()
                             // The error type is (). :(
-                            .map_err(|_| anyhow!("invalid dnd source actions"))
+                            .map_err(|_| {
+                                Error::InvalidArgument("invalid dnd source actions".to_string())
+                            })
                             .location(loc!())?,
                     },
                 );
@@ -1257,25 +1259,21 @@ impl WprsServerState {
         let (_, _, surface) = self
             .object_client_surface_from_id(&surface_event.surface_id)
             .map_err(|err| match err {
-                UnknownSurfaceErr::ObjectId(surface_id) => anyhow!(
+                UnknownSurfaceErr::ObjectId(surface_id) => Error::Internal(format!(
                     "Ignoring {:?} event for unknown object {:?}",
                     surface_event.payload,
                     surface_id
-                ),
-                UnknownSurfaceErr::Client(object_id) => {
-                    anyhow!(
-                        "Ignoring {:?} event for unknown client {:?}",
-                        surface_event.payload,
-                        object_id
-                    )
-                }
-                UnknownSurfaceErr::Surface(client) => {
-                    anyhow!(
-                        "Ignoring {:?} event for unknown surface {:?}",
-                        surface_event.payload,
-                        client
-                    )
-                }
+                )),
+                UnknownSurfaceErr::Client(object_id) => Error::Internal(format!(
+                    "Ignoring {:?} event for unknown client {:?}",
+                    surface_event.payload,
+                    object_id
+                )),
+                UnknownSurfaceErr::Surface(client) => Error::Internal(format!(
+                    "Ignoring {:?} event for unknown surface {:?}",
+                    surface_event.payload,
+                    client
+                )),
             })
             .warn(loc!())?;
 

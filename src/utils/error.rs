@@ -12,11 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt;
 use std::fmt::Display;
-
-use anyhow::Context;
-use anyhow::Result;
 use tracing::{debug, error, info, trace, warn};
 
 // TODO(https://github.com/dtolnay/anyhow/issues/139): replace all this with the
@@ -35,16 +31,11 @@ macro_rules! fname {
 }
 pub use fname;
 
+#[derive(Clone, Copy, Debug)]
 pub struct Location {
     pub fname: &'static str,
     pub file: &'static str,
     pub line: u32,
-}
-
-impl fmt::Display for Location {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{} at {}:{}", self.fname, self.file, self.line)
-    }
 }
 
 // TODO(https://github.com/rust-lang/rust/issues/95529): use panic::Location.
@@ -63,7 +54,7 @@ macro_rules! loc {
 }
 pub use loc;
 
-pub trait LocationContextExt<R, T, E>: Context<T, E> {
+pub trait LocationContextExt<T, E> {
     fn with_context<C, F>(self, loc: Location, context: F) -> Result<T>
     where
         C: Display + Send + Sync + 'static,
@@ -76,16 +67,16 @@ pub trait LocationContextExt<R, T, E>: Context<T, E> {
     fn location(self, loc: Location) -> Result<T>;
 }
 
-impl<R, T, E> LocationContextExt<R, T, E> for R
+impl<T, E> LocationContextExt<T, E> for std::result::Result<T, E>
 where
-    R: Context<T, E>,
+    E: std::error::Error + Send + Sync + 'static,
 {
     fn with_context<C, F>(self, loc: Location, context: F) -> Result<T>
     where
         C: Display + Send + Sync + 'static,
         F: FnOnce() -> C,
     {
-        Context::with_context(self, || format!("{}: {}", loc, context()))
+        self.map_err(|err| Error::context(format!("{}: {}", loc, context()), err))
     }
 
     fn context<C>(self, loc: Location, context: C) -> Result<T>
@@ -96,12 +87,33 @@ where
     }
 
     fn location(self, loc: Location) -> Result<T> {
-        Context::with_context(self, || loc)
+        self.map_err(|err| Error::location(loc, err))
+    }
+}
+
+impl<T> LocationContextExt<T, Error> for Option<T> {
+    fn with_context<C, F>(self, loc: Location, context: F) -> Result<T>
+    where
+        C: Display + Send + Sync + 'static,
+        F: FnOnce() -> C,
+    {
+        self.ok_or_else(|| Error::location(loc, Error::Missing(context().to_string())))
+    }
+
+    fn context<C>(self, loc: Location, context: C) -> Result<T>
+    where
+        C: Display + Send + Sync + 'static,
+    {
+        self.ok_or_else(|| Error::location(loc, Error::Missing(context.to_string())))
+    }
+
+    fn location(self, loc: Location) -> Result<T> {
+        self.ok_or_else(|| Error::location(loc, Error::Missing("missing value".to_string())))
     }
 }
 
 /// Log a Result and then return it. Useful in cases such as `foo.try_into().log(loc!()).ok()`.
-pub trait LogExt<T, E>: Context<T, E> {
+pub trait LogExt<T, E> {
     fn trace(self, loc: Location) -> Result<T>;
     fn debug(self, loc: Location) -> Result<T>;
     fn info(self, loc: Location) -> Result<T>;
@@ -110,9 +122,9 @@ pub trait LogExt<T, E>: Context<T, E> {
     fn log(self, loc: Location) -> Result<T>;
 }
 
-impl<R, T, E> LogExt<T, E> for R
+impl<T, E> LogExt<T, E> for std::result::Result<T, E>
 where
-    R: Context<T, E>,
+    E: std::error::Error + Send + Sync + 'static,
 {
     fn trace(self, loc: Location) -> Result<T> {
         let res = self.location(loc);
@@ -171,9 +183,9 @@ pub trait LogAndIgnoreExt<T, E>: LogExt<T, E> {
     fn log_and_ignore(self, loc: Location);
 }
 
-impl<R, T, E> LogAndIgnoreExt<T, E> for R
+impl<T, E> LogAndIgnoreExt<T, E> for std::result::Result<T, E>
 where
-    R: Context<T, E>,
+    E: std::error::Error + Send + Sync + 'static,
 {
     fn trace_and_ignore(self, loc: Location) {
         _ = self.trace(loc);
@@ -243,3 +255,5 @@ macro_rules! warn_and_return {
     };
 }
 pub use warn_and_return;
+use crate::error::Error;
+use crate::error::Result;

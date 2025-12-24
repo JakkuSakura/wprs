@@ -140,12 +140,16 @@ fn run_viewer(config: WprscConfig) -> Result<()> {
         let endpoint = config
             .endpoint
             .clone()
-            .ok_or_else(|| anyhow!("--forward-only requires --endpoint=ssh://..."))
+            .ok_or_else(|| {
+                Error::InvalidArgument("--forward-only requires --endpoint=ssh://...".to_string())
+            })
             .location(loc!())?;
 
         let (local_endpoint, guard) = setup_client_transport(endpoint).location(loc!())?;
         let _guard = guard
-            .ok_or_else(|| anyhow!("--forward-only requires an ssh:// endpoint"))
+            .ok_or_else(|| {
+                Error::InvalidArgument("--forward-only requires an ssh:// endpoint".to_string())
+            })
             .location(loc!())?;
 
         println!("{local_endpoint}");

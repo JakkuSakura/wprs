@@ -103,7 +103,7 @@ fn run_event_loop(ctx: ClientContext, config: ClientBackendConfig) -> Result<()>
             }
             calloop::timer::TimeoutAction::ToDuration(std::time::Duration::from_millis(100))
         })
-        .map_err(|e| anyhow!("insert_source(refresh timer) failed: {e:?}"))?;
+        .map_err(|e| Error::Internal(format!("insert_source(refresh timer) failed: {e:?}")))?;
 
     let _serializer = ctx.serializer;
     loop_.run(None, &mut state, |_| {}).location(loc!())
@@ -152,7 +152,7 @@ impl HtmlPresenter {
         let mut surfaces = self
             .surfaces
             .lock()
-            .map_err(|err| anyhow!("surface lock poisoned: {err:?}"))?;
+            .map_err(|err| Error::Internal(format!("surface lock poisoned: {err:?}")))?;
         match surfaces.entry(surface_id) {
             Entry::Vacant(entry) => {
                 entry.insert(SurfaceInfo { title: title.clone() });
@@ -174,7 +174,7 @@ impl HtmlPresenter {
         let mut surfaces = self
             .surfaces
             .lock()
-            .map_err(|err| anyhow!("surface lock poisoned: {err:?}"))?;
+            .map_err(|err| Error::Internal(format!("surface lock poisoned: {err:?}")))?;
         if surfaces.remove(&surface.surface).is_some() {
             let msg = surface_destroyed_json(surface.surface);
             let _ = self.broadcaster.send(WireMessage::Text(msg));
@@ -251,7 +251,7 @@ fn spawn_http_server(bind_addr: SocketAddr, state: ServerState) -> Result<()> {
         let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
             Ok(runtime) => runtime,
             Err(err) => {
-                let _ = ready_tx.send(Err(anyhow!(err)));
+                let _ = ready_tx.send(Err(Error::Internal(format!("{err}"))));
                 return;
             }
         };
@@ -267,7 +267,9 @@ fn spawn_http_server(bind_addr: SocketAddr, state: ServerState) -> Result<()> {
                 .with_state(state);
 
             let _ = ready_tx.send(Ok(()));
-            axum::serve(listener, app).await.map_err(|err| anyhow!(err))
+            axum::serve(listener, app)
+                .await
+                .map_err(|err| Error::Internal(format!("{err}")))
         });
 
         if let Err(err) = result {
@@ -278,7 +280,9 @@ fn spawn_http_server(bind_addr: SocketAddr, state: ServerState) -> Result<()> {
     match ready_rx.recv() {
         Ok(Ok(())) => Ok(()),
         Ok(Err(err)) => Err(err),
-        Err(err) => Err(anyhow!("html backend server failed to start: {err:?}")),
+        Err(err) => Err(Error::Internal(format!(
+            "html backend server failed to start: {err:?}"
+        ))),
     }
 }
 

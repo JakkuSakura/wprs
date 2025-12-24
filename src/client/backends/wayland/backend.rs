@@ -26,7 +26,7 @@ impl WaylandClientBackend {
 
     pub fn connect_to_env(config: ClientBackendConfig) -> Result<Self> {
         let conn = Connection::connect_to_env()
-            .map_err(|e| anyhow!(e))
+            .map_err(|e| Error::context("connect_to_env failed", e))
             .location(loc!())?;
         Ok(Self::new(config, conn))
     }
@@ -35,7 +35,7 @@ impl WaylandClientBackend {
         match Connection::connect_to_env() {
             Ok(conn) => Ok(Some(Self::new(config, conn))),
             Err(ConnectError::NoCompositor) => Ok(None),
-            Err(e) => Err(anyhow!(e)),
+            Err(e) => Err(Error::context("connect_to_env failed", e)),
         }
     }
 }
@@ -87,11 +87,11 @@ fn run_wayland(ctx: ClientContext, config: ClientBackendConfig, conn: Connection
             state.apply_client_state_updates().log_and_ignore(loc!());
             calloop::timer::TimeoutAction::ToDuration(std::time::Duration::from_millis(50))
         })
-        .map_err(|e| anyhow!("insert_source(refresh timer) failed: {e:?}"))?;
+        .map_err(|e| Error::Internal(format!("insert_source(refresh timer) failed: {e:?}")))?;
 
     WaylandSource::new(conn, event_queue)
         .insert(event_loop.handle())
-        .map_err(|e| anyhow!("insert_source(wayland) failed: {e}"))
+        .map_err(|e| Error::Internal(format!("insert_source(wayland) failed: {e}")))
         .location(loc!())?;
 
     event_loop.run(None, &mut state, |_| {}).location(loc!())

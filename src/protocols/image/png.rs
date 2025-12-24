@@ -1,23 +1,26 @@
-use anyhow::ensure;
-
 use crate::prelude::*;
 
 pub fn encode_png_rgba(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8>> {
     use png::{BitDepth, ColorType, Encoder};
 
-    ensure!(width > 0 && height > 0, "png encode requires non-zero dimensions");
+    ensure!(
+        width > 0 && height > 0,
+        Error::InvalidArgument("png encode requires non-zero dimensions".to_string()),
+    );
 
     let expected_len = (width as usize)
         .checked_mul(height as usize)
         .and_then(|v| v.checked_mul(4))
-        .ok_or_else(|| anyhow!("png encode: width/height overflow"))
+        .ok_or_else(|| Error::InvalidArgument("png encode: width/height overflow".to_string()))
         .location(loc!())?;
 
     ensure!(
         rgba.len() == expected_len,
-        "png encode: rgba length mismatch (got {}, expected {})",
-        rgba.len(),
-        expected_len
+        Error::InvalidArgument(format!(
+            "png encode: rgba length mismatch (got {}, expected {})",
+            rgba.len(),
+            expected_len
+        )),
     );
 
     let mut buf = Vec::new();
@@ -57,20 +60,35 @@ mod tests {
         let decoder = png::Decoder::new(std::io::Cursor::new(encoded));
         let mut reader = decoder.read_info().location(loc!())?;
         let info = reader.info();
-        ensure!(info.width == width as u32);
-        ensure!(info.height == height as u32);
-        ensure!(info.color_type == png::ColorType::Rgba);
-        ensure!(info.bit_depth == png::BitDepth::Eight);
+        ensure!(
+            info.width == width as u32,
+            Error::Internal("png decode: width mismatch".to_string()),
+        );
+        ensure!(
+            info.height == height as u32,
+            Error::Internal("png decode: height mismatch".to_string()),
+        );
+        ensure!(
+            info.color_type == png::ColorType::Rgba,
+            Error::Internal("png decode: color type mismatch".to_string()),
+        );
+        ensure!(
+            info.bit_depth == png::BitDepth::Eight,
+            Error::Internal("png decode: bit depth mismatch".to_string()),
+        );
 
         let out_len = reader
             .output_buffer_size()
-            .ok_or_else(|| anyhow!("png decode: unknown output size"))
+            .ok_or_else(|| Error::Internal("png decode: unknown output size".to_string()))
             .location(loc!())?;
         let mut decoded = vec![0u8; out_len];
         let frame = reader.next_frame(&mut decoded).location(loc!())?;
         decoded.truncate(frame.buffer_size());
 
-        ensure!(decoded == rgba);
+        ensure!(
+            decoded == rgba,
+            Error::Internal("png decode: payload mismatch".to_string()),
+        );
         Ok(())
     }
 

@@ -273,7 +273,9 @@ fn list_windows() -> Result<Vec<WindowInfo>> {
 
     #[cfg(not(target_os = "macos"))]
     {
-        bail!("macOS window capture backend is only supported on macOS")
+        bail!(Error::Unsupported(
+            "macOS window capture backend is only supported on macOS".to_string(),
+        ))
     }
 }
 
@@ -286,7 +288,9 @@ fn capture_window_bgra(window_id: u32) -> Result<(BufferMetadata, Vec<u8>)> {
     #[cfg(not(target_os = "macos"))]
     {
         let _ = window_id;
-        bail!("macOS window capture backend is only supported on macOS")
+        bail!(Error::Unsupported(
+            "macOS window capture backend is only supported on macOS".to_string(),
+        ))
     }
 }
 
@@ -319,7 +323,7 @@ fn post_mouse_button(down: bool, button: u32, x: f64, y: f64) -> Result<()> {
 #[cfg(target_os = "macos")]
 mod macos {
     use super::*;
-    use anyhow::ensure;
+    use crate::error::ensure;
     use std::ffi::c_void;
     use std::ptr;
 
@@ -461,7 +465,10 @@ mod macos {
             let options =
                 K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY | K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS;
             let array = CGWindowListCopyWindowInfo(options, 0);
-            ensure!(!array.is_null(), "CGWindowListCopyWindowInfo returned null");
+            ensure!(
+                !array.is_null(),
+                Error::Internal("CGWindowListCopyWindowInfo returned null".to_string()),
+            );
 
             let count = CFArrayGetCount(array);
             let mut out = Vec::new();
@@ -538,7 +545,7 @@ mod macos {
                 .location(loc!())?
                 .into_iter()
                 .find(|w| w.window_id == window_id)
-                .ok_or_else(|| anyhow!("unknown window id {window_id}"))?
+                .ok_or_else(|| Error::Missing(format!("unknown window id {window_id}")))?
                 .bounds;
 
             let rect = CGRect {
@@ -560,7 +567,10 @@ mod macos {
             );
             ensure!(
                 !img.is_null(),
-                "CGWindowListCreateImage returned null (Screen Recording permission?)"
+                Error::Internal(
+                    "CGWindowListCreateImage returned null (Screen Recording permission?)"
+                        .to_string(),
+                ),
             );
 
             let width = CGImageGetWidth(img) as i32;
@@ -571,23 +581,34 @@ mod macos {
 
             ensure!(
                 bpp == 32 && bpc == 8,
-                "unsupported capture format: bpp={bpp}, bpc={bpc}"
+                Error::Unsupported(format!(
+                    "unsupported capture format: bpp={bpp}, bpc={bpc}"
+                )),
             );
             ensure!(
                 stride > 0 && width > 0 && height > 0,
-                "invalid captured dimensions"
+                Error::Internal("invalid captured dimensions".to_string()),
             );
 
             let provider = CGImageGetDataProvider(img);
-            ensure!(!provider.is_null(), "CGImageGetDataProvider returned null");
+            ensure!(
+                !provider.is_null(),
+                Error::Internal("CGImageGetDataProvider returned null".to_string()),
+            );
             let cf_data = CGDataProviderCopyData(provider);
-            ensure!(!cf_data.is_null(), "CGDataProviderCopyData returned null");
+            ensure!(
+                !cf_data.is_null(),
+                Error::Internal("CGDataProviderCopyData returned null".to_string()),
+            );
             let len = CFDataGetLength(cf_data) as usize;
             let ptr = CFDataGetBytePtr(cf_data);
-            ensure!(!ptr.is_null(), "CFDataGetBytePtr returned null");
+            ensure!(
+                !ptr.is_null(),
+                Error::Internal("CFDataGetBytePtr returned null".to_string()),
+            );
             ensure!(
                 len >= (height as usize) * (stride as usize),
-                "captured buffer is smaller than expected"
+                Error::Internal("captured buffer is smaller than expected".to_string()),
             );
 
             let bytes = std::slice::from_raw_parts(ptr, (height as usize) * (stride as usize));
@@ -623,7 +644,10 @@ mod macos {
             };
 
             let ev = CGEventCreateMouseEvent(ptr::null(), event_type, p, mouse_button);
-            ensure!(!ev.is_null(), "CGEventCreateMouseEvent returned null");
+            ensure!(
+                !ev.is_null(),
+                Error::Internal("CGEventCreateMouseEvent returned null".to_string()),
+            );
             CGEventPost(K_CG_EVENT_TAP_HID, ev);
             CFRelease(ev as CFTypeRef);
             Ok(())
@@ -663,7 +687,10 @@ mod macos {
             };
 
             let ev = CGEventCreateMouseEvent(ptr::null(), event_type, p, mouse_button);
-            ensure!(!ev.is_null(), "CGEventCreateMouseEvent returned null");
+            ensure!(
+                !ev.is_null(),
+                Error::Internal("CGEventCreateMouseEvent returned null".to_string()),
+            );
             CGEventPost(K_CG_EVENT_TAP_HID, ev);
             CFRelease(ev as CFTypeRef);
             Ok(())
@@ -674,7 +701,10 @@ mod macos {
         unsafe {
             let display = CGMainDisplayID();
             let mode = CGDisplayCopyDisplayMode(display);
-            ensure!(!mode.is_null(), "CGDisplayCopyDisplayMode returned null");
+            ensure!(
+                !mode.is_null(),
+                Error::Internal("CGDisplayCopyDisplayMode returned null".to_string()),
+            );
 
             let width_points = CGDisplayModeGetWidth(mode) as f64;
             let height_points = CGDisplayModeGetHeight(mode) as f64;
@@ -685,11 +715,11 @@ mod macos {
 
             ensure!(
                 width_points > 0.0 && height_points > 0.0,
-                "invalid display mode size"
+                Error::Internal("invalid display mode size".to_string()),
             );
             ensure!(
                 width_pixels > 0.0 && height_pixels > 0.0,
-                "invalid display mode pixel size"
+                Error::Internal("invalid display mode pixel size".to_string()),
             );
 
             let scale_w = width_pixels / width_points;
@@ -718,11 +748,17 @@ mod macos {
 
     fn cf_dict_u32(dict: CFDictionaryRef, key: CFStringRef) -> Result<u32> {
         let v = unsafe { CFDictionaryGetValue(dict, key) };
-        ensure!(!v.is_null(), "missing required key");
+        ensure!(
+            !v.is_null(),
+            Error::Internal("missing required key".to_string()),
+        );
         let mut out: i64 = 0;
         let ok =
             unsafe { CFNumberGetValue(v as CFNumberRef, 4, &mut out as *mut i64 as *mut c_void) };
-        ensure!(ok != 0, "CFNumberGetValue failed");
+        ensure!(
+            ok != 0,
+            Error::Internal("CFNumberGetValue failed".to_string()),
+        );
         Ok(out as u32)
     }
 

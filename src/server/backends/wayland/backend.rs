@@ -86,7 +86,7 @@ impl crate::server::backend::ServerBackend for WaylandSmithayBackend {
 
         let reader = serializer
             .reader()
-            .ok_or_else(|| anyhow!("serializer reader already taken"))
+            .ok_or_else(|| Error::Internal("serializer reader already taken".to_string()))
             .location(loc!())?;
 
         let mut event_loop = EventLoop::try_new().location(loc!())?;
@@ -119,7 +119,10 @@ impl crate::server::backend::ServerBackend for WaylandSmithayBackend {
             {
                 let _ = xwayland_cfg;
                 let _ = &mut state;
-                bail!("wayland.xwayland is set but wprsd was built without `--features xwayland`");
+                bail!(Error::Unsupported(
+                    "wayland.xwayland is set but wprsd was built without `--features xwayland`"
+                        .to_string(),
+                ));
             }
         }
 
@@ -136,7 +139,9 @@ impl crate::server::backend::ServerBackend for WaylandSmithayBackend {
                     state.handle_event(msg);
                 }
             })
-            .map_err(|e| anyhow!("insert_source(serializer reader) failed: {e:?}"))?;
+            .map_err(|e| {
+                Error::Internal(format!("insert_source(serializer reader) failed: {e:?}"))
+            })?;
 
         event_loop
             .run(None, &mut state, move |state| {

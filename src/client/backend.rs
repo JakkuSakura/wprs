@@ -41,9 +41,10 @@ fn build_winit_wgpu_backend(config: ClientBackendConfig) -> Result<Box<dyn Clien
     #[cfg(not(feature = "winit-wgpu-client"))]
     {
         let _ = config;
-        bail!(
+        bail!(Error::Unsupported(
             "winit-wgpu backend requested but not compiled in. Rebuild with `--features winit-wgpu-client`."
-        )
+                .to_string(),
+        ))
     }
 }
 
@@ -75,7 +76,10 @@ pub fn build_client_backend(
 ) -> Result<Box<dyn ClientBackend>> {
     match requested {
         config::ClientBackend::Auto => {
-            bail!("ClientBackend::Auto must be resolved before calling build_client_backend")
+            bail!(Error::InvalidArgument(
+                "ClientBackend::Auto must be resolved before calling build_client_backend"
+                    .to_string(),
+            ))
         },
         #[cfg(feature = "smithay_winit_gl_wayland")]
         config::ClientBackend::SmithayWinitGlWayland => {
@@ -137,9 +141,10 @@ pub fn build_client_backend(
             #[cfg(not(feature = "wayland-client"))]
             {
                 let _ = config;
-                bail!(
+                bail!(Error::Unsupported(
                     "Wayland backend requested but not compiled in. Rebuild with `--features wayland-client`."
-                )
+                        .to_string(),
+                ))
             }
         },
         config::ClientBackend::WinitWgpu => build_winit_wgpu_backend(config),
@@ -170,7 +175,7 @@ fn resolve_auto_backend() -> Result<config::ClientBackend> {
             Err(ConnectError::NoCompositor) => {
                 // No compositor; fall through.
             },
-            Err(e) => return Err(anyhow!(e)),
+            Err(e) => return Err(Error::context("Wayland connect failed", e)),
         }
     }
 

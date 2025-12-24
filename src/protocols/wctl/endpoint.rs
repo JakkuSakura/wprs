@@ -3,7 +3,6 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::str::FromStr;
 
-use anyhow::ensure;
 use serde_derive::Deserialize;
 use serde_derive::Serialize;
 
@@ -29,7 +28,9 @@ impl Endpoint {
             Endpoint::Tcp { addr } => {
                 ensure!(
                     addr.ip().is_loopback(),
-                    "wctl tcp endpoint must use a loopback address: {addr}"
+                    Error::InvalidArgument(format!(
+                        "wctl tcp endpoint must use a loopback address: {addr}"
+                    )),
                 );
                 Ok(())
             },
@@ -48,9 +49,9 @@ impl fmt::Display for Endpoint {
 }
 
 impl FromStr for Endpoint {
-    type Err = anyhow::Error;
+    type Err = crate::error::Error;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         #[cfg(unix)]
         if let Some(rest) = s.strip_prefix("unix://") {
             return Ok(Self::Unix {
@@ -73,9 +74,9 @@ impl FromStr for Endpoint {
             }
         }
 
-        bail!(
+        bail!(Error::InvalidArgument(format!(
             "invalid wctl endpoint {s:?} (expected: tcp://127.0.0.1:PORT{} )",
             if cfg!(unix) { " or unix:///path" } else { "" }
-        )
+        )))
     }
 }

@@ -1,8 +1,6 @@
 use std::fmt::Write as _;
 use std::io::Write;
 
-use anyhow::ensure;
-
 use calloop::EventLoop as CalloopEventLoop;
 
 use termwiz::terminal::ScreenSize;
@@ -72,7 +70,7 @@ impl TerminalPresenter {
         let size = terminal.get_screen_size().location(loc!())?;
         ensure!(
             size.cols > 0 && size.rows > 0,
-            "terminal reported zero size"
+            Error::InvalidArgument("terminal reported zero size".to_string()),
         );
 
         Ok(Self {
@@ -91,7 +89,7 @@ impl TerminalPresenter {
         let size = self.terminal.get_screen_size().location(loc!())?;
         ensure!(
             size.cols > 0 && size.rows > 0,
-            "terminal reported zero size"
+            Error::InvalidArgument("terminal reported zero size".to_string()),
         );
         self.screen_size = ScreenSize {
             rows: size.rows,
@@ -226,7 +224,7 @@ fn run_event_loop(ctx: ClientContext) -> Result<()> {
                 .log_and_ignore(loc!());
             calloop::timer::TimeoutAction::ToDuration(std::time::Duration::from_millis(200))
         })
-        .map_err(|e| anyhow!("insert_source(refresh timer) failed: {e:?}"))?;
+        .map_err(|e| Error::Internal(format!("insert_source(refresh timer) failed: {e:?}")))?;
 
     let _serializer = ctx.serializer;
     loop_.run(None, &mut state, |_| {}).location(loc!())

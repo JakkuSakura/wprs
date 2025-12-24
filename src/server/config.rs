@@ -29,16 +29,16 @@ impl Default for IntegrationMode {
 }
 
 impl std::str::FromStr for IntegrationMode {
-    type Err = anyhow::Error;
+    type Err = crate::error::Error;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s {
             "embedded" => Ok(Self::Embedded),
             "spawned" => Ok(Self::Spawned),
             "external" => Ok(Self::External),
-            other => {
-                bail!("invalid integration mode {other:?} (expected: embedded|spawned|external)")
-            },
+            other => bail!(Error::InvalidArgument(format!(
+                "invalid integration mode {other:?} (expected: embedded|spawned|external)"
+            ))),
         }
     }
 }
@@ -63,18 +63,18 @@ impl Default for WprsdBackend {
 }
 
 impl std::str::FromStr for WprsdBackend {
-    type Err = anyhow::Error;
+    type Err = crate::error::Error;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s {
             "wayland" => Ok(Self::Wayland),
             "windows-fullscreen" => Ok(Self::WindowsFullscreen),
             "macos-fullscreen" => Ok(Self::MacosFullscreen),
             "windows-seamless" => Ok(Self::WindowsSeamless),
             "macos-seamless" => Ok(Self::MacosSeamless),
-            other => bail!(
+            other => bail!(Error::InvalidArgument(format!(
                 "invalid backend {other:?} (expected: wayland|windows-fullscreen|macos-fullscreen|windows-seamless|macos-seamless)"
-            ),
+            ))),
         }
     }
 }

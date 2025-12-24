@@ -207,24 +207,28 @@ impl From<SctkDecorationMode> for DecorationMode {
 
 #[cfg(feature = "wayland")]
 impl TryFrom<XdgDecorationMode> for DecorationMode {
-    type Error = anyhow::Error;
+    type Error = crate::error::Error;
     fn try_from(decoration_mode: XdgDecorationMode) -> Result<Self> {
         match decoration_mode {
             XdgDecorationMode::ClientSide => Ok(Self::Client),
             XdgDecorationMode::ServerSide => Ok(Self::Server),
-            _ => Err(anyhow!("unknown decoration mode {decoration_mode:?}")),
+            _ => Err(Error::InvalidArgument(format!(
+                "unknown decoration mode {decoration_mode:?}"
+            ))),
         }
     }
 }
 
 #[cfg(feature = "wayland")]
 impl TryFrom<KdeDecorationMode> for DecorationMode {
-    type Error = anyhow::Error;
+    type Error = crate::error::Error;
     fn try_from(decoration_mode: KdeDecorationMode) -> Result<Self> {
         match decoration_mode {
             KdeDecorationMode::Client => Ok(Self::Client),
             KdeDecorationMode::Server => Ok(Self::Server),
-            _ => Err(anyhow!("unknown decoration mode {decoration_mode:?}")),
+            _ => Err(Error::InvalidArgument(format!(
+                "unknown decoration mode {decoration_mode:?}"
+            ))),
         }
     }
 }

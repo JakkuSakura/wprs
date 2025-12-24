@@ -6,8 +6,6 @@ use std::process::Command;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use anyhow::ensure;
-
 use crate::client::ClientBackendConfig;
 use crate::client::config::ClientBackend;
 use crate::config;
@@ -66,7 +64,7 @@ fn start_capture_target_pid_lease(
 pub fn run(cfg: RunConfig) -> Result<i32> {
     ensure!(
         !cfg.cmd.is_empty(),
-        "missing command; try: wrun -- <cmd> [args...]"
+        Error::Missing("command; try: wrun -- <cmd> [args...]".to_string()),
     );
 
     let wprsd_config_from_file =
@@ -83,7 +81,7 @@ pub fn run(cfg: RunConfig) -> Result<i32> {
     let (program, args) = cfg
         .cmd
         .split_first()
-        .ok_or_else(|| anyhow!("missing command"))
+        .ok_or_else(|| Error::Missing("command".to_string()))
         .location(loc!())?;
 
     let mut child = Command::new(program);

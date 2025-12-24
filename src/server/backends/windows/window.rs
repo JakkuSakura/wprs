@@ -258,7 +258,9 @@ fn list_windows() -> Result<Vec<WindowInfo>> {
 
     #[cfg(not(target_os = "windows"))]
     {
-        bail!("Windows window capture backend is only supported on Windows")
+        bail!(Error::Unsupported(
+            "Windows window capture backend is only supported on Windows".to_string(),
+        ))
     }
 }
 
@@ -271,7 +273,9 @@ fn capture_window_bgra(hwnd_key: u64) -> Result<(BufferMetadata, Vec<u8>)> {
     #[cfg(not(target_os = "windows"))]
     {
         let _ = hwnd_key;
-        bail!("Windows window capture backend is only supported on Windows")
+        bail!(Error::Unsupported(
+            "Windows window capture backend is only supported on Windows".to_string(),
+        ))
     }
 }
 
@@ -317,7 +321,7 @@ fn post_scroll(horizontal: i32, vertical: i32) -> Result<()> {
 #[cfg(target_os = "windows")]
 mod win {
     use super::*;
-    use anyhow::ensure;
+    use crate::error::ensure;
     use std::ffi::c_void;
     use std::ptr;
 
@@ -535,7 +539,10 @@ mod win {
         unsafe {
             let mut out: Vec<WindowInfo> = Vec::new();
             let ok = EnumWindows(enum_cb, (&mut out as *mut Vec<WindowInfo>) as isize);
-            ensure!(ok != 0, "EnumWindows failed");
+            ensure!(
+                ok != 0,
+                Error::Internal("EnumWindows failed".to_string()),
+            );
             Ok(out)
         }
     }
@@ -552,21 +559,33 @@ mod win {
             };
             ensure!(
                 GetWindowRect(hwnd, &mut rect as *mut RECT) != 0,
-                "GetWindowRect failed"
+                Error::Internal("GetWindowRect failed".to_string()),
             );
 
             let width = (rect.right - rect.left).max(1);
             let height = (rect.bottom - rect.top).max(1);
 
             let window_dc = GetDC(hwnd);
-            ensure!(!window_dc.is_null(), "GetDC returned null");
+            ensure!(
+                !window_dc.is_null(),
+                Error::Internal("GetDC returned null".to_string()),
+            );
             let mem_dc = CreateCompatibleDC(window_dc);
-            ensure!(!mem_dc.is_null(), "CreateCompatibleDC returned null");
+            ensure!(
+                !mem_dc.is_null(),
+                Error::Internal("CreateCompatibleDC returned null".to_string()),
+            );
 
             let bmp = CreateCompatibleBitmap(window_dc, width, height);
-            ensure!(!bmp.is_null(), "CreateCompatibleBitmap returned null");
+            ensure!(
+                !bmp.is_null(),
+                Error::Internal("CreateCompatibleBitmap returned null".to_string()),
+            );
             let old = SelectObject(mem_dc, bmp as HGDIOBJ);
-            ensure!(!old.is_null(), "SelectObject failed");
+            ensure!(
+                !old.is_null(),
+                Error::Internal("SelectObject failed".to_string()),
+            );
 
             // Prefer PrintWindow for occluded windows; fall back to BitBlt.
             let printed = PrintWindow(hwnd, mem_dc, PW_RENDERFULLCONTENT);
@@ -609,7 +628,10 @@ mod win {
                 &mut bmi as *mut BITMAPINFO,
                 DIB_RGB_COLORS,
             );
-            ensure!(got != 0, "GetDIBits failed");
+            ensure!(
+                got != 0,
+                Error::Internal("GetDIBits failed".to_string()),
+            );
 
             // Many sources produce an undefined alpha channel; force it opaque.
             for px in out.chunks_exact_mut(4) {
@@ -667,7 +689,10 @@ mod win {
                 &input as *const INPUT,
                 std::mem::size_of::<INPUT>() as i32,
             );
-            ensure!(sent == 1, "SendInput failed");
+            ensure!(
+                sent == 1,
+                Error::Internal("SendInput failed".to_string()),
+            );
             let _ = button_mask;
             Ok(())
         }
@@ -706,7 +731,10 @@ mod win {
                 &input as *const INPUT,
                 std::mem::size_of::<INPUT>() as i32,
             );
-            ensure!(sent == 1, "SendInput failed");
+            ensure!(
+                sent == 1,
+                Error::Internal("SendInput failed".to_string()),
+            );
             Ok(())
         }
     }
@@ -732,7 +760,10 @@ mod win {
                     &input as *const INPUT,
                     std::mem::size_of::<INPUT>() as i32,
                 );
-                ensure!(sent == 1, "SendInput failed");
+                ensure!(
+                    sent == 1,
+                    Error::Internal("SendInput failed".to_string()),
+                );
             }
             if horizontal != 0 {
                 let mut input = INPUT {
@@ -753,7 +784,10 @@ mod win {
                     &input as *const INPUT,
                     std::mem::size_of::<INPUT>() as i32,
                 );
-                ensure!(sent == 1, "SendInput failed");
+                ensure!(
+                    sent == 1,
+                    Error::Internal("SendInput failed".to_string()),
+                );
             }
             Ok(())
         }

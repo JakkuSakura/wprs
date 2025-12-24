@@ -947,7 +947,7 @@ mod tests {
                 shards
                     .shards
                     .into_iter()
-                    .map(Ok::<CompressedShard, anyhow::Error>)
+                    .map(Ok::<CompressedShard, crate::error::Error>)
                     .transpose_into_fallible(),
             )
             .unwrap();

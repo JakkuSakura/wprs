@@ -5,13 +5,13 @@ use ffmpeg_next::error::EAGAIN;
 
 use crate::prelude::*;
 
-static FFMPEG_INIT: OnceLock<Result<(), String>> = OnceLock::new();
+static FFMPEG_INIT: OnceLock<std::result::Result<(), String>> = OnceLock::new();
 
 fn ensure_ffmpeg() -> Result<()> {
     let init = FFMPEG_INIT.get_or_init(|| ffmpeg::init().map_err(|err| err.to_string()));
     match init {
         Ok(()) => Ok(()),
-        Err(err) => bail!("ffmpeg init failed: {err}"),
+        Err(err) => bail!(Error::Internal(format!("ffmpeg init failed: {err}"))),
     }
 }
 
@@ -35,7 +35,7 @@ impl H264Encoder {
     pub fn new(width: u32, height: u32, fps: u32) -> Result<Self> {
         ensure_ffmpeg().location(loc!())?;
         let codec = ffmpeg::encoder::find(ffmpeg::codec::Id::H264)
-            .ok_or_else(|| anyhow!("H264 encoder not available"))
+            .ok_or_else(|| Error::Unsupported("H264 encoder not available".to_string()))
             .location(loc!())?;
         let context = ffmpeg::codec::context::Context::new();
         let mut encoder = context.encoder().video().location(loc!())?;
@@ -98,7 +98,10 @@ impl H264Encoder {
                     }
                 }
                 Err(err) if err == ffmpeg::Error::Other { errno: EAGAIN } => break,
-                Err(err) => return Err(anyhow!(err)).location(loc!()),
+                Err(err) => {
+                    return Err(Error::Internal(format!("ffmpeg encode failed: {err}")))
+                        .location(loc!())
+                }
             }
         }
         Ok(out)
@@ -114,7 +117,7 @@ impl H264Decoder {
     pub fn new() -> Result<Self> {
         ensure_ffmpeg().location(loc!())?;
         let codec = ffmpeg::decoder::find(ffmpeg::codec::Id::H264)
-            .ok_or_else(|| anyhow!("H264 decoder not available"))
+            .ok_or_else(|| Error::Unsupported("H264 decoder not available".to_string()))
             .location(loc!())?;
         let context = ffmpeg::codec::context::Context::new();
         let decoder = context.decoder().open_as(codec).location(loc!())?.video().location(loc!())?;
@@ -172,7 +175,7 @@ impl H264Decoder {
                 }))
             },
             Err(err) if err == ffmpeg::Error::Other { errno: EAGAIN } => Ok(None),
-            Err(err) => Err(anyhow!(err)).location(loc!()),
+            Err(err) => Err(Error::Internal(format!("ffmpeg decode failed: {err}"))).location(loc!()),
         }
     }
 }

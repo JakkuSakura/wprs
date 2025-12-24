@@ -16,7 +16,7 @@ use std::fmt;
 use std::fmt::Debug;
 use std::num::NonZeroU32;
 #[cfg(any(feature = "wayland", feature = "wayland-client"))]
-use anyhow::Error;
+use crate::error::Error;
 use rkyv::Archive;
 use rkyv::Deserialize;
 use rkyv::Serialize;
@@ -140,7 +140,10 @@ impl TryFrom<SmithayBufferFormat> for BufferFormat {
         match format {
             SmithayBufferFormat::Argb8888 => Ok(Self::Argb8888),
             SmithayBufferFormat::Xrgb8888 => Ok(Self::Xrgb8888),
-            _ => bail!("invalid buffer format {:?}", format),
+            _ => bail!(Error::InvalidArgument(format!(
+                "invalid buffer format {:?}",
+                format
+            ))),
         }
     }
 }
@@ -152,7 +155,10 @@ impl TryFrom<SctkBufferFormat> for BufferFormat {
         match format {
             SctkBufferFormat::Argb8888 => Ok(Self::Argb8888),
             SctkBufferFormat::Xrgb8888 => Ok(Self::Xrgb8888),
-            _ => bail!("invalid buffer format {:?}", format),
+            _ => bail!(Error::InvalidArgument(format!(
+                "invalid buffer format {:?}",
+                format
+            ))),
         }
     }
 }
@@ -644,25 +650,29 @@ impl SurfaceState {
     }
 
     pub fn get_role(&self) -> Result<&Role> {
-        self.role.as_ref().ok_or(anyhow!("Role was None."))
+        self.role
+            .as_ref()
+            .ok_or_else(|| Error::Internal("Role was None.".to_string()))
     }
 
     pub fn get_role_mut(&mut self) -> Result<&mut Role> {
-        self.role.as_mut().ok_or(anyhow!("Role was None."))
+        self.role
+            .as_mut()
+            .ok_or_else(|| Error::Internal("Role was None.".to_string()))
     }
 
     pub fn xdg_toplevel(&self) -> Result<&xdg_shell::XdgToplevelState> {
         self.get_role()
             .location(loc!())?
             .as_xdg_toplevel()
-            .ok_or(anyhow!("Role was not XdgToplevel."))
+            .ok_or_else(|| Error::Internal("Role was not XdgToplevel.".to_string()))
     }
 
     pub fn xdg_popup(&self) -> Result<&xdg_shell::XdgPopupState> {
         self.get_role()
             .location(loc!())?
             .as_xdg_popup()
-            .ok_or(anyhow!("Role was not XdgPopup."))
+            .ok_or_else(|| Error::Internal("Role was not XdgPopup.".to_string()))
     }
 }
 

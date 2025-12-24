@@ -16,7 +16,7 @@ use crate::prelude::*;
 
 fn fallback_config_parent_dir() -> Result<PathBuf> {
     Ok(Path::join(
-        &home::home_dir().ok_or(anyhow!("unable to determine home dir"))?,
+        &home::home_dir().ok_or_else(|| Error::Missing("home dir".to_string()))?,
         ".config",
     ))
 }
@@ -82,19 +82,24 @@ pub struct SerializableLevel(pub Level);
 
 impl FromStr for SerializableLevel {
     type Err = ParseLevelError;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         Ok(Self(Level::from_str(s)?))
     }
 }
 
 impl Serialize for SerializableLevel {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
         serializer.serialize_str(self.0.as_str())
     }
 }
 
 impl<'de> Deserialize<'de> for SerializableLevel {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
         let s = String::deserialize(deserializer)?;
         Ok(Self(Level::from_str(&s).map_err(serde::de::Error::custom)?))
     }

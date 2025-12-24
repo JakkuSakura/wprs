@@ -2,6 +2,7 @@ pub mod backend;
 pub mod backends;
 pub mod config;
 pub mod coords;
+pub mod error;
 pub mod runner;
 pub mod state;
 pub mod wayland_server;
