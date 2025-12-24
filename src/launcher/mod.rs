@@ -10,7 +10,6 @@ use crate::config;
 use crate::prelude::*;
 use crate::protocols::wctl;
 use crate::protocols::wprs;
-use crate::protocols::wprs::serializer::Serializer;
 use crate::protocols::wprs::types::Event as WprsEvent;
 use crate::protocols::wprs::types::Request as WprsRequest;
 use crate::server::config::WprsdBackend;
@@ -31,7 +30,7 @@ pub struct RunConfig {
 struct DaemonInstance {
     control_endpoint: Option<wctl::Endpoint>,
     client: ControlClient,
-    inproc_client_serializer: Option<Serializer<WprsEvent, WprsRequest>>,
+    inproc_client_serializer: Option<wprs::serializer::Serializer<WprsEvent, WprsRequest>>,
     embedded_server_thread: Option<JoinHandle<()>>,
 }
 
@@ -213,7 +212,7 @@ pub fn run(cfg: RunConfig) -> Result<i32> {
 }
 
 fn connect_or_start_daemon(
-    cfg: &RunConfig,
+    _cfg: &RunConfig,
     wprsd_config_from_file: Option<WprsdConfig>,
 ) -> Result<DaemonInstance> {
     let probe_endpoints = resolve_wctl_probe_endpoints(&wprsd_config_from_file).location(loc!())?;
@@ -236,30 +235,11 @@ fn connect_or_start_daemon(
     );
 
     let wprsd_config =
-        derive_wprsd_config_for_wrun(wprsd_config_from_file).location(loc!())?;
+        derive_wprsd_config_for_wrun(wprsd_config_from_file, process::id()).location(loc!())?;
 
-    let (embedded_server_thread, inproc_client_serializer) = if cfg.backend.is_some() {
-        let (server_serializer, client_serializer) = wprs::serializer::new_inproc_serializer_pair::<
-            wprs::types::Request,
-            wprs::types::Event,
-        >()
-        .location(loc!())?;
-        let wprs_endpoint = format!("inproc://wrun/{}", process::id());
-        (
-            Some(daemon::start_in_thread_with_serializer_and_control(
-                wprsd_config,
-                server_serializer,
-                wprs_endpoint,
-                control_server,
-            )),
-            Some(client_serializer),
-        )
-    } else {
-        (
-            Some(daemon::start_in_thread_with_control(wprsd_config, control_server)),
-            None,
-        )
-    };
+    let embedded_server_thread =
+        Some(daemon::start_in_thread_with_control(wprsd_config, control_server));
+    let inproc_client_serializer = None;
     control_client.wait_ready(Duration::from_secs(5)).location(loc!())?;
 
     Ok(DaemonInstance {
@@ -316,17 +296,39 @@ fn default_wctl_probe_endpoint() -> wctl::Endpoint {
     }
 }
 
-fn derive_wprsd_config_for_wrun(from_file: Option<WprsdConfig>) -> Result<WprsdConfig> {
+fn derive_wprsd_config_for_wrun(from_file: Option<WprsdConfig>, pid: u32) -> Result<WprsdConfig> {
     let from_file_is_none = from_file.is_none();
     let mut cfg = from_file.unwrap_or_default();
 
     if from_file_is_none {
+        #[cfg(unix)]
+        {
+            let path = std::env::temp_dir().join(format!("wrun-{}-wprs.sock", pid));
+            let dir = path.parent().unwrap_or_else(|| std::path::Path::new("/")).to_path_buf();
+            cfg.socket = path;
+            cfg.endpoint = None;
+            cfg.control_endpoint = None;
+            cfg.control_socket = dir.join(format!("wrun-{}-ctrl.sock", pid));
+        }
+        #[cfg(not(unix))]
+        {
+            let addr = pick_free_loopback_port().location(loc!())?;
+            cfg.endpoint = Some(crate::protocols::wprs::endpoint::Endpoint::Tcp { addr });
+            cfg.control_endpoint = None;
+        }
         if cfg!(target_os = "macos") && cfg.backend.is_none() {
             cfg.backend = Some(WprsdBackend::MacosSeamless);
         }
     }
 
     Ok(cfg)
+}
+
+#[cfg(not(unix))]
+fn pick_free_loopback_port() -> Result<std::net::SocketAddr> {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").location(loc!())?;
+    let addr = listener.local_addr().location(loc!())?;
+    Ok(addr)
 }
 
 // Intentionally omitted: wrun no longer mutates the daemon config in-place.
