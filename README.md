@@ -140,6 +140,12 @@ Example: spawn an app and capture only that app's windows (prints a WPRS endpoin
 wrun -- /Applications/Safari.app/Contents/MacOS/Safari
 ```
 
+HTML viewer example (macOS):
+
+```bash
+wrun --backend html -- /usr/bin/open -W -a TextEdit
+```
+
 Internally, `wrun` sets the capture PID over the local `wctl` control socket; `wprsd` does not accept a PID via CLI flags.
 
 Then, in another terminal, connect the viewer using the printed endpoint:
@@ -168,6 +174,12 @@ On the local host:
 ```bash
 # starts application on the remote host (starts ssh connection, forwards sockets, starts wprsc, runs application)
 wprs <remote_host> run <application>
+
+HTML viewer example (Windows):
+
+```powershell
+wrun --backend html -- notepad.exe
+```
 
 # stops local wprs connections, leaving remote session running (tear down ssh connection and forwarded sockets, stops wprsc)
 wprs <remote_host> detach

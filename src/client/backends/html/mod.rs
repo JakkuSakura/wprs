@@ -148,7 +148,8 @@ impl HtmlPresenter {
     }
 
     fn announce_window(&mut self, window: WindowInfo) -> Result<()> {
-        let title = window.display_title().map(|s| s.to_string());
+        let title = window.title.clone();
+        let app_id = window.app_id.clone();
         let mut surfaces = self
             .surfaces
             .lock()
@@ -156,13 +157,13 @@ impl HtmlPresenter {
         match surfaces.entry(window.id) {
             Entry::Vacant(entry) => {
                 entry.insert(SurfaceInfo { title: title.clone() });
-                let msg = surface_event_json(window.id, title.as_deref());
+                let msg = surface_event_json(window.id, title.as_deref(), app_id.as_deref());
                 let _ = self.broadcaster.send(WireMessage::Text(msg));
             }
             Entry::Occupied(mut entry) => {
                 if entry.get().title != title {
                     entry.get_mut().title = title.clone();
-                    let msg = surface_event_json(window.id, title.as_deref());
+                    let msg = surface_event_json(window.id, title.as_deref(), app_id.as_deref());
                     let _ = self.broadcaster.send(WireMessage::Text(msg));
                 }
             }
@@ -247,7 +248,7 @@ fn bgra_to_tight_rgba(
     Ok(rgba)
 }
 
-fn surface_event_json(surface_id: WlSurfaceId, title: Option<&str>) -> String {
+fn surface_event_json(surface_id: WlSurfaceId, title: Option<&str>, app_id: Option<&str>) -> String {
     let mut obj = serde_json::Map::new();
     obj.insert("type".to_string(), serde_json::Value::String("surface".to_string()));
     obj.insert(
@@ -256,6 +257,9 @@ fn surface_event_json(surface_id: WlSurfaceId, title: Option<&str>) -> String {
     );
     if let Some(title) = title {
         obj.insert("title".to_string(), serde_json::Value::String(title.to_string()));
+    }
+    if let Some(app_id) = app_id {
+        obj.insert("app_id".to_string(), serde_json::Value::String(app_id.to_string()));
     }
     serde_json::Value::Object(obj).to_string()
 }
@@ -329,7 +333,7 @@ async fn handle_socket(socket: WebSocket, state: ServerState) {
         }
     };
     for (surface_id, title) in snapshot {
-        let msg = surface_event_json(surface_id, title.as_deref());
+        let msg = surface_event_json(surface_id, title.as_deref(), None);
         if sender.send(Message::Text(msg.into())).await.is_err() {
             return;
         }
@@ -419,9 +423,10 @@ mod tests {
     #[test]
     fn surface_json_includes_title_when_present() {
         let id = WlSurfaceId(7);
-        let msg = surface_event_json(id, Some("demo"));
+        let msg = surface_event_json(id, Some("demo"), Some("app"));
         assert!(msg.contains("\"type\":\"surface\""));
         assert!(msg.contains("\"id\":\"7\""));
         assert!(msg.contains("\"title\":\"demo\""));
+        assert!(msg.contains("\"app_id\":\"app\""));
     }
 }

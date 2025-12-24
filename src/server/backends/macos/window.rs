@@ -18,6 +18,9 @@ use crate::server::backend::BackendSurfaceDescriptor;
 use crate::server::backend::BackendSurfaceRole;
 use crate::server::backend::PollingBackend;
 use crate::protocols::wprs::xdg_shell;
+use sysinfo::Pid;
+use sysinfo::ProcessesToUpdate;
+use sysinfo::System;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MacosWindowBackendConfig {
@@ -73,6 +76,7 @@ pub struct MacosWindowBackend {
     target_pid: MacosTargetPid,
     last_target_pid: Option<u32>,
     last_window_count: Option<usize>,
+    process_tree: System,
 }
 
 impl MacosWindowBackend {
@@ -90,6 +94,7 @@ impl MacosWindowBackend {
             target_pid: MacosTargetPid::new(config.target_pid),
             last_target_pid: config.target_pid,
             last_window_count: None,
+            process_tree: System::new(),
         }
     }
 
@@ -164,12 +169,8 @@ impl PollingBackend for MacosWindowBackend {
         let mut out = Vec::new();
 
         let windows = list_windows().location(loc!())?;
+        let windows = self.filter_windows_by_target_pid(windows);
         for w in windows {
-            if let Some(pid) = self.target_pid.get() {
-                if w.owner_pid != pid {
-                    continue;
-                }
-            }
             // Capture once to get the initial window size.
             let (metadata, bgra) = capture_window_bgra(w.window_id).location(loc!())?;
             self.windows
@@ -194,11 +195,7 @@ impl PollingBackend for MacosWindowBackend {
         let mut out = Vec::new();
 
         let windows = list_windows().location(loc!())?;
-        let windows: Vec<WindowInfo> = if let Some(pid) = self.target_pid.get() {
-            windows.into_iter().filter(|w| w.owner_pid == pid).collect()
-        } else {
-            windows
-        };
+        let windows = self.filter_windows_by_target_pid(windows);
         let mut seen = std::collections::HashSet::new();
         for w in &windows {
             seen.insert(w.window_id);
@@ -264,6 +261,49 @@ impl MacosWindowBackend {
             self.last_target_pid = target_pid;
             self.last_window_count = Some(window_count);
         }
+    }
+
+    fn filter_windows_by_target_pid(&mut self, windows: Vec<WindowInfo>) -> Vec<WindowInfo> {
+        let Some(root_pid) = self.target_pid.get() else {
+            return windows;
+        };
+
+        let allowed = self.collect_descendant_pids(root_pid);
+        let allowed_len = allowed.len();
+        let filtered: Vec<WindowInfo> = windows
+            .into_iter()
+            .filter(|w| allowed.contains(&w.owner_pid))
+            .collect();
+        if filtered.is_empty() {
+            info!(
+                "macos backend: target pid={root_pid} has no windows in subtree (tracked_pids={allowed_len})"
+            );
+        }
+        filtered
+    }
+
+    fn collect_descendant_pids(&mut self, root_pid: u32) -> std::collections::HashSet<u32> {
+        self.process_tree
+            .refresh_processes(ProcessesToUpdate::All, true);
+
+        let mut children: HashMap<Pid, Vec<Pid>> = HashMap::new();
+        for (pid, process) in self.process_tree.processes() {
+            if let Some(parent) = process.parent() {
+                children.entry(parent).or_default().push(*pid);
+            }
+        }
+
+        let root = Pid::from_u32(root_pid);
+        let mut out = std::collections::HashSet::new();
+        let mut stack = vec![root];
+        while let Some(pid) = stack.pop() {
+            if out.insert(pid.as_u32()) {
+                if let Some(kids) = children.get(&pid) {
+                    stack.extend(kids.iter().copied());
+                }
+            }
+        }
+        out
     }
 }
 

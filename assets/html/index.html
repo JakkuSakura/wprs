@@ -5,14 +5,22 @@
     <title>wprs html client</title>
     <style>
       body { font-family: sans-serif; margin: 16px; }
-      .surface { margin: 8px 0; }
-      .surface button { margin-left: 8px; }
+      #tabs { display: flex; gap: 8px; border-bottom: 1px solid #ddd; padding-bottom: 8px; }
+      .tab { padding: 6px 10px; border: 1px solid #ccc; border-bottom: none; border-radius: 6px 6px 0 0; cursor: pointer; background: #f7f7f7; }
+      .tab.active { background: white; font-weight: 600; }
+      #viewer { border: 1px solid #ccc; padding: 8px; min-height: 200px; }
+      #message { color: #666; padding: 16px; }
+      canvas { display: block; max-width: 100%; }
     </style>
   </head>
   <body>
     <h1>wprs html client</h1>
     <div id="status">connecting...</div>
-    <div id="surfaces"></div>
+    <div id="tabs"></div>
+    <div id="viewer">
+      <div id="message">Waiting for windows...</div>
+      <canvas id="canvas" hidden></canvas>
+    </div>
     <script src="/viewer.js"></script>
   </body>
 </html>
