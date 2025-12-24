@@ -55,7 +55,6 @@ pub fn default_control_socket_path(prefix: &str) -> PathBuf {
 
 pub fn maybe_read_ron_file<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<Option<T>> {
     if !path.exists() {
-        eprintln!("config file does not exist at {path:?}");
         return Ok(None);
     }
 

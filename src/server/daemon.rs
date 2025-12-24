@@ -102,11 +102,25 @@ pub fn run_with_serializer(
     serializer: Serializer<ProtoRequest, ProtoEvent>,
     wprs_endpoint: String,
 ) -> Result<()> {
-    let control_endpoint = resolve_control_endpoint(config);
-    #[cfg(unix)]
-    if let WctlEndpoint::Unix { path } = &control_endpoint {
-        std::fs::create_dir_all(path.parent().location(loc!())?).location(loc!())?;
-    }
+    run_with_serializer_and_control(config, serializer, wprs_endpoint, None).location(loc!())
+}
+
+pub fn run_with_serializer_and_control(
+    config: &WprsdConfig,
+    serializer: Serializer<ProtoRequest, ProtoEvent>,
+    wprs_endpoint: String,
+    control_server: Option<wctl::inproc::Server>,
+) -> Result<()> {
+    let control_endpoint = if control_server.is_none() {
+        let endpoint = resolve_control_endpoint(config);
+        #[cfg(unix)]
+        if let WctlEndpoint::Unix { path } = &endpoint {
+            std::fs::create_dir_all(path.parent().location(loc!())?).location(loc!())?;
+        }
+        Some(endpoint)
+    } else {
+        None
+    };
 
     if config.enable_rdp && wprs_endpoint.starts_with("inproc://") {
         bail!(Error::Unsupported(
@@ -141,7 +155,11 @@ pub fn run_with_serializer(
                 macos_target_pid,
                 windows_target_pid,
             ));
-            wctl::server::serve(&control_endpoint, handler).log_and_ignore(loc!());
+            if let Some(server) = control_server {
+                server.serve(handler).log_and_ignore(loc!());
+            } else if let Some(endpoint) = control_endpoint {
+                wctl::server::serve(&endpoint, handler).log_and_ignore(loc!());
+            }
         });
     }
 
@@ -168,6 +186,37 @@ pub fn start_in_thread_with_serializer(
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         run_with_serializer(&config, serializer, wprs_endpoint).log_and_ignore(loc!());
+    })
+}
+
+pub fn start_in_thread_with_serializer_and_control(
+    config: WprsdConfig,
+    serializer: Serializer<ProtoRequest, ProtoEvent>,
+    wprs_endpoint: String,
+    control_server: wctl::inproc::Server,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        run_with_serializer_and_control(&config, serializer, wprs_endpoint, Some(control_server))
+            .log_and_ignore(loc!());
+    })
+}
+
+pub fn start_in_thread_with_control(
+    config: WprsdConfig,
+    control_server: wctl::inproc::Server,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        run_with_serializer_and_control(
+            &config,
+            make_server_serializer(&config).expect("make server serializer"),
+            config
+                .endpoint
+                .as_ref()
+                .map(|endpoint| endpoint.to_string())
+                .unwrap_or_else(|| format!("unix://{}", config.socket.display())),
+            Some(control_server),
+        )
+        .log_and_ignore(loc!());
     })
 }
 

@@ -41,6 +41,7 @@ pub struct ServerInfo {
 pub mod client;
 pub mod codec;
 pub mod endpoint;
+pub mod inproc;
 pub mod server;
 
 pub use endpoint::Endpoint;

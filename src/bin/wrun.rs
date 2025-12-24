@@ -47,7 +47,7 @@ fn main() -> Result<()> {
     let wprsd_config_from_file =
         config::maybe_read_ron_file::<WprsdConfig>(&config_file).location(loc!())?;
     let config_from_file_missing = wprsd_config_from_file.is_none();
-    let mut wprsd_config = wprsd_config_from_file.unwrap_or_default();
+    let mut wprsd_config = wprsd_config_from_file.clone().unwrap_or_default();
     if config_from_file_missing {
         wprsd_config.stderr_log_level = SerializableLevel(tracing::Level::DEBUG);
     }
@@ -59,10 +59,13 @@ fn main() -> Result<()> {
         wprsd_config.file_log_level.0,
     )
     .location(loc!())?;
+    if config_from_file_missing {
+        error!("config file does not exist at {config_file:?}");
+    }
     utils::exit_on_thread_panic();
 
     let exit_code = launcher::run(launcher::RunConfig {
-        wprsd_config_file: args.config_file,
+        wprsd_config_from_file,
         backend: args.backend,
         no_wayland: args.no_wayland,
         no_x11: args.no_x11,

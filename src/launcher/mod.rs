@@ -1,6 +1,4 @@
 use std::ffi::OsString;
-use std::path::Path;
-use std::path::PathBuf;
 use std::process;
 use std::process::Command;
 use std::thread::JoinHandle;
@@ -23,7 +21,7 @@ const ENV_WCTL_SOCKET: &str = "WCTL_SOCKET";
 
 #[derive(Clone, Debug)]
 pub struct RunConfig {
-    pub wprsd_config_file: Option<PathBuf>,
+    pub wprsd_config_from_file: Option<WprsdConfig>,
     pub backend: Option<ClientBackend>,
     pub no_wayland: bool,
     pub no_x11: bool,
@@ -31,14 +29,57 @@ pub struct RunConfig {
 }
 
 struct DaemonInstance {
-    control_endpoint: wctl::Endpoint,
-    client: wctl::client::Client,
+    control_endpoint: Option<wctl::Endpoint>,
+    client: ControlClient,
     inproc_client_serializer: Option<Serializer<WprsEvent, WprsRequest>>,
     embedded_server_thread: Option<JoinHandle<()>>,
 }
 
+#[derive(Clone)]
+enum ControlClient {
+    Socket(wctl::client::Client),
+    Inproc(wctl::inproc::Client),
+}
+
+impl ControlClient {
+    fn ping(&self) -> Result<()> {
+        match self {
+            Self::Socket(client) => client.ping(),
+            Self::Inproc(client) => client.ping(),
+        }
+    }
+
+    fn server_info(&self) -> Result<wctl::ServerInfo> {
+        match self {
+            Self::Socket(client) => client.server_info(),
+            Self::Inproc(client) => client.server_info(),
+        }
+    }
+
+    fn start_session(&self, child_pid: u32) -> Result<()> {
+        match self {
+            Self::Socket(client) => client.start_session(child_pid),
+            Self::Inproc(client) => client.start_session(child_pid),
+        }
+    }
+
+    fn stop_session(&self) -> Result<()> {
+        match self {
+            Self::Socket(client) => client.stop_session(),
+            Self::Inproc(client) => client.stop_session(),
+        }
+    }
+
+    fn wait_ready(&self, timeout: Duration) -> Result<()> {
+        match self {
+            Self::Socket(client) => client.wait_ready(timeout),
+            Self::Inproc(client) => client.wait_ready(timeout),
+        }
+    }
+}
+
 struct CaptureTargetPidLease {
-    client: wctl::client::Client,
+    client: ControlClient,
 }
 
 impl Drop for CaptureTargetPidLease {
@@ -49,10 +90,7 @@ impl Drop for CaptureTargetPidLease {
     }
 }
 
-fn start_capture_target_pid_lease(
-    client: wctl::client::Client,
-    pid: u32,
-) -> Option<CaptureTargetPidLease> {
+fn start_capture_target_pid_lease(client: ControlClient, pid: u32) -> Option<CaptureTargetPidLease> {
     if !cfg!(target_os = "macos") {
         return None;
     }
@@ -67,8 +105,7 @@ pub fn run(cfg: RunConfig) -> Result<i32> {
         Error::Missing("command; try: wrun -- <cmd> [args...]".to_string()),
     );
 
-    let wprsd_config_from_file =
-        maybe_load_wprsd_config(cfg.wprsd_config_file.clone()).location(loc!())?;
+    let wprsd_config_from_file = cfg.wprsd_config_from_file.clone();
     let mut daemon =
         connect_or_start_daemon(&cfg, wprsd_config_from_file.clone()).location(loc!())?;
     let server_info = daemon.client.server_info().location(loc!())?;
@@ -87,7 +124,9 @@ pub fn run(cfg: RunConfig) -> Result<i32> {
     let mut child = Command::new(program);
     child.args(args);
 
-    child.env(ENV_WCTL_SOCKET, daemon.control_endpoint.to_string());
+    if let Some(endpoint) = &daemon.control_endpoint {
+        child.env(ENV_WCTL_SOCKET, endpoint.to_string());
+    }
 
     if cfg!(target_os = "linux") {
         if !cfg.no_wayland {
@@ -179,10 +218,10 @@ fn connect_or_start_daemon(
 ) -> Result<DaemonInstance> {
     let probe_endpoints = resolve_wctl_probe_endpoints(&wprsd_config_from_file).location(loc!())?;
     for candidate in &probe_endpoints {
-        let client = wctl::client::Client::new(candidate.clone());
+        let client = ControlClient::Socket(wctl::client::Client::new(candidate.clone()));
         if client.ping().is_ok() {
             return Ok(DaemonInstance {
-                control_endpoint: candidate.clone(),
+                control_endpoint: Some(candidate.clone()),
                 client,
                 inproc_client_serializer: None,
                 embedded_server_thread: None,
@@ -190,15 +229,14 @@ fn connect_or_start_daemon(
         }
     }
 
-    let embedded_control_endpoint = resolve_embedded_control_endpoint().location(loc!())?;
-    let client = wctl::client::Client::new(embedded_control_endpoint.clone());
+    let (control_client_raw, control_server) = wctl::inproc::channel_pair();
+    let control_client = ControlClient::Inproc(control_client_raw);
     info!(
-        "wrun: external wprsd not detected; starting embedded wprsd ({embedded_control_endpoint})"
+        "wrun: external wprsd not detected; starting embedded wprsd (inproc control)"
     );
 
     let wprsd_config =
-        derive_wprsd_config_for_wrun(wprsd_config_from_file, &embedded_control_endpoint)
-            .location(loc!())?;
+        derive_wprsd_config_for_wrun(wprsd_config_from_file).location(loc!())?;
 
     let (embedded_server_thread, inproc_client_serializer) = if cfg.backend.is_some() {
         let (server_serializer, client_serializer) = wprs::serializer::new_inproc_serializer_pair::<
@@ -208,29 +246,28 @@ fn connect_or_start_daemon(
         .location(loc!())?;
         let wprs_endpoint = format!("inproc://wrun/{}", process::id());
         (
-            Some(daemon::start_in_thread_with_serializer(
+            Some(daemon::start_in_thread_with_serializer_and_control(
                 wprsd_config,
                 server_serializer,
                 wprs_endpoint,
+                control_server,
             )),
             Some(client_serializer),
         )
     } else {
-        (Some(daemon::start_in_thread(wprsd_config)), None)
+        (
+            Some(daemon::start_in_thread_with_control(wprsd_config, control_server)),
+            None,
+        )
     };
-    client.wait_ready(Duration::from_secs(5)).location(loc!())?;
+    control_client.wait_ready(Duration::from_secs(5)).location(loc!())?;
 
     Ok(DaemonInstance {
-        control_endpoint: embedded_control_endpoint,
-        client,
+        control_endpoint: None,
+        client: control_client,
         inproc_client_serializer,
         embedded_server_thread,
     })
-}
-
-fn maybe_load_wprsd_config(config_file: Option<PathBuf>) -> Result<Option<WprsdConfig>> {
-    let config_file = config_file.unwrap_or_else(|| config::default_config_file("wprsd"));
-    config::maybe_read_ron_file::<WprsdConfig>(&config_file).location(loc!())
 }
 
 fn resolve_wctl_probe_endpoints(
@@ -263,18 +300,6 @@ fn resolve_wctl_probe_endpoints(
     Ok(unique)
 }
 
-fn resolve_embedded_control_endpoint() -> Result<wctl::Endpoint> {
-    if let Some(env) = std::env::var_os(ENV_WCTL_SOCKET) {
-        let endpoint: wctl::Endpoint = env
-            .to_string_lossy()
-            .parse()
-            .with_context(loc!(), || format!("invalid {ENV_WCTL_SOCKET} value"))?;
-        endpoint.ensure_localhost().location(loc!())?;
-        return Ok(endpoint);
-    }
-
-    Ok(default_embedded_wctl_endpoint())
-}
 
 fn default_wctl_probe_endpoint() -> wctl::Endpoint {
     #[cfg(unix)]
@@ -291,51 +316,11 @@ fn default_wctl_probe_endpoint() -> wctl::Endpoint {
     }
 }
 
-fn default_embedded_wctl_endpoint() -> wctl::Endpoint {
-    #[cfg(unix)]
-    {
-        return wctl::Endpoint::Unix {
-            path: std::env::temp_dir().join(format!(
-                "wrun-{}-ctrl.sock",
-                std::process::id()
-            )),
-        };
-    }
-    #[cfg(not(unix))]
-    {
-        wctl::Endpoint::Tcp {
-            addr: std::net::SocketAddr::from(([127, 0, 0, 1], 48200)),
-        }
-    }
-}
-
-fn derive_wprsd_config_for_wrun(
-    from_file: Option<WprsdConfig>,
-    embedded_control_endpoint: &wctl::Endpoint,
-) -> Result<WprsdConfig> {
+fn derive_wprsd_config_for_wrun(from_file: Option<WprsdConfig>) -> Result<WprsdConfig> {
     let from_file_is_none = from_file.is_none();
     let mut cfg = from_file.unwrap_or_default();
 
     if from_file_is_none {
-        match embedded_control_endpoint {
-            #[cfg(unix)]
-            wctl::Endpoint::Unix { path } => {
-                let dir = path.parent().unwrap_or_else(|| Path::new("/"));
-                cfg.control_endpoint = Some(embedded_control_endpoint.clone());
-                cfg.control_socket = path.clone();
-                cfg.socket = dir.join("wprsd.sock");
-                cfg.endpoint = None;
-            },
-            wctl::Endpoint::Tcp { addr } => {
-                let port = addr.port();
-                let wprs_port = port.saturating_sub(1).max(1025);
-                cfg.control_endpoint = Some(embedded_control_endpoint.clone());
-                cfg.endpoint = Some(crate::protocols::wprs::endpoint::Endpoint::Tcp {
-                    addr: std::net::SocketAddr::from((addr.ip(), wprs_port)),
-                });
-            },
-        }
-
         if cfg!(target_os = "macos") && cfg.backend.is_none() {
             cfg.backend = Some(WprsdBackend::MacosSeamless);
         }
