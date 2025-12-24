@@ -106,7 +106,13 @@ fn open_app_name(args: &[OsString]) -> Option<String> {
         let arg = arg.to_string_lossy();
         if arg == "-a" {
             if let Some(app) = iter.next() {
-                return app_name_from_arg(app);
+                if let Some(name) = app_name_from_arg(app) {
+                    return Some(name);
+                }
+                let name = app.to_string_lossy().trim().to_string();
+                if !name.is_empty() {
+                    return Some(name);
+                }
             }
         }
         if let Some(name) = app_name_from_arg(arg.as_ref()) {
