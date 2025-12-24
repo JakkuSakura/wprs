@@ -28,6 +28,56 @@ pub struct MacosWindowBackendConfig {
     pub target_pid: Option<u32>,
 }
 
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::*;
+    use std::process::Command;
+    use std::time::{Duration, Instant};
+
+    struct ChildGuard(Option<std::process::Child>);
+
+    impl Drop for ChildGuard {
+        fn drop(&mut self) {
+            if let Some(mut child) = self.0.take() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn open_finder_and_list_windows() {
+        let child = Command::new("/usr/bin/open")
+            .arg("-W")
+            .arg("-a")
+            .arg("Finder")
+            .spawn()
+            .expect("failed to launch Finder via open");
+        let _guard = ChildGuard(Some(child));
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let windows = list_windows().expect("failed to list windows");
+            let has_finder = windows.iter().any(|w| w.app_id == "Finder");
+            if has_finder {
+                return;
+            }
+            if Instant::now() >= deadline {
+                panic!(
+                    "Finder windows not found after wait; windows={:?}",
+                    windows
+                        .iter()
+                        .take(5)
+                        .map(|w| format!("{}:{}", w.app_id, w.title))
+                        .collect::<Vec<_>>()
+                );
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct MacosTargetPid(Arc<AtomicU32>);
 

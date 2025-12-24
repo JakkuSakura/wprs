@@ -1,6 +1,7 @@
 use std::ffi::OsString;
 use std::process;
 use std::process::Command;
+use std::time::Instant;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -98,6 +99,84 @@ fn start_capture_target_pid_lease(client: ControlClient, pid: u32) -> Option<Cap
     Some(CaptureTargetPidLease { client })
 }
 
+fn open_app_name(args: &[OsString]) -> Option<String> {
+    let mut iter = args.iter().peekable();
+    while let Some(arg) = iter.next() {
+        let arg = arg.to_string_lossy();
+        if arg == "-a" {
+            if let Some(app) = iter.next() {
+                return app_name_from_arg(app);
+            }
+        }
+        if let Some(name) = app_name_from_arg(arg.as_ref()) {
+            return Some(name);
+        }
+    }
+    None
+}
+
+fn app_name_from_arg<T: AsRef<std::path::Path>>(arg: T) -> Option<String> {
+    let path = arg.as_ref();
+    if let Some(ext) = path.extension() {
+        if ext == "app" {
+            return path
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned());
+        }
+    }
+    for component in path.components() {
+        let comp = component.as_os_str();
+        let comp_path = Path::new(comp);
+        if comp_path.extension().map(|ext| ext == "app").unwrap_or(false) {
+            if let Some(stem) = comp_path.file_stem() {
+                return Some(stem.to_string_lossy().into_owned());
+            }
+        }
+    }
+    None
+}
+
+fn pgrep_pids(app_name: &str) -> Vec<u32> {
+    let output = Command::new("/usr/bin/pgrep")
+        .arg("-x")
+        .arg(app_name)
+        .output();
+    let Ok(output) = output else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stdout
+        .lines()
+        .filter_map(|line| line.trim().parse::<u32>().ok())
+        .collect()
+}
+
+fn resolve_open_pid(app_name: &str, timeout: Duration) -> Option<u32> {
+    let before: std::collections::HashSet<u32> = pgrep_pids(app_name).into_iter().collect();
+    let deadline = Instant::now() + timeout;
+    loop {
+        let after = pgrep_pids(app_name);
+        if !after.is_empty() {
+            for pid in &after {
+                if !before.contains(pid) {
+                    return Some(*pid);
+                }
+            }
+            if let Some(pid) = after.first() {
+                return Some(*pid);
+            }
+        }
+        if Instant::now() >= deadline {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    None
+}
+
 pub fn run(cfg: RunConfig) -> Result<i32> {
     ensure!(
         !cfg.cmd.is_empty(),
@@ -142,7 +221,22 @@ pub fn run(cfg: RunConfig) -> Result<i32> {
     }
 
     let mut child = child.spawn().location(loc!())?;
-    let pid = child.id();
+    let mut pid = child.id();
+
+    if cfg!(target_os = "macos") {
+        let program_str = program.to_string_lossy();
+        let is_open = program_str == "open" || program_str.ends_with("/open");
+        if is_open {
+            if let Some(app_name) = open_app_name(args) {
+                if let Some(resolved_pid) = resolve_open_pid(&app_name, Duration::from_secs(2)) {
+                    info!("wrun: resolved open app pid={resolved_pid} app={app_name}");
+                    pid = resolved_pid;
+                } else {
+                    info!("wrun: failed to resolve open app pid for {app_name}; using launcher pid={pid}");
+                }
+            }
+        }
+    }
 
     let capture_lease = start_capture_target_pid_lease(daemon.client.clone(), pid);
 
