@@ -158,11 +158,15 @@ pub mod windows {
         }
 
         fn initial_snapshot(&mut self) -> Result<Vec<BackendObservation>> {
-            bail!("Windows window backend is only supported on Windows")
+            bail!(Error::Unsupported(
+                "Windows window backend is only supported on Windows".to_string()
+            ))
         }
 
         fn poll(&mut self) -> Result<Vec<BackendObservation>> {
-            bail!("Windows window backend is only supported on Windows")
+            bail!(Error::Unsupported(
+                "Windows window backend is only supported on Windows".to_string()
+            ))
         }
 
         fn handle_client_event(&mut self, _event: Event) -> Result<()> {
@@ -189,11 +193,15 @@ pub mod windows {
         }
 
         fn initial_snapshot(&mut self) -> Result<Vec<BackendObservation>> {
-            bail!("Windows fullscreen backend is only supported on Windows")
+            bail!(Error::Unsupported(
+                "Windows fullscreen backend is only supported on Windows".to_string()
+            ))
         }
 
         fn poll(&mut self) -> Result<Vec<BackendObservation>> {
-            bail!("Windows fullscreen backend is only supported on Windows")
+            bail!(Error::Unsupported(
+                "Windows fullscreen backend is only supported on Windows".to_string()
+            ))
         }
 
         fn handle_client_event(&mut self, _event: Event) -> Result<()> {
