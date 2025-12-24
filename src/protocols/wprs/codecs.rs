@@ -1,6 +1,6 @@
-use crate::protocols::wprs::transport;
-use crate::protocols::wprs::wayland::BufferMetadata;
-use crate::protocols::wprs::wayland::WlSurfaceId;
+use super::transport;
+use super::wayland::BufferMetadata;
+use super::wayland::WlSurfaceId;
 
 pub fn select_base_codec(hello: &transport::ClientHello) -> transport::TransportCodec {
     let mut codec = transport::TransportCodec::ShardedZstd { level: 1 };

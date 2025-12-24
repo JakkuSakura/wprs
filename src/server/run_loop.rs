@@ -32,7 +32,7 @@ use crate::protocols::wprs::wayland::WlSurfaceId;
 use crate::server::backend::BackendObservation;
 use crate::server::backend::BackendSurfaceRole;
 use crate::server::backend::PollingBackend;
-use crate::server::transport_policy;
+use crate::protocols::wprs::codecs;
 use crate::utils::sharding_compression::ShardingCompressor;
 use crate::utils::sharding_compression::CompressedShards;
 use crate::protocols::wprs::xdg_shell;
@@ -139,7 +139,7 @@ fn maybe_update_observed_bandwidth<B: PollingBackend>(state: &mut State<B>) {
     state.observed_tx_kbps_by_surface = new_by_surface;
 
     if let Some(hello) = state.client_hello.as_ref() {
-        let config = transport_policy::select_global_transport_config(
+        let config = codecs::select_global_transport_config(
             hello,
             Some(state.observed_tx_kbps),
             state.client_max_fps,
@@ -395,10 +395,10 @@ fn apply_observation<B: PollingBackend>(
                 update_surface_fps(state, surface.id);
                 let observed_surface_tx = state.observed_tx_kbps_by_surface.get(&surface.id).copied();
                 let surface_fps = state.surface_fps_estimate.get(&surface.id).copied();
-                let selected = transport_policy::select_surface_transport_config(
+                let selected = codecs::select_surface_transport_config(
                     &state.transport_config,
                     state.client_hello.as_ref(),
-                    transport_policy::SurfaceDecisionInput {
+                    codecs::SurfaceDecisionInput {
                         surface_tx_kbps: observed_surface_tx,
                         total_tx_kbps: Some(state.observed_tx_kbps),
                         estimated_fps: surface_fps,
@@ -571,7 +571,7 @@ pub fn run<B: PollingBackend>(
                             return;
                         }
                         state.client_hello = Some(hello.clone());
-                        let config = transport_policy::select_global_transport_config(
+                        let config = codecs::select_global_transport_config(
                             &hello,
                             Some(state.observed_tx_kbps),
                             state.client_max_fps,
@@ -596,7 +596,7 @@ pub fn run<B: PollingBackend>(
                         // observed tx-kbps for transport policy.
                         state.client_stats = Some(stats);
                         if let Some(hello) = state.client_hello.as_ref() {
-                            let config = transport_policy::select_global_transport_config(
+                            let config = codecs::select_global_transport_config(
                                 hello,
                                 Some(state.observed_tx_kbps),
                                 state.client_max_fps,
@@ -616,7 +616,7 @@ pub fn run<B: PollingBackend>(
                     RecvType::Object(Event::Output(event)) => {
                         update_client_outputs(state, &event);
                         if let Some(hello) = state.client_hello.as_ref() {
-                            let config = transport_policy::select_global_transport_config(
+                            let config = codecs::select_global_transport_config(
                                 hello,
                                 Some(state.observed_tx_kbps),
                                 state.client_max_fps,

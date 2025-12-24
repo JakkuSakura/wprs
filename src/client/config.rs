@@ -25,9 +25,8 @@ pub enum ClientBackend {
     // --- Smithay feature bundle aliases ---
     //
     // These variants are accepted to keep config/CLI values compatible with
-    // server-side Smithay feature bundle names. wprsc does not implement
-    // Smithay-backed presentation; these values are treated as no-op aliases
-    // in the client.
+    // server-side Smithay feature bundle names. The client treats them as
+    // Wayland/SCTK presentation backends, keeping the name for clarity.
     //
     // They are feature-gated so `--help` only lists values compiled in.
     #[cfg(feature = "smithay_winit_gl_wayland")]

@@ -62,12 +62,44 @@ fn build_winit_wgpu_backend(config: ClientBackendConfig) -> Result<Box<dyn Clien
     feature = "smithay_default_all",
     feature = "smithay_all_linux",
 ))]
-fn build_winit_wgpu_backend_aliased(
-    alias: config::ClientBackend,
+fn build_smithay_wayland_backend(
+    backend: config::ClientBackend,
     config: ClientBackendConfig,
 ) -> Result<Box<dyn ClientBackend>> {
-    info!("wprsc backend={alias:?} is currently an alias for backend=winit-wgpu");
-    build_winit_wgpu_backend(config)
+    #[cfg(feature = "wayland-client")]
+    {
+        let name = match backend {
+            config::ClientBackend::SmithayWinitGlWayland => "smithay-winit-gl-wayland",
+            config::ClientBackend::SmithayWinitGlowWayland => "smithay-winit-glow-wayland",
+            config::ClientBackend::SmithayX11GlWayland => "smithay-x11-gl-wayland",
+            config::ClientBackend::SmithayX11GlowWayland => "smithay-x11-glow-wayland",
+            config::ClientBackend::SmithayDrmGbmEglGlWayland => "smithay-drm-gbm-egl-gl-wayland",
+            config::ClientBackend::SmithayDrmGbmEglGlowWayland => "smithay-drm-gbm-egl-glow-wayland",
+            config::ClientBackend::SmithayDrmPixmanWayland => "smithay-drm-pixman-wayland",
+            config::ClientBackend::SmithayDrmMultiGpuWayland => "smithay-drm-multi-gpu-wayland",
+            config::ClientBackend::SmithayXwayland => "smithay-xwayland",
+            config::ClientBackend::SmithayVulkanSupport => "smithay-vulkan-support",
+            config::ClientBackend::SmithayDefaultAll => "smithay-default-all",
+            config::ClientBackend::SmithayAllLinux => "smithay-all-linux",
+            _ => "smithay-wayland",
+        };
+        Ok(Box::new(
+            crate::client::backends::smithay_wayland::SmithayWaylandClientBackend::connect_to_env(
+                config,
+                name,
+            )
+            .location(loc!())?,
+        ))
+    }
+
+    #[cfg(not(feature = "wayland-client"))]
+    {
+        let _ = (backend, config);
+        bail!(Error::Unsupported(
+            "Smithay client backend requested but not compiled in. Rebuild with `--features wayland-client`."
+                .to_string(),
+        ))
+    }
 }
 
 pub fn build_client_backend(
@@ -83,51 +115,51 @@ pub fn build_client_backend(
         },
         #[cfg(feature = "smithay_winit_gl_wayland")]
         config::ClientBackend::SmithayWinitGlWayland => {
-            build_winit_wgpu_backend_aliased(requested, config)
+            build_smithay_wayland_backend(requested, config)
         },
         #[cfg(feature = "smithay_winit_glow_wayland")]
         config::ClientBackend::SmithayWinitGlowWayland => {
-            build_winit_wgpu_backend_aliased(requested, config)
+            build_smithay_wayland_backend(requested, config)
         },
         #[cfg(feature = "smithay_x11_gl_wayland")]
         config::ClientBackend::SmithayX11GlWayland => {
-            build_winit_wgpu_backend_aliased(requested, config)
+            build_smithay_wayland_backend(requested, config)
         },
         #[cfg(feature = "smithay_x11_glow_wayland")]
         config::ClientBackend::SmithayX11GlowWayland => {
-            build_winit_wgpu_backend_aliased(requested, config)
+            build_smithay_wayland_backend(requested, config)
         },
         #[cfg(feature = "smithay_drm_gbm_egl_gl_wayland")]
         config::ClientBackend::SmithayDrmGbmEglGlWayland => {
-            build_winit_wgpu_backend_aliased(requested, config)
+            build_smithay_wayland_backend(requested, config)
         },
         #[cfg(feature = "smithay_drm_gbm_egl_glow_wayland")]
         config::ClientBackend::SmithayDrmGbmEglGlowWayland => {
-            build_winit_wgpu_backend_aliased(requested, config)
+            build_smithay_wayland_backend(requested, config)
         },
         #[cfg(feature = "smithay_drm_pixman_wayland")]
         config::ClientBackend::SmithayDrmPixmanWayland => {
-            build_winit_wgpu_backend_aliased(requested, config)
+            build_smithay_wayland_backend(requested, config)
         },
         #[cfg(feature = "smithay_drm_multi_gpu_wayland")]
         config::ClientBackend::SmithayDrmMultiGpuWayland => {
-            build_winit_wgpu_backend_aliased(requested, config)
+            build_smithay_wayland_backend(requested, config)
         },
         #[cfg(feature = "smithay_xwayland")]
         config::ClientBackend::SmithayXwayland => {
-            build_winit_wgpu_backend_aliased(requested, config)
+            build_smithay_wayland_backend(requested, config)
         },
         #[cfg(feature = "smithay_vulkan_support")]
         config::ClientBackend::SmithayVulkanSupport => {
-            build_winit_wgpu_backend_aliased(requested, config)
+            build_smithay_wayland_backend(requested, config)
         },
         #[cfg(feature = "smithay_default_all")]
         config::ClientBackend::SmithayDefaultAll => {
-            build_winit_wgpu_backend_aliased(requested, config)
+            build_smithay_wayland_backend(requested, config)
         },
         #[cfg(feature = "smithay_all_linux")]
         config::ClientBackend::SmithayAllLinux => {
-            build_winit_wgpu_backend_aliased(requested, config)
+            build_smithay_wayland_backend(requested, config)
         },
         config::ClientBackend::Wayland => {
             #[cfg(feature = "wayland-client")]

@@ -29,6 +29,9 @@ pub struct H264Encoder {
     next_pts: i64,
     width: u32,
     height: u32,
+    avcc_nal_length_size: Option<usize>,
+    annexb_config: Vec<u8>,
+    sent_config: bool,
 }
 
 impl H264Encoder {
@@ -71,6 +74,8 @@ impl H264Encoder {
                 ))
             })
             .location(loc!())?;
+        let (avcc_nal_length_size, annexb_config) =
+            extract_h264_config(&encoder).unwrap_or((None, Vec::new()));
         let scaler = ffmpeg::software::scaling::Context::get(
             ffmpeg::format::Pixel::BGRA,
             width,
@@ -89,6 +94,9 @@ impl H264Encoder {
             next_pts: 0,
             width,
             height,
+            avcc_nal_length_size,
+            annexb_config,
+            sent_config: false,
         })
     }
 
@@ -116,7 +124,23 @@ impl H264Encoder {
             match self.encoder.receive_packet(&mut packet) {
                 Ok(()) => {
                     if let Some(data) = packet.data() {
-                        out.extend_from_slice(data);
+                        if !self.sent_config && !self.annexb_config.is_empty() {
+                            out.extend_from_slice(&self.annexb_config);
+                            self.sent_config = true;
+                        }
+                        let annexb = match self.avcc_nal_length_size {
+                            Some(nal_length_size) if !looks_like_annexb(data) => {
+                                match avcc_packet_to_annexb(data, nal_length_size) {
+                                    Ok(converted) => converted,
+                                    Err(err) => {
+                                        warn!("h264 avcc->annexb conversion failed: {err}");
+                                        data.to_vec()
+                                    }
+                                }
+                            }
+                            _ => data.to_vec(),
+                        };
+                        out.extend_from_slice(&annexb);
                     }
                 }
                 Err(err) if err == ffmpeg::Error::Other { errno: EAGAIN } => break,
@@ -200,4 +224,111 @@ impl H264Decoder {
             Err(err) => Err(Error::Internal(format!("ffmpeg decode failed: {err}"))).location(loc!()),
         }
     }
+}
+
+fn looks_like_annexb(data: &[u8]) -> bool {
+    data.starts_with(&[0, 0, 0, 1]) || data.starts_with(&[0, 0, 1])
+}
+
+fn extract_h264_config(
+    encoder: &ffmpeg::codec::encoder::video::Encoder,
+) -> Option<(Option<usize>, Vec<u8>)> {
+    unsafe {
+        let context = encoder.as_ref();
+        let ptr = context.as_ptr();
+        if ptr.is_null() {
+            return None;
+        }
+        let size = (*ptr).extradata_size;
+        if size <= 0 {
+            return None;
+        }
+        let data = std::slice::from_raw_parts((*ptr).extradata as *const u8, size as usize);
+        if looks_like_annexb(data) {
+            return Some((None, data.to_vec()));
+        }
+        avcc_extradata_to_annexb(data)
+    }
+}
+
+fn avcc_extradata_to_annexb(data: &[u8]) -> Option<(Option<usize>, Vec<u8>)> {
+    if data.len() < 7 || data[0] != 1 {
+        return None;
+    }
+    let nal_length_size = ((data[4] & 0x03) + 1) as usize;
+    if !(1..=4).contains(&nal_length_size) {
+        return None;
+    }
+    let mut offset = 5;
+    let num_sps = (data[offset] & 0x1f) as usize;
+    offset += 1;
+    let mut annexb = Vec::new();
+    for _ in 0..num_sps {
+        if offset + 2 > data.len() {
+            return None;
+        }
+        let len = u16::from_be_bytes([data[offset], data[offset + 1]]) as usize;
+        offset += 2;
+        if offset + len > data.len() {
+            return None;
+        }
+        annexb.extend_from_slice(&[0, 0, 0, 1]);
+        annexb.extend_from_slice(&data[offset..offset + len]);
+        offset += len;
+    }
+    if offset >= data.len() {
+        return Some((Some(nal_length_size), annexb));
+    }
+    let num_pps = data[offset] as usize;
+    offset += 1;
+    for _ in 0..num_pps {
+        if offset + 2 > data.len() {
+            return None;
+        }
+        let len = u16::from_be_bytes([data[offset], data[offset + 1]]) as usize;
+        offset += 2;
+        if offset + len > data.len() {
+            return None;
+        }
+        annexb.extend_from_slice(&[0, 0, 0, 1]);
+        annexb.extend_from_slice(&data[offset..offset + len]);
+        offset += len;
+    }
+    Some((Some(nal_length_size), annexb))
+}
+
+fn avcc_packet_to_annexb(data: &[u8], nal_length_size: usize) -> Result<Vec<u8>> {
+    ensure!(
+        (1..=4).contains(&nal_length_size),
+        Error::InvalidArgument(format!("invalid nal length size {nal_length_size}"))
+    );
+    let mut out = Vec::with_capacity(data.len() + 64);
+    let mut offset = 0usize;
+    while offset + nal_length_size <= data.len() {
+        let len = read_be_nal_length(&data[offset..offset + nal_length_size]);
+        offset += nal_length_size;
+        ensure!(
+            offset + len <= data.len(),
+            Error::InvalidArgument("truncated avcc packet".to_string())
+        );
+        if len == 0 {
+            continue;
+        }
+        out.extend_from_slice(&[0, 0, 0, 1]);
+        out.extend_from_slice(&data[offset..offset + len]);
+        offset += len;
+    }
+    ensure!(
+        offset == data.len(),
+        Error::InvalidArgument("trailing avcc bytes".to_string())
+    );
+    Ok(out)
+}
+
+fn read_be_nal_length(bytes: &[u8]) -> usize {
+    let mut len = 0usize;
+    for &b in bytes {
+        len = (len << 8) | b as usize;
+    }
+    len
 }

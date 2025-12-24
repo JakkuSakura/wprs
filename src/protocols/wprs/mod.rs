@@ -14,6 +14,8 @@
 
 pub mod framing;
 pub mod geometry;
+pub mod capabilities;
+pub mod codecs;
 pub mod transport;
 pub mod tuple;
 pub mod wayland;

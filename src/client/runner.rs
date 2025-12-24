@@ -16,6 +16,7 @@ use crate::protocols::wprs as proto;
 use crate::protocols::wprs::endpoint::Endpoint;
 use crate::protocols::wprs::endpoint::setup_client_transport;
 use crate::protocols::wprs::serializer::Serializer;
+use crate::protocols::wprs::capabilities;
 use crate::protocols::wprs::transport;
 
 pub fn run_wprsc(config: WprscConfig) -> Result<()> {
@@ -145,7 +146,7 @@ pub fn run_client_for_serializer(
     // Send a best-effort transport hello so the server can tune compression.
     {
         let supports_buffer_patches = backend.name() == "winit-wgpu";
-        let cpu = transport::CpuFeatures {
+        let cpu = capabilities::CpuFeatures {
             #[cfg(all(target_arch = "x86_64"))]
             avx2: std::arch::is_x86_feature_detected!("avx2"),
             #[cfg(not(target_arch = "x86_64"))]
@@ -171,7 +172,7 @@ pub fn run_client_for_serializer(
             supported_codecs,
             supports_buffer_patches,
             cpu,
-            gpu: transport::GpuFeatures::default(),
+            gpu: capabilities::GpuFeatures::default(),
             preferences: transport::TransportPreferences::default(),
         };
         serializer

@@ -2,7 +2,7 @@ use wprs::protocols::wprs::transport;
 use wprs::protocols::wprs::wayland::BufferFormat;
 use wprs::protocols::wprs::wayland::BufferMetadata;
 use wprs::protocols::wprs::wayland::WlSurfaceId;
-use wprs::server::transport_policy;
+use wprs::protocols::wprs::codecs;
 
 fn hello_with_codecs(codecs: Vec<transport::TransportCodec>) -> transport::ClientHello {
     transport::ClientHello {
@@ -44,8 +44,8 @@ fn hello_with_goal(goal: transport::UsageGoal, codecs: Vec<transport::TransportC
     hello
 }
 
-fn surface_stats(surface_tx_kbps: Option<u32>) -> transport_policy::SurfaceDecisionInput {
-    transport_policy::SurfaceDecisionInput {
+fn surface_stats(surface_tx_kbps: Option<u32>) -> codecs::SurfaceDecisionInput {
+    codecs::SurfaceDecisionInput {
         surface_tx_kbps,
         total_tx_kbps: None,
         estimated_fps: None,
@@ -60,14 +60,14 @@ fn global_default_prefers_sharded_zstd() {
         transport::TransportCodec::ShardedLz4,
         transport::TransportCodec::ShardedRaw,
     ]);
-    let cfg = transport_policy::select_global_transport_config(&hello, None, None);
+    let cfg = codecs::select_global_transport_config(&hello, None, None);
     assert_eq!(cfg.codec, transport::TransportCodec::ShardedZstd { level: 1 });
 }
 
 #[test]
 fn global_can_pick_h264_under_bandwidth_pressure() {
     let hello = hello_bandwidth_h264();
-    let cfg = transport_policy::select_global_transport_config(&hello, Some(20_000), None);
+    let cfg = codecs::select_global_transport_config(&hello, Some(20_000), None);
     assert_eq!(cfg.codec, transport::TransportCodec::H264);
 }
 
@@ -77,7 +77,7 @@ fn global_avoids_h264_without_decode_support() {
     hello.gpu.has_hw_video_decode = false;
     hello.cpu.avx2 = false;
     hello.cpu.neon = false;
-    let cfg = transport_policy::select_global_transport_config(&hello, Some(20_000), None);
+    let cfg = codecs::select_global_transport_config(&hello, Some(20_000), None);
     assert_ne!(cfg.codec, transport::TransportCodec::H264);
 }
 
@@ -92,21 +92,21 @@ fn max_bitrate_cap_prefers_allowed_codec() {
     );
     hello.preferences.max_bitrate_kbps = Some(3_000);
     hello.gpu.has_hw_video_decode = true;
-    let cfg = transport_policy::select_global_transport_config(&hello, Some(3_500), None);
+    let cfg = codecs::select_global_transport_config(&hello, Some(3_500), None);
     assert_eq!(cfg.codec, transport::TransportCodec::H264);
 }
 
 #[test]
 fn surface_large_prefers_h264_if_supported_and_bandwidth_or_target_low() {
     let hello = hello_bandwidth_h264();
-    let global = transport_policy::select_global_transport_config(&hello, None, None);
+    let global = codecs::select_global_transport_config(&hello, None, None);
     let meta = BufferMetadata {
         width: 1920,
         height: 1080,
         stride: 1920 * 4,
         format: BufferFormat::Argb8888,
     };
-    let cfg = transport_policy::select_surface_transport_config(
+    let cfg = codecs::select_surface_transport_config(
         &global,
         Some(&hello),
         surface_stats(None),
@@ -119,7 +119,7 @@ fn surface_large_prefers_h264_if_supported_and_bandwidth_or_target_low() {
 #[test]
 fn surface_small_avoids_h264_even_if_global_is_h264() {
     let hello = hello_bandwidth_h264();
-    let mut global = transport_policy::select_global_transport_config(&hello, Some(20_000), None);
+    let mut global = codecs::select_global_transport_config(&hello, Some(20_000), None);
     global.codec = transport::TransportCodec::H264;
 
     let meta = BufferMetadata {
@@ -128,7 +128,7 @@ fn surface_small_avoids_h264_even_if_global_is_h264() {
         stride: 320 * 4,
         format: BufferFormat::Argb8888,
     };
-    let cfg = transport_policy::select_surface_transport_config(
+    let cfg = codecs::select_surface_transport_config(
         &global,
         Some(&hello),
         surface_stats(None),
@@ -141,14 +141,14 @@ fn surface_small_avoids_h264_even_if_global_is_h264() {
 #[test]
 fn surface_small_can_use_png_for_clarity() {
     let hello = hello_clarity_png();
-    let global = transport_policy::select_global_transport_config(&hello, None, None);
+    let global = codecs::select_global_transport_config(&hello, None, None);
     let meta = BufferMetadata {
         width: 640,
         height: 480,
         stride: 640 * 4,
         format: BufferFormat::Argb8888,
     };
-    let cfg = transport_policy::select_surface_transport_config(
+    let cfg = codecs::select_surface_transport_config(
         &global,
         Some(&hello),
         surface_stats(None),
@@ -168,7 +168,7 @@ fn usage_goal_gaming_prefers_raw_globally() {
             transport::TransportCodec::H264,
         ],
     );
-    let cfg = transport_policy::select_global_transport_config(&hello, None, None);
+    let cfg = codecs::select_global_transport_config(&hello, None, None);
     assert_eq!(cfg.codec, transport::TransportCodec::ShardedRaw);
 }
 
@@ -182,7 +182,7 @@ fn usage_goal_office_prefers_png_over_lossy_codecs() {
             transport::TransportCodec::Png,
         ],
     );
-    let cfg = transport_policy::select_global_transport_config(&hello, None, None);
+    let cfg = codecs::select_global_transport_config(&hello, None, None);
     assert_eq!(cfg.codec, transport::TransportCodec::Png);
 }
 
@@ -196,7 +196,7 @@ fn usage_goal_media_prefers_png_over_jpeg() {
             transport::TransportCodec::Png,
         ],
     );
-    let cfg = transport_policy::select_global_transport_config(&hello, None, None);
+    let cfg = codecs::select_global_transport_config(&hello, None, None);
     assert_eq!(cfg.codec, transport::TransportCodec::Png);
 }
 
@@ -211,7 +211,7 @@ fn gaming_with_bandwidth_pressure_prefers_h264() {
         ],
     );
     hello.gpu.has_hw_video_decode = true;
-    let cfg = transport_policy::select_global_transport_config(&hello, Some(20_000), None);
+    let cfg = codecs::select_global_transport_config(&hello, Some(20_000), None);
     assert_eq!(cfg.codec, transport::TransportCodec::H264);
 }
 
@@ -227,17 +227,17 @@ fn media_large_surface_prefers_h264_if_supported() {
     );
     hello.gpu.has_hw_video_decode = true;
     hello.preferences.max_bitrate_kbps = Some(6_000);
-    let global = transport_policy::select_global_transport_config(&hello, None, None);
+    let global = codecs::select_global_transport_config(&hello, None, None);
     let meta = BufferMetadata {
         width: 1920,
         height: 1080,
         stride: 1920 * 4,
         format: BufferFormat::Argb8888,
     };
-    let cfg = transport_policy::select_surface_transport_config(
+    let cfg = codecs::select_surface_transport_config(
         &global,
         Some(&hello),
-        transport_policy::SurfaceDecisionInput {
+        codecs::SurfaceDecisionInput {
             surface_tx_kbps: None,
             total_tx_kbps: Some(30_000),
             estimated_fps: None,
@@ -260,17 +260,17 @@ fn high_fps_surface_prefers_h264() {
     );
     hello.gpu.has_hw_video_decode = true;
     hello.preferences.max_bitrate_kbps = Some(8_000);
-    let global = transport_policy::select_global_transport_config(&hello, None, None);
+    let global = codecs::select_global_transport_config(&hello, None, None);
     let meta = BufferMetadata {
         width: 640,
         height: 360,
         stride: 640 * 4,
         format: BufferFormat::Argb8888,
     };
-    let cfg = transport_policy::select_surface_transport_config(
+    let cfg = codecs::select_surface_transport_config(
         &global,
         Some(&hello),
-        transport_policy::SurfaceDecisionInput {
+        codecs::SurfaceDecisionInput {
             surface_tx_kbps: None,
             total_tx_kbps: None,
             estimated_fps: Some(120.0),
@@ -292,17 +292,17 @@ fn dynamic_selection_can_be_disabled() {
         ],
     );
     hello.preferences.selection_mode = transport::SelectionMode::Manual;
-    let global = transport_policy::select_global_transport_config(&hello, None, None);
+    let global = codecs::select_global_transport_config(&hello, None, None);
     let meta = BufferMetadata {
         width: 1920,
         height: 1080,
         stride: 1920 * 4,
         format: BufferFormat::Argb8888,
     };
-    let cfg = transport_policy::select_surface_transport_config(
+    let cfg = codecs::select_surface_transport_config(
         &global,
         Some(&hello),
-        transport_policy::SurfaceDecisionInput {
+        codecs::SurfaceDecisionInput {
             surface_tx_kbps: None,
             total_tx_kbps: Some(30_000),
             estimated_fps: None,
@@ -319,7 +319,7 @@ fn dynamic_selection_disables_global_heuristics() {
     let mut hello = hello_bandwidth_h264();
     hello.preferences.selection_mode = transport::SelectionMode::Manual;
     hello.preferences.manual_codec = Some(transport::TransportCodec::ShardedLz4);
-    let cfg = transport_policy::select_global_transport_config(&hello, Some(20_000), None);
+    let cfg = codecs::select_global_transport_config(&hello, Some(20_000), None);
     assert_eq!(cfg.codec, transport::TransportCodec::ShardedLz4);
 }
 
@@ -333,7 +333,7 @@ fn qos_drop_avoid_prefers_compressed_codecs() {
         ],
     );
     hello.preferences.drop_tolerance = Some(transport::DropTolerance::Avoid);
-    let cfg = transport_policy::select_global_transport_config(&hello, None, None);
+    let cfg = codecs::select_global_transport_config(&hello, None, None);
     assert_eq!(cfg.codec, transport::TransportCodec::ShardedZstd { level: 1 });
 }
 
@@ -347,6 +347,6 @@ fn qos_retransmit_avoid_penalizes_raw() {
         ],
     );
     hello.preferences.retransmit_policy = Some(transport::RetransmitPolicy::Avoid);
-    let cfg = transport_policy::select_global_transport_config(&hello, None, None);
+    let cfg = codecs::select_global_transport_config(&hello, None, None);
     assert_eq!(cfg.codec, transport::TransportCodec::ShardedLz4);
 }
