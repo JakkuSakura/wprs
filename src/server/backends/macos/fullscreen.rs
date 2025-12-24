@@ -189,15 +189,7 @@ fn button_mask(button: u32) -> u32 {
 }
 
 fn display_scale_factor_and_dpi() -> Result<(i32, Option<u32>)> {
-    #[cfg(target_os = "macos")]
-    {
-        macos::main_display_scale_factor_and_dpi().location(loc!())
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        Ok((1, None))
-    }
+    macos::main_display_scale_factor_and_dpi().location(loc!())
 }
 
 #[cfg(target_os = "macos")]
@@ -541,33 +533,7 @@ mod macos {
     }
 }
 
-#[cfg(target_os = "macos")]
 use macos::capture_main_display_bgra;
-#[cfg(target_os = "macos")]
 use macos::post_mouse_button;
-#[cfg(target_os = "macos")]
 use macos::post_mouse_motion;
-#[cfg(target_os = "macos")]
 use macos::post_scroll;
-
-#[cfg(not(target_os = "macos"))]
-fn capture_main_display_bgra() -> Result<(BufferMetadata, Vec<u8>)> {
-    bail!(Error::Unsupported(
-        "macOS fullscreen backend is only supported on macOS".to_string(),
-    ))
-}
-
-#[cfg(not(target_os = "macos"))]
-fn post_mouse_motion(_button_mask: u32, _x: f64, _y: f64) -> Result<()> {
-    Ok(())
-}
-
-#[cfg(not(target_os = "macos"))]
-fn post_mouse_button(_down: bool, _button: u32, _x: f64, _y: f64) -> Result<()> {
-    Ok(())
-}
-
-#[cfg(not(target_os = "macos"))]
-fn post_scroll(_unit: ScrollUnit, _horizontal: i32, _vertical: i32, _control: bool) -> Result<()> {
-    Ok(())
-}

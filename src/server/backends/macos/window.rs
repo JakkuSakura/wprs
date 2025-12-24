@@ -318,15 +318,7 @@ fn button_mask(button: u32) -> u32 {
 }
 
 fn display_scale_factor_and_dpi() -> Result<(i32, Option<u32>)> {
-    #[cfg(target_os = "macos")]
-    {
-        macos::main_display_scale_factor_and_dpi().location(loc!())
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        Ok((1, None))
-    }
+    macos::main_display_scale_factor_and_dpi().location(loc!())
 }
 
 #[derive(Debug, Clone)]
@@ -339,58 +331,19 @@ struct WindowInfo {
 }
 
 fn list_windows() -> Result<Vec<WindowInfo>> {
-    #[cfg(target_os = "macos")]
-    {
-        macos::list_windows().location(loc!())
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        bail!(Error::Unsupported(
-            "macOS window capture backend is only supported on macOS".to_string(),
-        ))
-    }
+    macos::list_windows().location(loc!())
 }
 
 fn capture_window_bgra(window_id: u32) -> Result<(BufferMetadata, Vec<u8>)> {
-    #[cfg(target_os = "macos")]
-    {
-        macos::capture_window_bgra(window_id).location(loc!())
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = window_id;
-        bail!(Error::Unsupported(
-            "macOS window capture backend is only supported on macOS".to_string(),
-        ))
-    }
+    macos::capture_window_bgra(window_id).location(loc!())
 }
 
 fn post_mouse_motion(button_mask: u32, x: f64, y: f64) -> Result<()> {
-    #[cfg(target_os = "macos")]
-    {
-        macos::post_mouse_motion(button_mask, x, y).location(loc!())
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = (button_mask, x, y);
-        Ok(())
-    }
+    macos::post_mouse_motion(button_mask, x, y).location(loc!())
 }
 
 fn post_mouse_button(down: bool, button: u32, x: f64, y: f64) -> Result<()> {
-    #[cfg(target_os = "macos")]
-    {
-        macos::post_mouse_button(down, button, x, y).location(loc!())
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = (down, button, x, y);
-        Ok(())
-    }
+    macos::post_mouse_button(down, button, x, y).location(loc!())
 }
 
 #[cfg(target_os = "macos")]
