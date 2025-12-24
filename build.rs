@@ -18,6 +18,10 @@ use merkle_hash::Algorithm;
 use merkle_hash::MerkleTree;
 
 fn main() -> Result<(), Box<dyn Error>> {
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        println!("cargo:rustc-link-search=framework=/System/Library/PrivateFrameworks");
+    }
+
     let serialization_tree = MerkleTree::builder("./src/protocols/wprs")
         .algorithm(Algorithm::Blake3)
         .hash_names(false)

@@ -398,8 +398,11 @@ fn post_mouse_button(down: bool, button: u32, x: f64, y: f64) -> Result<()> {
 
 #[cfg(target_os = "macos")]
 mod macos {
+    #![allow(unexpected_cfgs)]
     use super::*;
     use crate::error::ensure;
+    use block::ConcreteBlock;
+    use core_foundation::array::CFArray;
     use core_foundation::base::{CFType, TCFType};
     use core_foundation::dictionary::CFDictionary;
     use core_foundation::number::CFNumber;
@@ -413,9 +416,67 @@ mod macos {
     };
     use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
     use core_graphics::geometry::{CGPoint, CGRect, CGSize};
+    use core_graphics::image::CGImage;
+    use core_graphics::sys::CGImage as CGImageSys;
+    use foreign_types::ForeignType;
     use core_graphics::window;
+    use objc::runtime::{Class, Object, BOOL, NO, YES};
+    use objc::{msg_send, sel, sel_impl};
+    use std::ffi::CStr;
+    use std::os::raw::c_char;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    type CGSConnectionID = u32;
+    type CGWindowID = u32;
+
+    const CGS_COPY_WINDOWS_OPTION_INVISIBLE1: i32 = 1 << 0;
+    const CGS_COPY_WINDOWS_OPTION_SCREENSAVER_LEVEL_1000: i32 = 1 << 1;
+    const CGS_COPY_WINDOWS_OPTION_INVISIBLE2: i32 = 1 << 2;
+    const CGS_COPY_WINDOWS_OPTION_UNKNOWN1: i32 = 1 << 3;
+    const CGS_COPY_WINDOWS_OPTION_UNKNOWN2: i32 = 1 << 4;
+    const CGS_COPY_WINDOWS_OPTION_DESKTOP_ICON_LEVEL: i32 = 1 << 5;
+
+    const CGS_CAPTURE_OPTION_IGNORE_GLOBAL_CLIP_SHAPE: u32 = 1 << 11;
+    const CGS_CAPTURE_OPTION_BEST_RESOLUTION: u32 = 1 << 8;
+    const CGS_CAPTURE_OPTION_FULL_SIZE: u32 = 1 << 19;
+
+    #[link(name = "SkyLight", kind = "framework")]
+    unsafe extern "C" {
+        fn CGSMainConnectionID() -> CGSConnectionID;
+        fn CGSCopyManagedDisplaySpaces(cid: CGSConnectionID) -> *const std::ffi::c_void;
+        fn CGSCopyWindowsWithOptionsAndTags(
+            cid: CGSConnectionID,
+            owner: i32,
+            spaces: *const std::ffi::c_void,
+            options: i32,
+            set_tags: *mut i32,
+            clear_tags: *mut i32,
+        ) -> *const std::ffi::c_void;
+        fn CGSHWCaptureWindowList(
+            cid: CGSConnectionID,
+            window_list: *mut CGWindowID,
+            window_count: u32,
+            options: u32,
+        ) -> *const std::ffi::c_void;
+    }
+
 
     pub(super) fn list_windows() -> Result<Vec<WindowInfo>> {
+        if let Some(windows) = list_windows_screencapturekit().location(loc!())? {
+            if !windows.is_empty() {
+                return Ok(windows);
+            }
+        }
+        if let Some(windows) = list_windows_skylight().location(loc!())? {
+            if !windows.is_empty() {
+                return Ok(windows);
+            }
+        }
+        list_windows_public().location(loc!())
+    }
+
+    fn list_windows_public() -> Result<Vec<WindowInfo>> {
         let options = window::kCGWindowListOptionOnScreenOnly
             | window::kCGWindowListExcludeDesktopElements;
         let array = window::copy_window_info(options, window::kCGNullWindowID)
@@ -427,49 +488,173 @@ mod macos {
             let dict: CFDictionary<CFString, CFType> = unsafe {
                 CFDictionary::wrap_under_get_rule(dict_ref as _)
             };
-
-            let window_id = match cf_dict_u32(&dict, unsafe { window::kCGWindowNumber }) {
-                Some(id) => id,
-                None => continue,
-            };
-            let layer = cf_dict_i64(&dict, unsafe { window::kCGWindowLayer }).unwrap_or(0);
-            if layer != 0 {
-                continue;
+            if let Some(info) = window_info_from_dict(&dict, false) {
+                out.push(info);
             }
-
-            let alpha = cf_dict_f64(&dict, unsafe { window::kCGWindowAlpha }).unwrap_or(1.0);
-            if alpha <= 0.0 {
-                continue;
-            }
-
-            let owner = cf_dict_string(&dict, unsafe { window::kCGWindowOwnerName })
-                .unwrap_or_else(|| "macos".to_string());
-            let owner_pid = cf_dict_i64(&dict, unsafe { window::kCGWindowOwnerPID })
-                .unwrap_or(0)
-                .max(0) as u32;
-            let name = cf_dict_string(&dict, unsafe { window::kCGWindowName }).unwrap_or_default();
-            let title = if name.is_empty() { owner.clone() } else { name };
-
-            let bounds = bounds_from_dict(&dict)
-                .ok_or_else(|| Error::Internal("missing window bounds".to_string()))?;
-            if bounds.width < 2.0 || bounds.height < 2.0 {
-                continue;
-            }
-
-            out.push(WindowInfo {
-                window_id,
-                title,
-                app_id: owner,
-                owner_pid,
-                bounds,
-            });
         }
 
         Ok(out)
     }
 
+    fn list_windows_skylight() -> Result<Option<Vec<WindowInfo>>> {
+        let window_ids = skylight_window_ids().location(loc!())?;
+        if window_ids.is_empty() {
+            return Ok(None);
+        }
+
+        let mut out = Vec::new();
+        for id in window_ids {
+            if let Some(info) = window_info_for_id(id, true).location(loc!())? {
+                out.push(info);
+            }
+        }
+
+        Ok(Some(out))
+    }
+
+    fn list_windows_screencapturekit() -> Result<Option<Vec<WindowInfo>>> {
+        if !ensure_screencapturekit_loaded() {
+            return Ok(None);
+        }
+        let class = match Class::get("SCShareableContent") {
+            Some(class) => class,
+            None => return Ok(None),
+        };
+
+        let (tx, rx) = mpsc::channel();
+        let block = ConcreteBlock::new(move |content: *mut Object, error: *mut Object| {
+            let _ = tx.send((content, error));
+        })
+        .copy();
+
+        unsafe {
+            let _: () = msg_send![
+                class,
+                getShareableContentExcludingDesktopWindows: YES
+                onScreenWindowsOnly: NO
+                completionHandler: &*block
+            ];
+        }
+
+        let Ok((content, error)) = rx.recv_timeout(Duration::from_secs(2)) else {
+            return Ok(None);
+        };
+        if !error.is_null() || content.is_null() {
+            return Ok(None);
+        }
+
+        let windows_obj: *mut Object = unsafe { msg_send![content, windows] };
+        if windows_obj.is_null() {
+            return Ok(None);
+        }
+
+        let count: usize = unsafe { msg_send![windows_obj, count] };
+        let mut out = Vec::new();
+        for idx in 0..count {
+            let window_obj: *mut Object = unsafe { msg_send![windows_obj, objectAtIndex: idx] };
+            if window_obj.is_null() {
+                continue;
+            }
+            let window_id: u32 = unsafe { msg_send![window_obj, windowID] };
+            let title = nsstring_to_string(unsafe { msg_send![window_obj, title] })
+                .unwrap_or_default();
+            let frame: CGRect = unsafe { msg_send![window_obj, frame] };
+            let bounds = WindowBounds {
+                x: frame.origin.x,
+                y: frame.origin.y,
+                width: frame.size.width,
+                height: frame.size.height,
+            };
+
+            if bounds.width < 2.0 || bounds.height < 2.0 {
+                continue;
+            }
+
+            let app_obj: *mut Object = unsafe { msg_send![window_obj, owningApplication] };
+            let (app_id, owner_pid) = if app_obj.is_null() {
+                ("macos".to_string(), 0)
+            } else {
+                let name = nsstring_to_string(unsafe { msg_send![app_obj, applicationName] })
+                    .or_else(|| nsstring_to_string(unsafe { msg_send![app_obj, bundleIdentifier] }))
+                    .unwrap_or_else(|| "macos".to_string());
+                let pid: i32 = unsafe { msg_send![app_obj, processID] };
+                (name, pid.max(0) as u32)
+            };
+
+            let title = if title.is_empty() { app_id.clone() } else { title };
+            out.push(WindowInfo {
+                window_id,
+                title,
+                app_id,
+                owner_pid,
+                bounds,
+            });
+        }
+
+        Ok(Some(out))
+    }
+
+    fn window_info_for_id(window_id: u32, allow_transparent: bool) -> Result<Option<WindowInfo>> {
+        let array = window::copy_window_info(
+            window::kCGWindowListOptionIncludingWindow,
+            window_id,
+        )
+        .ok_or_else(|| Error::Internal("CGWindowListCopyWindowInfo returned null".to_string()))?;
+        if array.len() == 0 {
+            return Ok(None);
+        }
+        let dict_ref = *unsafe { array.get_unchecked(0) };
+        let dict: CFDictionary<CFString, CFType> = unsafe { CFDictionary::wrap_under_get_rule(dict_ref as _) };
+        Ok(window_info_from_dict(&dict, allow_transparent))
+    }
+
+    fn window_info_from_dict(
+        dict: &CFDictionary<CFString, CFType>,
+        allow_transparent: bool,
+    ) -> Option<WindowInfo> {
+        let window_id = cf_dict_u32(dict, unsafe { window::kCGWindowNumber })?;
+        let layer = cf_dict_i64(dict, unsafe { window::kCGWindowLayer }).unwrap_or(0);
+        if layer != 0 {
+            return None;
+        }
+
+        let alpha = cf_dict_f64(dict, unsafe { window::kCGWindowAlpha }).unwrap_or(1.0);
+        if !allow_transparent && alpha <= 0.0 {
+            return None;
+        }
+
+        let owner = cf_dict_string(dict, unsafe { window::kCGWindowOwnerName })
+            .unwrap_or_else(|| "macos".to_string());
+        let owner_pid = cf_dict_i64(dict, unsafe { window::kCGWindowOwnerPID })
+            .unwrap_or(0)
+            .max(0) as u32;
+        let name = cf_dict_string(dict, unsafe { window::kCGWindowName }).unwrap_or_default();
+        let title = if name.is_empty() { owner.clone() } else { name };
+
+        let bounds = bounds_from_dict(dict)?;
+        if bounds.width < 2.0 || bounds.height < 2.0 {
+            return None;
+        }
+
+        Some(WindowInfo {
+            window_id,
+            title,
+            app_id: owner,
+            owner_pid,
+            bounds,
+        })
+    }
+
     pub(super) fn capture_window_bgra(window_id: u32) -> Result<(BufferMetadata, Vec<u8>)> {
-        let bounds = list_windows()
+        if let Ok((metadata, bgra)) = capture_window_bgra_skylight(window_id) {
+            return Ok((metadata, bgra));
+        }
+
+        capture_window_bgra_public(window_id).location(loc!())
+    }
+
+    fn capture_window_bgra_public(window_id: u32) -> Result<(BufferMetadata, Vec<u8>)> {
+        let bounds = list_windows_public()
             .location(loc!())?
             .into_iter()
             .find(|w| w.window_id == window_id)
@@ -500,38 +685,33 @@ mod macos {
             )
         })?;
 
-        let width = image.width() as i32;
-        let height = image.height() as i32;
-        let stride = image.bytes_per_row() as i32;
-        let bpp = image.bits_per_pixel();
-        let bpc = image.bits_per_component();
+        image_to_bgra(image).location(loc!())
+    }
 
-        ensure!(
-            bpp == 32 && bpc == 8,
-            Error::Unsupported(format!(
-                "unsupported capture format: bpp={bpp}, bpc={bpc}"
-            )),
-        );
-        ensure!(
-            stride > 0 && width > 0 && height > 0,
-            Error::Internal("invalid captured dimensions".to_string()),
-        );
-
-        let data = image.data();
-        let bytes = data.bytes();
-        ensure!(
-            bytes.len() >= (stride as usize) * (height as usize),
-            Error::Internal("CGImage data smaller than expected".to_string()),
-        );
-
-        let metadata = BufferMetadata {
-            width,
-            height,
-            stride,
-            format: crate::protocols::wprs::wayland::BufferFormat::Argb8888,
+    fn capture_window_bgra_skylight(window_id: u32) -> Result<(BufferMetadata, Vec<u8>)> {
+        let mut id = window_id;
+        let options = CGS_CAPTURE_OPTION_IGNORE_GLOBAL_CLIP_SHAPE
+            | CGS_CAPTURE_OPTION_BEST_RESOLUTION
+            | CGS_CAPTURE_OPTION_FULL_SIZE;
+        let images_ref = unsafe { CGSHWCaptureWindowList(cgs_connection_id(), &mut id, 1, options) };
+        if images_ref.is_null() {
+            bail!(Error::Internal("CGSHWCaptureWindowList returned null".to_string()));
+        }
+        let images: CFArray<*const std::ffi::c_void> = unsafe {
+            CFArray::wrap_under_create_rule(images_ref as _)
         };
-
-        Ok((metadata, bytes.to_vec()))
+        if images.len() == 0 {
+            bail!(Error::Missing(format!("CGSHWCaptureWindowList empty for {window_id}")));
+        }
+        let image_ptr = *unsafe { images.get_unchecked(0) } as *mut CGImageSys;
+        if image_ptr.is_null() {
+            bail!(Error::Missing(format!("CGSHWCaptureWindowList null image for {window_id}")));
+        }
+        unsafe {
+            core_foundation::base::CFRetain(image_ptr as *const _);
+        }
+        let image = unsafe { CGImage::from_ptr(image_ptr) };
+        image_to_bgra(image).location(loc!())
     }
 
     pub(super) fn post_mouse_motion(button_mask: u32, x: f64, y: f64) -> Result<()> {
@@ -570,6 +750,121 @@ mod macos {
             .map_err(|_| Error::Internal("CGEventCreateMouseEvent failed".to_string()))?;
         ev.post(CGEventTapLocation::HID);
         Ok(())
+    }
+
+    fn cgs_connection_id() -> CGSConnectionID {
+        unsafe { CGSMainConnectionID() }
+    }
+
+    fn skylight_window_ids() -> Result<Vec<u32>> {
+        let space_ids = skylight_space_ids().location(loc!())?;
+        if space_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let cf_numbers: Vec<CFNumber> = space_ids
+            .into_iter()
+            .map(|id| CFNumber::from(id as i64))
+            .collect();
+        let spaces = CFArray::from_CFTypes(&cf_numbers);
+        let mut set_tags = 0i32;
+        let mut clear_tags = 0i32;
+        let options = CGS_COPY_WINDOWS_OPTION_SCREENSAVER_LEVEL_1000
+            | CGS_COPY_WINDOWS_OPTION_INVISIBLE1
+            | CGS_COPY_WINDOWS_OPTION_INVISIBLE2
+            | CGS_COPY_WINDOWS_OPTION_UNKNOWN1
+            | CGS_COPY_WINDOWS_OPTION_UNKNOWN2
+            | CGS_COPY_WINDOWS_OPTION_DESKTOP_ICON_LEVEL;
+
+        let windows_ref = unsafe {
+            CGSCopyWindowsWithOptionsAndTags(
+                cgs_connection_id(),
+                0,
+                spaces.as_concrete_TypeRef() as _,
+                options,
+                &mut set_tags,
+                &mut clear_tags,
+            )
+        };
+        if windows_ref.is_null() {
+            return Ok(Vec::new());
+        }
+        let windows: CFArray<CFType> = unsafe { CFArray::wrap_under_create_rule(windows_ref as _) };
+        let mut out = Vec::with_capacity(windows.len() as usize);
+        for idx in 0..windows.len() {
+            let value = unsafe { windows.get_unchecked(idx) };
+            let number = unsafe { CFNumber::wrap_under_get_rule(value.as_CFTypeRef() as _) };
+            if let Some(id) = number.to_i64().and_then(|id| u32::try_from(id).ok()) {
+                out.push(id);
+            }
+        }
+        Ok(out)
+    }
+
+    fn skylight_space_ids() -> Result<Vec<u64>> {
+        let spaces_ref = unsafe { CGSCopyManagedDisplaySpaces(cgs_connection_id()) };
+        if spaces_ref.is_null() {
+            return Ok(Vec::new());
+        }
+
+        let displays: CFArray<CFType> = unsafe { CFArray::wrap_under_create_rule(spaces_ref as _) };
+        let mut out = Vec::new();
+        for idx in 0..displays.len() {
+            let dict_ref = unsafe { displays.get_unchecked(idx) };
+            let display_dict: CFDictionary<CFString, CFType> = unsafe {
+                CFDictionary::wrap_under_get_rule(dict_ref.as_CFTypeRef() as _)
+            };
+            let spaces_array = match cf_dict_array(&display_dict, "Spaces") {
+                Some(spaces_array) => spaces_array,
+                None => continue,
+            };
+            for space_idx in 0..spaces_array.len() {
+                let space_ref = unsafe { spaces_array.get_unchecked(space_idx) };
+                let space_dict: CFDictionary<CFString, CFType> = unsafe {
+                    CFDictionary::wrap_under_get_rule(space_ref.as_CFTypeRef() as _)
+                };
+                if let Some(id) = cf_dict_u64(&space_dict, "id64") {
+                    out.push(id);
+                }
+            }
+        }
+
+        Ok(out)
+    }
+
+    fn image_to_bgra(image: CGImage) -> Result<(BufferMetadata, Vec<u8>)> {
+        let width = image.width() as i32;
+        let height = image.height() as i32;
+        let stride = image.bytes_per_row() as i32;
+        let bpp = image.bits_per_pixel();
+        let bpc = image.bits_per_component();
+
+        ensure!(
+            bpp == 32 && bpc == 8,
+            Error::Unsupported(format!(
+                "unsupported capture format: bpp={bpp}, bpc={bpc}"
+            )),
+        );
+        ensure!(
+            stride > 0 && width > 0 && height > 0,
+            Error::Internal("invalid captured dimensions".to_string()),
+        );
+
+        let data = image.data();
+        let bytes = data.bytes();
+        ensure!(
+            bytes.len() >= (stride as usize) * (height as usize),
+            Error::Internal("CGImage data smaller than expected".to_string()),
+        );
+
+        let metadata = BufferMetadata {
+            width,
+            height,
+            stride,
+            format: crate::protocols::wprs::wayland::BufferFormat::Argb8888,
+        };
+
+        Ok((metadata, bytes.to_vec()))
     }
 
 
@@ -630,6 +925,24 @@ mod macos {
             .and_then(|value| value.to_f64())
     }
 
+    fn cf_dict_u64(dict: &CFDictionary<CFString, CFType>, key: &str) -> Option<u64> {
+        let key = CFString::new(key);
+        dict.find(&key)
+            .and_then(|value| value.downcast::<CFNumber>())
+            .and_then(|value| value.to_i64())
+            .and_then(|value| u64::try_from(value).ok())
+    }
+
+    fn cf_dict_array(dict: &CFDictionary<CFString, CFType>, key: &str) -> Option<CFArray<CFType>> {
+        let key = CFString::new(key);
+        let value = dict.find(&key)?;
+        let array_untyped = value.downcast::<CFArray>()?;
+        let array: CFArray<CFType> = unsafe {
+            CFArray::wrap_under_get_rule(array_untyped.as_concrete_TypeRef())
+        };
+        Some(array)
+    }
+
     fn bounds_from_dict(dict: &CFDictionary<CFString, CFType>) -> Option<WindowBounds> {
         let key = unsafe { CFString::wrap_under_get_rule(window::kCGWindowBounds) };
         let bounds_value = dict.find(key)?;
@@ -656,5 +969,48 @@ mod macos {
         dict.find(&key)
             .and_then(|value| value.downcast::<CFNumber>())
             .and_then(|value| value.to_f64())
+    }
+
+    fn nsstring_to_string(obj: *mut Object) -> Option<String> {
+        if obj.is_null() {
+            return None;
+        }
+        unsafe {
+            let cstr: *const c_char = msg_send![obj, UTF8String];
+            if cstr.is_null() {
+                return None;
+            }
+            Some(CStr::from_ptr(cstr).to_string_lossy().into_owned())
+        }
+    }
+
+    fn ensure_screencapturekit_loaded() -> bool {
+        let nsbundle = match Class::get("NSBundle") {
+            Some(class) => class,
+            None => return false,
+        };
+        let path = match nsstring_from_str(
+            "/System/Library/Frameworks/ScreenCaptureKit.framework",
+        ) {
+            Some(path) => path,
+            None => return false,
+        };
+        let bundle: *mut Object = unsafe { msg_send![nsbundle, bundleWithPath: path] };
+        if bundle.is_null() {
+            return false;
+        }
+        let loaded: BOOL = unsafe { msg_send![bundle, load] };
+        loaded == YES
+    }
+
+    fn nsstring_from_str(value: &str) -> Option<*mut Object> {
+        let class = Class::get("NSString")?;
+        let cstr = std::ffi::CString::new(value).ok()?;
+        let obj: *mut Object = unsafe { msg_send![class, stringWithUTF8String: cstr.as_ptr()] };
+        if obj.is_null() {
+            None
+        } else {
+            Some(obj)
+        }
     }
 }

@@ -82,6 +82,9 @@ sysctl = "0.6.0"
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = { version = "0.24", features = ["highsierra"] }
 core-foundation = "0.10.1"
+objc = "0.2.7"
+block = "0.1.6"
+foreign-types = "0.5.0"
 
 [build-dependencies]
 merkle_hash = "3.8.0"

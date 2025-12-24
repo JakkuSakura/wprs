@@ -34,7 +34,10 @@ use crate::protocols::wprs::wayland::OutputInfo;
 
 /// # Panics
 /// If smithay has a bug and with_buffer_contents gives us an invalid pointer.
-pub fn with_buffer_contents<F, T>(buffer: &WlBuffer, f: F) -> Result<T, BufferAccessError>
+pub fn with_buffer_contents<F, T>(
+    buffer: &WlBuffer,
+    f: F,
+) -> std::result::Result<T, BufferAccessError>
 where
     F: FnOnce(BufferPointer<u8>, BufferData) -> T,
 {

@@ -106,8 +106,6 @@ use crate::prelude::*;
 use crate::protocols::wprs::types::ClientId;
 use crate::protocols::wprs::types::Request;
 use crate::protocols::wprs::serializer::SendType;
-use crate::protocols::wprs::server_core::Backend;
-use crate::protocols::wprs::server_core::dispatch_event;
 use crate::protocols::wprs::handshake;
 use crate::protocols::wprs::tuple::Tuple2;
 use crate::protocols::wprs::wayland::Bitmap;
@@ -871,13 +869,23 @@ pub fn commit_impl(
         Some(SmithayBufferAssignment::NewBuffer(buffer)) if !skip_buffer => {
             let mut metadata: Option<BufferMetadata> = None;
             let mut raw_buffer_to_send = None;
+            let mut buffer_error: Option<Error> = None;
             compositor_utils::with_buffer_contents(buffer, |data, spec| {
-                metadata = Some(BufferMetadata::from_buffer_data(&spec).location(loc!())?);
-                raw_buffer_to_send = Some(filtering::filter_and_compress(data, &mut state.compressor));
-                Ok(())
+                match BufferMetadata::from_buffer_data(&spec).location(loc!()) {
+                    Ok(value) => {
+                        metadata = Some(value);
+                        raw_buffer_to_send =
+                            Some(filtering::filter_and_compress(data, &mut state.compressor));
+                    }
+                    Err(err) => {
+                        buffer_error = Some(err);
+                    }
+                }
             })
-            .location(loc!())?
             .location(loc!())?;
+            if let Some(err) = buffer_error {
+                return Err(err);
+            }
 
             let metadata = metadata
                 .ok_or_else(|| Error::Missing("buffer metadata".to_string()))?;

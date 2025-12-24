@@ -141,7 +141,7 @@ impl WprsServerState {
     fn object_client_surface_from_id(
         &self,
         surface_id: &WlSurfaceId,
-    ) -> Result<(ObjectId, Client, WlSurface), UnknownSurfaceErr> {
+    ) -> std::result::Result<(ObjectId, Client, WlSurface), UnknownSurfaceErr> {
         let object_id = match self.object_map.get(surface_id) {
             Some(object_id) => object_id.clone(),
             None => {

@@ -33,7 +33,6 @@ mod wayland_server_impl {
     use crate::prelude::*;
     use crate::protocols::wprs as proto;
     use crate::protocols::wprs::serializer::Serializer;
-    use crate::protocols::wprs::transport;
     use crate::server::backends::wayland::backend::WaylandSmithayBackend;
     use crate::server::backends::wayland::backend::WaylandSmithayBackendConfig;
     use crate::server::backend::ServerBackend as _;
