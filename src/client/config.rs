@@ -144,7 +144,7 @@ impl Default for WprscConfig {
             control_socket: config::default_control_socket_path("wprsc"),
             log_file: None,
             stderr_log_level: SerializableLevel(Level::INFO),
-            file_log_level: SerializableLevel(Level::TRACE),
+            file_log_level: SerializableLevel(Level::DEBUG),
             log_priv_data: false,
             title_prefix: String::new(),
 
