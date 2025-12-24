@@ -31,18 +31,18 @@ pub trait ClientBackend {
 }
 
 fn build_winit_wgpu_backend(config: ClientBackendConfig) -> Result<Box<dyn ClientBackend>> {
-    #[cfg(feature = "winit-wgpu-client")]
+    #[cfg(feature = "winit-wgpu")]
     {
         Ok(Box::new(
             crate::client::backends::winit_wgpu::WinitWgpuClientBackend::new(config),
         ))
     }
 
-    #[cfg(not(feature = "winit-wgpu-client"))]
+    #[cfg(not(feature = "winit-wgpu"))]
     {
         let _ = config;
         bail!(Error::Unsupported(
-            "winit-wgpu backend requested but not compiled in. Rebuild with `--features winit-wgpu-client`."
+            "winit-wgpu backend requested but not compiled in. Rebuild with `--features winit-wgpu`."
                 .to_string(),
         ))
     }
@@ -211,10 +211,10 @@ fn resolve_auto_backend() -> Result<config::ClientBackend> {
         }
     }
 
-    #[cfg(feature = "winit-wgpu-client")]
+    #[cfg(feature = "winit-wgpu")]
     return Ok(config::ClientBackend::WinitWgpu);
 
-    #[cfg(not(feature = "winit-wgpu-client"))]
+    #[cfg(not(feature = "winit-wgpu"))]
     Ok(config::ClientBackend::SgrPixels)
 }
 
@@ -231,7 +231,7 @@ mod resolve_tests {
     }
 
     #[test]
-    #[cfg(all(feature = "winit-wgpu-client", not(feature = "wayland-client")))]
+    #[cfg(all(feature = "winit-wgpu", not(feature = "wayland-client")))]
     fn auto_prefers_winit_when_wayland_client_missing() {
         assert_eq!(
             resolve_client_backend(config::ClientBackend::Auto).unwrap(),

@@ -12,7 +12,7 @@ pub mod window_manager;
 #[cfg(feature = "wayland-client")]
 pub use backends::wayland::*;
 
-#[cfg(feature = "winit-wgpu-client")]
+#[cfg(feature = "winit-wgpu")]
 pub use backends::winit_wgpu;
 
 pub use backend::ClientBackend;

@@ -224,7 +224,7 @@ Then update the `wprsc.ron` and `wprsd.ron` files with your desired settings.
 
 When `--backend auto` is selected (the default), `wprsc` prefers the Wayland
 backend if a compositor is available; otherwise it falls back to the
-`winit-wgpu` backend (when compiled with `winit-wgpu-client`). You can override
+`winit-wgpu` backend (when compiled with `winit-wgpu`). You can override
 the selection with `--backend auto|wayland|winit-wgpu|html`.
 
 If you compile `wprsc` with one of the `smithay_*` feature bundles, the same

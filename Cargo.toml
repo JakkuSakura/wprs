@@ -94,7 +94,7 @@ sspi = { git = "https://github.com/Devolutions/sspi-rs", branch = "master" }
 #
 # `video-h264` is enabled by default to make H.264 support available on typical builds,
 # but it is not automatically selected as the default negotiated transport codec.
-default = ["winit-wgpu-client", "video-h264"]
+default = ["winit-wgpu", "video-h264"]
 
 # By default, avoid pulling in platform-specific Wayland compositor/client code.
 # Enable the components you need explicitly.
@@ -227,7 +227,7 @@ tracy = ["dep:tracy-client", "dep:tracing-tracy"]
 tracy-allocator = ["tracy"]
 
 # Enables a cross-platform client fallback that can run without a Wayland compositor.
-winit-wgpu-client = ["dep:winit", "dep:wgpu", "dep:pollster"]
+winit-wgpu = ["dep:winit", "dep:wgpu", "dep:pollster"]
 video-h264 = ["dep:ffmpeg-next"]
 
 # Enables RDP protocol translation (wprs-rdp-bridge and optional wprsd integration).

@@ -34,5 +34,5 @@ pub use crate::protocols::rdp;
     any(target_os = "macos", target_os = "ios")
 ))]
 compile_error!(
-    "The `wayland-client` feature (SCTK/Wayland backend) is not supported on Apple platforms. Use `--features winit-wgpu-client` instead."
+    "The `wayland-client` feature (SCTK/Wayland backend) is not supported on Apple platforms. Use `--features winit-wgpu` instead."
 );

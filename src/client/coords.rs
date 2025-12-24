@@ -18,7 +18,7 @@ impl ServerBufferScale {
     }
 }
 
-#[cfg(feature = "winit-wgpu-client")]
+#[cfg(feature = "winit-wgpu")]
 pub mod winit {
     use winit::dpi::PhysicalPosition;
     use winit::window::Window;
@@ -91,7 +91,7 @@ pub mod winit {
     }
 }
 
-#[cfg(all(test, feature = "winit-wgpu-client"))]
+#[cfg(all(test, feature = "winit-wgpu"))]
 mod tests {
     use super::winit::popup_offset_to_host_px_scaled;
     use super::{ServerBufferScale, UiScaleFactor};

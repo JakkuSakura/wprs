@@ -17,7 +17,7 @@
           cargoLock.lockFile = ./Cargo.lock;
 
           # Client-only by default; server requires extra system deps and is Linux-specific.
-          buildFeatures = [ "winit-wgpu-client" ];
+          buildFeatures = [ "winit-wgpu" ];
           buildNoDefaultFeatures = false;
 
           nativeBuildInputs = [ pkgs.pkg-config ];
