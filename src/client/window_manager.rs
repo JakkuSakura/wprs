@@ -43,10 +43,37 @@ impl WindowManager {
         let mut delta = WindowDelta::default();
 
         for state in updated {
-            let Some(info) = Self::window_info_from_state(state) else {
-                if self.windows.remove(&state.id).is_some() {
-                    delta.removed.push(state.id);
+            let already_known = self.windows.contains_key(&state.id);
+            let info = match state.role.as_ref() {
+                Some(Role::XdgToplevel(toplevel)) => Some(WindowInfo {
+                    id: state.id,
+                    title: toplevel.title.clone(),
+                    app_id: toplevel.app_id.clone(),
+                    size: bitmap_size(state),
+                }),
+                Some(_) => {
+                    if self.windows.remove(&state.id).is_some() {
+                        delta.removed.push(state.id);
+                    }
+                    None
                 }
+                None => {
+                    if let Some(size) = bitmap_size(state) {
+                        Some(WindowInfo {
+                            id: state.id,
+                            title: None,
+                            app_id: None,
+                            size: Some(size),
+                        })
+                    } else if already_known {
+                        None
+                    } else {
+                        None
+                    }
+                }
+            };
+
+            let Some(info) = info else {
                 continue;
             };
 
@@ -70,27 +97,18 @@ impl WindowManager {
         delta
     }
 
-    fn window_info_from_state(state: &SurfaceState) -> Option<WindowInfo> {
-        let Role::XdgToplevel(toplevel) = state.role.as_ref()? else {
-            return None;
-        };
-        let size = state
-            .bitmap
-            .as_ref()
-            .and_then(|assignment| assignment.as_new())
-            .and_then(|bitmap| {
-                let width = u32::try_from(bitmap.metadata.width).ok()?;
-                let height = u32::try_from(bitmap.metadata.height).ok()?;
-                Some((width, height))
-            });
+}
 
-        Some(WindowInfo {
-            id: state.id,
-            title: toplevel.title.clone(),
-            app_id: toplevel.app_id.clone(),
-            size,
+fn bitmap_size(state: &SurfaceState) -> Option<(u32, u32)> {
+    state
+        .bitmap
+        .as_ref()
+        .and_then(|assignment| assignment.as_new())
+        .and_then(|bitmap| {
+            let width = u32::try_from(bitmap.metadata.width).ok()?;
+            let height = u32::try_from(bitmap.metadata.height).ok()?;
+            Some((width, height))
         })
-    }
 }
 
 #[cfg(test)]
@@ -125,6 +143,23 @@ mod tests {
         }
     }
 
+    fn make_state_with_bitmap(id: u64) -> SurfaceState {
+        let mut state = make_state(id, None);
+        state.role = None;
+        state.bitmap = Some(crate::protocols::wprs::wayland::BitmapAssignment::New(
+            crate::protocols::wprs::wayland::Bitmap {
+                metadata: crate::protocols::wprs::wayland::BufferMetadata {
+                    width: 1,
+                    height: 1,
+                    stride: 4,
+                    format: crate::protocols::wprs::wayland::BufferFormat::Argb8888,
+                },
+                data: crate::protocols::wprs::wayland::BufferPoolHandle::from(vec![0, 0, 0, 0]),
+            },
+        ));
+        state
+    }
+
     #[test]
     fn upserts_window_without_title() {
         let mut manager = WindowManager::new();
@@ -132,5 +167,28 @@ mod tests {
         let delta = manager.apply_surface_updates(&[state], &[]);
         assert_eq!(delta.upserts.len(), 1);
         assert_eq!(delta.upserts[0].id, WlSurfaceId(42));
+    }
+
+    #[test]
+    fn upserts_window_without_role_when_bitmap_present() {
+        let mut manager = WindowManager::new();
+        let state = make_state_with_bitmap(7);
+        let delta = manager.apply_surface_updates(&[state], &[]);
+        assert_eq!(delta.upserts.len(), 1);
+        assert_eq!(delta.upserts[0].id, WlSurfaceId(7));
+    }
+
+    #[test]
+    fn removes_window_when_role_is_not_toplevel() {
+        use crate::protocols::wprs::geometry::Point;
+
+        let mut manager = WindowManager::new();
+        let state = make_state(1, Some("demo"));
+        let _ = manager.apply_surface_updates(&[state], &[]);
+
+        let mut cursor_state = make_state(1, Some("demo"));
+        cursor_state.role = Some(Role::Cursor(Point { x: 0, y: 0 }));
+        let delta = manager.apply_surface_updates(&[cursor_state], &[]);
+        assert_eq!(delta.removed, vec![WlSurfaceId(1)]);
     }
 }
