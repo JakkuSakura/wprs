@@ -251,71 +251,23 @@ struct WindowInfo {
 }
 
 fn list_windows() -> Result<Vec<WindowInfo>> {
-    #[cfg(target_os = "windows")]
-    {
-        win::list_windows().location(loc!())
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        bail!(Error::Unsupported(
-            "Windows window capture backend is only supported on Windows".to_string(),
-        ))
-    }
+    win::list_windows().location(loc!())
 }
 
 fn capture_window_bgra(hwnd_key: u64) -> Result<(BufferMetadata, Vec<u8>)> {
-    #[cfg(target_os = "windows")]
-    {
-        win::capture_window_bgra(hwnd_key).location(loc!())
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = hwnd_key;
-        bail!(Error::Unsupported(
-            "Windows window capture backend is only supported on Windows".to_string(),
-        ))
-    }
+    win::capture_window_bgra(hwnd_key).location(loc!())
 }
 
 fn post_mouse_motion(button_mask: u32, x: i32, y: i32) -> Result<()> {
-    #[cfg(target_os = "windows")]
-    {
-        win::post_mouse_motion(button_mask, x, y).location(loc!())
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = (button_mask, x, y);
-        Ok(())
-    }
+    win::post_mouse_motion(button_mask, x, y).location(loc!())
 }
 
 fn post_mouse_button(down: bool, button: u32, x: i32, y: i32) -> Result<()> {
-    #[cfg(target_os = "windows")]
-    {
-        win::post_mouse_button(down, button, x, y).location(loc!())
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = (down, button, x, y);
-        Ok(())
-    }
+    win::post_mouse_button(down, button, x, y).location(loc!())
 }
 
 fn post_scroll(horizontal: i32, vertical: i32) -> Result<()> {
-    #[cfg(target_os = "windows")]
-    {
-        win::post_scroll(horizontal, vertical).location(loc!())
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = (horizontal, vertical);
-        Ok(())
-    }
+    win::post_scroll(horizontal, vertical).location(loc!())
 }
 
 #[cfg(target_os = "windows")]
