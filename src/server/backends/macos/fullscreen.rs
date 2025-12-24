@@ -15,6 +15,10 @@ use crate::server::backend::BackendBgraFrame;
 use crate::server::backend::BackendSurfaceDescriptor;
 use crate::server::backend::BackendSurfaceRole;
 use crate::server::backend::PollingBackend;
+use macos::capture_main_display_bgra;
+use macos::post_mouse_button;
+use macos::post_mouse_motion;
+use macos::post_scroll;
 
 #[derive(Debug)]
 pub struct MacosFullscreenBackend {
@@ -196,344 +200,141 @@ fn display_scale_factor_and_dpi() -> Result<(i32, Option<u32>)> {
 mod macos {
     use super::*;
     use crate::error::ensure;
-    use std::ffi::c_void;
-    use std::ptr;
-
-    type CFIndex = isize;
-    type CFTypeRef = *const c_void;
-    type CFDataRef = *const c_void;
-    type CGImageRef = *const c_void;
-    type CGDataProviderRef = *const c_void;
-    type CGDirectDisplayID = u32;
-    type CGDisplayModeRef = *const c_void;
-    type CGEventRef = *const c_void;
-    type CGEventType = u32;
-    type CGMouseButton = u32;
-    type CGEventTapLocation = u32;
-    type CGEventFlags = u64;
-
-    #[repr(C)]
-    #[derive(Copy, Clone)]
-    struct CGPoint {
-        x: f64,
-        y: f64,
-    }
-
-    #[repr(C)]
-    #[derive(Copy, Clone)]
-    struct CGSize {
-        width: f64,
-        height: f64,
-    }
-
-    #[link(name = "CoreGraphics", kind = "framework")]
-    unsafe extern "C" {
-        fn CGMainDisplayID() -> CGDirectDisplayID;
-        fn CGDisplayCopyDisplayMode(display_id: CGDirectDisplayID) -> CGDisplayModeRef;
-        fn CGDisplayModeGetWidth(mode: CGDisplayModeRef) -> usize;
-        fn CGDisplayModeGetHeight(mode: CGDisplayModeRef) -> usize;
-        fn CGDisplayModeGetPixelWidth(mode: CGDisplayModeRef) -> usize;
-        fn CGDisplayModeGetPixelHeight(mode: CGDisplayModeRef) -> usize;
-        fn CGDisplayScreenSize(display_id: CGDirectDisplayID) -> CGSize;
-
-        fn CGDisplayCreateImage(display_id: CGDirectDisplayID) -> CGImageRef;
-        fn CGImageGetWidth(image: CGImageRef) -> usize;
-        fn CGImageGetHeight(image: CGImageRef) -> usize;
-        fn CGImageGetBytesPerRow(image: CGImageRef) -> usize;
-        fn CGImageGetBitsPerPixel(image: CGImageRef) -> usize;
-        fn CGImageGetBitsPerComponent(image: CGImageRef) -> usize;
-        fn CGImageGetDataProvider(image: CGImageRef) -> CGDataProviderRef;
-        fn CGDataProviderCopyData(provider: CGDataProviderRef) -> CFDataRef;
-
-        fn CGEventCreateMouseEvent(
-            source: *const c_void,
-            event_type: CGEventType,
-            mouse_cursor_position: CGPoint,
-            mouse_button: CGMouseButton,
-        ) -> CGEventRef;
-
-        fn CGEventCreateScrollWheelEvent(
-            source: *const c_void,
-            units: u32,
-            wheel_count: u32,
-            wheel1: i32,
-            wheel2: i32,
-        ) -> CGEventRef;
-
-        fn CGEventSetFlags(event: CGEventRef, flags: CGEventFlags);
-
-        fn CGEventPost(tap: CGEventTapLocation, event: CGEventRef);
-    }
-
-    #[link(name = "CoreFoundation", kind = "framework")]
-    unsafe extern "C" {
-        fn CFDataGetLength(the_data: CFDataRef) -> CFIndex;
-        fn CFDataGetBytePtr(the_data: CFDataRef) -> *const u8;
-        fn CFRelease(cf: CFTypeRef);
-    }
-
-    const K_CG_EVENT_TAP_HID: CGEventTapLocation = 0;
-
-    const K_CG_EVENT_MOUSE_MOVED: CGEventType = 5;
-    const K_CG_EVENT_LEFT_MOUSE_DOWN: CGEventType = 1;
-    const K_CG_EVENT_LEFT_MOUSE_UP: CGEventType = 2;
-    const K_CG_EVENT_RIGHT_MOUSE_DOWN: CGEventType = 3;
-    const K_CG_EVENT_RIGHT_MOUSE_UP: CGEventType = 4;
-    const K_CG_EVENT_OTHER_MOUSE_DOWN: CGEventType = 25;
-    const K_CG_EVENT_OTHER_MOUSE_UP: CGEventType = 26;
-    const K_CG_EVENT_LEFT_MOUSE_DRAGGED: CGEventType = 6;
-    const K_CG_EVENT_RIGHT_MOUSE_DRAGGED: CGEventType = 7;
-    const K_CG_EVENT_OTHER_MOUSE_DRAGGED: CGEventType = 27;
-
-    const K_CG_MOUSE_BUTTON_LEFT: CGMouseButton = 0;
-    const K_CG_MOUSE_BUTTON_RIGHT: CGMouseButton = 1;
-    const K_CG_MOUSE_BUTTON_CENTER: CGMouseButton = 2;
-
-    const K_CG_SCROLL_EVENT_UNIT_LINE: u32 = 1;
-    const K_CG_SCROLL_EVENT_UNIT_PIXEL: u32 = 0;
-
-    const K_CG_EVENT_FLAG_MASK_CONTROL: CGEventFlags = 1 << 18;
+    use core_graphics::display::CGDisplay;
+    use core_graphics::event::{
+        CGEvent,
+        CGEventFlags,
+        CGEventTapLocation,
+        CGEventType,
+        CGMouseButton,
+        ScrollEventUnit,
+    };
+    use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
+    use core_graphics::geometry::CGPoint;
 
     pub(super) fn capture_main_display_bgra() -> Result<(BufferMetadata, Vec<u8>)> {
-        unsafe {
-            let display = CGMainDisplayID();
-            let image = CGDisplayCreateImage(display);
-            ensure!(
-                !image.is_null(),
-                Error::Internal(
-                    "CGDisplayCreateImage returned null (Screen Recording permission?)"
-                        .to_string(),
-                ),
-            );
+        let display = CGDisplay::main();
+        let image = display.image().ok_or_else(|| {
+            Error::Internal("CGDisplayCreateImage returned null (Screen Recording permission?)".to_string())
+        })?;
 
-            let width = CGImageGetWidth(image) as i32;
-            let height = CGImageGetHeight(image) as i32;
-            let stride = CGImageGetBytesPerRow(image) as i32;
-            let bpp = CGImageGetBitsPerPixel(image);
-            let bpc = CGImageGetBitsPerComponent(image);
+        let width = image.width() as i32;
+        let height = image.height() as i32;
+        let stride = image.bytes_per_row() as i32;
+        let bpp = image.bits_per_pixel();
+        let bpc = image.bits_per_component();
 
-            let provider = CGImageGetDataProvider(image);
-            ensure!(
-                !provider.is_null(),
-                Error::Internal("CGImageGetDataProvider returned null".to_string()),
-            );
-            let cf_data = CGDataProviderCopyData(provider);
-            ensure!(
-                !cf_data.is_null(),
-                Error::Internal("CGDataProviderCopyData returned null".to_string()),
-            );
+        ensure!(
+            bpp == 32 && bpc == 8,
+            Error::Unsupported(format!(
+                "unsupported capture format: bpp={bpp}, bpc={bpc}"
+            )),
+        );
+        ensure!(
+            stride > 0 && width > 0 && height > 0,
+            Error::Internal("invalid captured dimensions".to_string()),
+        );
 
-            let len = CFDataGetLength(cf_data) as usize;
-            let ptr = CFDataGetBytePtr(cf_data);
-            ensure!(
-                !ptr.is_null(),
-                Error::Internal("CFDataGetBytePtr returned null".to_string()),
-            );
+        let data = image.data();
+        let bytes = data.bytes();
+        ensure!(
+            bytes.len() >= (stride as usize) * (height as usize),
+            Error::Internal("CGImage data smaller than expected".to_string()),
+        );
 
-            // Best-effort: most systems will produce a 32bpp image. If not,
-            // bail with a clear message rather than silently corrupting.
-            ensure!(
-                bpp == 32 && bpc == 8,
-                Error::Unsupported(format!(
-                    "unsupported capture format: bpp={bpp}, bpc={bpc}"
-                )),
-            );
-            ensure!(
-                stride > 0 && width > 0 && height > 0,
-                Error::Internal("invalid captured dimensions".to_string()),
-            );
-            ensure!(
-                len >= (height as usize) * (stride as usize),
-                Error::Internal("captured buffer is smaller than expected".to_string()),
-            );
+        let metadata = BufferMetadata {
+            width,
+            height,
+            stride,
+            format: crate::protocols::wprs::wayland::BufferFormat::Argb8888,
+        };
 
-            let bytes = std::slice::from_raw_parts(ptr, (height as usize) * (stride as usize));
-            let out = bytes.to_vec();
-
-            CFRelease(cf_data as CFTypeRef);
-            CFRelease(image as CFTypeRef);
-
-            let metadata = BufferMetadata {
-                width,
-                height,
-                stride,
-                format: wayland::BufferFormat::Argb8888,
-            };
-            Ok((metadata, out))
-        }
+        Ok((metadata, bytes.to_vec()))
     }
 
     pub(super) fn post_mouse_motion(button_mask: u32, x: f64, y: f64) -> Result<()> {
-        unsafe {
-            let (_width, height) = display_size().location(loc!())?;
-            let p = CGPoint {
-                x,
-                // Quartz global coordinates are origin-at-bottom-left.
-                y: (height as f64) - y,
-            };
+        let source = event_source()?;
+        let (event_type, button) = match button_mask {
+            mask if (mask & (1 << 0)) != 0 => (CGEventType::LeftMouseDragged, CGMouseButton::Left),
+            mask if (mask & (1 << 1)) != 0 => (CGEventType::RightMouseDragged, CGMouseButton::Right),
+            mask if (mask & (1 << 2)) != 0 => (CGEventType::OtherMouseDragged, CGMouseButton::Center),
+            _ => (CGEventType::MouseMoved, CGMouseButton::Left),
+        };
 
-            let (event_type, mouse_button) = if button_mask & (1 << 0) != 0 {
-                (K_CG_EVENT_LEFT_MOUSE_DRAGGED, K_CG_MOUSE_BUTTON_LEFT)
-            } else if button_mask & (1 << 1) != 0 {
-                (K_CG_EVENT_RIGHT_MOUSE_DRAGGED, K_CG_MOUSE_BUTTON_RIGHT)
-            } else if button_mask & (1 << 2) != 0 {
-                (K_CG_EVENT_OTHER_MOUSE_DRAGGED, K_CG_MOUSE_BUTTON_CENTER)
-            } else {
-                (K_CG_EVENT_MOUSE_MOVED, K_CG_MOUSE_BUTTON_LEFT)
-            };
-
-            let ev = CGEventCreateMouseEvent(ptr::null(), event_type, p, mouse_button);
-            ensure!(
-                !ev.is_null(),
-                Error::Internal("CGEventCreateMouseEvent returned null".to_string()),
-            );
-            CGEventPost(K_CG_EVENT_TAP_HID, ev);
-            CFRelease(ev as CFTypeRef);
-            Ok(())
-        }
+        let ev = CGEvent::new_mouse_event(source, event_type, CGPoint { x, y }, button)
+            .map_err(|_| Error::Internal("CGEventCreateMouseEvent failed".to_string()))?;
+        ev.post(CGEventTapLocation::HID);
+        Ok(())
     }
 
     pub(super) fn post_mouse_button(down: bool, button: u32, x: f64, y: f64) -> Result<()> {
-        unsafe {
-            let (_width, height) = display_size().location(loc!())?;
-            let p = CGPoint {
-                x,
-                y: (height as f64) - y,
-            };
+        let source = event_source()?;
+        let (event_type, mouse_button) = match button {
+            272 => (
+                if down { CGEventType::LeftMouseDown } else { CGEventType::LeftMouseUp },
+                CGMouseButton::Left,
+            ),
+            273 => (
+                if down { CGEventType::RightMouseDown } else { CGEventType::RightMouseUp },
+                CGMouseButton::Right,
+            ),
+            _ => (
+                if down { CGEventType::OtherMouseDown } else { CGEventType::OtherMouseUp },
+                CGMouseButton::Center,
+            ),
+        };
 
-            let (event_type, mouse_button) = match button {
-                272 => (
-                    if down {
-                        K_CG_EVENT_LEFT_MOUSE_DOWN
-                    } else {
-                        K_CG_EVENT_LEFT_MOUSE_UP
-                    },
-                    K_CG_MOUSE_BUTTON_LEFT,
-                ),
-                273 => (
-                    if down {
-                        K_CG_EVENT_RIGHT_MOUSE_DOWN
-                    } else {
-                        K_CG_EVENT_RIGHT_MOUSE_UP
-                    },
-                    K_CG_MOUSE_BUTTON_RIGHT,
-                ),
-                274 => (
-                    if down {
-                        K_CG_EVENT_OTHER_MOUSE_DOWN
-                    } else {
-                        K_CG_EVENT_OTHER_MOUSE_UP
-                    },
-                    K_CG_MOUSE_BUTTON_CENTER,
-                ),
-                _ => return Ok(()),
-            };
-
-            let ev = CGEventCreateMouseEvent(ptr::null(), event_type, p, mouse_button);
-            ensure!(
-                !ev.is_null(),
-                Error::Internal("CGEventCreateMouseEvent returned null".to_string()),
-            );
-            CGEventPost(K_CG_EVENT_TAP_HID, ev);
-            CFRelease(ev as CFTypeRef);
-            Ok(())
-        }
+        let ev = CGEvent::new_mouse_event(source, event_type, CGPoint { x, y }, mouse_button)
+            .map_err(|_| Error::Internal("CGEventCreateMouseEvent failed".to_string()))?;
+        ev.post(CGEventTapLocation::HID);
+        Ok(())
     }
 
-    pub(super) fn post_scroll(
-        unit: super::ScrollUnit,
-        horizontal: i32,
-        vertical: i32,
-        control: bool,
-    ) -> Result<()> {
-        unsafe {
-            let units = match unit {
-                super::ScrollUnit::Line => K_CG_SCROLL_EVENT_UNIT_LINE,
-                super::ScrollUnit::Pixel => K_CG_SCROLL_EVENT_UNIT_PIXEL,
-            };
-            let ev = CGEventCreateScrollWheelEvent(ptr::null(), units, 2, vertical, horizontal);
-            ensure!(
-                !ev.is_null(),
-                Error::Internal("CGEventCreateScrollWheelEvent returned null".to_string()),
-            );
-            if control {
-                CGEventSetFlags(ev, K_CG_EVENT_FLAG_MASK_CONTROL);
-            }
-            CGEventPost(K_CG_EVENT_TAP_HID, ev);
-            CFRelease(ev as CFTypeRef);
-            Ok(())
-        }
-    }
+    pub(super) fn post_scroll(unit: ScrollUnit, dx: i32, dy: i32, with_ctrl: bool) -> Result<()> {
+        let source = event_source()?;
+        let units = match unit {
+            ScrollUnit::Line => ScrollEventUnit::LINE,
+            ScrollUnit::Pixel => ScrollEventUnit::PIXEL,
+        };
 
-    fn display_size() -> Result<(usize, usize)> {
-        unsafe {
-            let display = CGMainDisplayID();
-            let image = CGDisplayCreateImage(display);
-            ensure!(
-                !image.is_null(),
-                Error::Internal("CGDisplayCreateImage returned null".to_string()),
-            );
-            let w = CGImageGetWidth(image);
-            let h = CGImageGetHeight(image);
-            CFRelease(image as CFTypeRef);
-            Ok((w, h))
+        let ev = CGEvent::new_scroll_event(source, units, 2, dy, dx, 0)
+            .map_err(|_| Error::Internal("CGEventCreateScrollWheelEvent failed".to_string()))?;
+        if with_ctrl {
+            ev.set_flags(CGEventFlags::CGEventFlagControl);
         }
+        ev.post(CGEventTapLocation::HID);
+        Ok(())
     }
 
     pub(super) fn main_display_scale_factor_and_dpi() -> Result<(i32, Option<u32>)> {
-        unsafe {
-            let display = CGMainDisplayID();
-            let mode = CGDisplayCopyDisplayMode(display);
-            ensure!(
-                !mode.is_null(),
-                Error::Internal("CGDisplayCopyDisplayMode returned null".to_string()),
-            );
+        let display = CGDisplay::main();
+        let mode = display
+            .display_mode()
+            .ok_or_else(|| Error::Internal("CGDisplayCopyDisplayMode returned null".to_string()))?;
+        let width_points = mode.width() as f64;
+        let height_points = mode.height() as f64;
+        let width_pixels = mode.pixel_width() as f64;
+        let _height_pixels = mode.pixel_height() as f64;
+        let scale_factor = if width_points > 0.0 && height_points > 0.0 {
+            let s = (width_pixels / width_points).round();
+            s.max(1.0) as i32
+        } else {
+            1
+        };
 
-            let width_points = CGDisplayModeGetWidth(mode) as f64;
-            let height_points = CGDisplayModeGetHeight(mode) as f64;
-            let width_pixels = CGDisplayModeGetPixelWidth(mode) as f64;
-            let height_pixels = CGDisplayModeGetPixelHeight(mode) as f64;
+        let screen_mm = display.screen_size();
+        let dpi = if screen_mm.width > 0.0 {
+            let inches = screen_mm.width / 25.4;
+            Some((width_pixels / inches).round() as u32)
+        } else {
+            None
+        };
 
-            // CGDisplayModeRef is a CFType.
-            CFRelease(mode as CFTypeRef);
+        Ok((scale_factor, dpi))
+    }
 
-            ensure!(
-                width_points > 0.0 && height_points > 0.0,
-                Error::Internal("invalid display mode size".to_string()),
-            );
-            ensure!(
-                width_pixels > 0.0 && height_pixels > 0.0,
-                Error::Internal("invalid display mode pixel size".to_string()),
-            );
-
-            let scale_w = width_pixels / width_points;
-            let scale_h = height_pixels / height_points;
-            let mut scale = scale_w;
-            // Prefer width-based scale; if height differs significantly, fall back to average.
-            if (scale_w - scale_h).abs() > 0.1 {
-                scale = (scale_w + scale_h) / 2.0;
-            }
-            let scale_factor = (scale.round() as i32).max(1);
-
-            // Best-effort DPI calculation.
-            let screen_mm = CGDisplayScreenSize(display);
-            let dpi = if screen_mm.width > 0.0 {
-                let inches = screen_mm.width / 25.4;
-                if inches > 0.0 {
-                    Some((width_pixels / inches).round() as u32)
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-
-            Ok((scale_factor, dpi))
-        }
+    fn event_source() -> Result<CGEventSource> {
+        CGEventSource::new(CGEventSourceStateID::CombinedSessionState)
+            .map_err(|_| Error::Internal("CGEventSourceCreate failed".to_string()))
     }
 }
-
-use macos::capture_main_display_bgra;
-use macos::post_mouse_button;
-use macos::post_mouse_motion;
-use macos::post_scroll;

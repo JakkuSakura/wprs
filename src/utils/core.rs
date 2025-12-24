@@ -62,7 +62,8 @@ pub fn configure_tracing<P: AsRef<Path>>(
         // .with_binary_name(true, None)
         // .with_process_id(true)
         .with_thread_ids(true)
-        .with_file(true)
+        // module already covers file name
+        // .with_file(true)
         .with_line_number(true)
         .with_span_events(FmtSpan::NEW | FmtSpan::CLOSE);
 

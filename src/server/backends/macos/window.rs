@@ -350,515 +350,261 @@ fn post_mouse_button(down: bool, button: u32, x: f64, y: f64) -> Result<()> {
 mod macos {
     use super::*;
     use crate::error::ensure;
-    use std::ffi::c_void;
-    use std::ptr;
-
-    type Boolean = u8;
-    type CFIndex = isize;
-    type CFTypeRef = *const c_void;
-    type CFArrayRef = *const c_void;
-    type CFDictionaryRef = *const c_void;
-    type CFStringRef = *const c_void;
-    type CFNumberRef = *const c_void;
-    type CFDataRef = *const c_void;
-    type CGImageRef = *const c_void;
-    type CGDataProviderRef = *const c_void;
-    type CGWindowID = u32;
-    type CGEventRef = *const c_void;
-    type CGEventType = u32;
-    type CGMouseButton = u32;
-    type CGEventTapLocation = u32;
-
-    #[repr(C)]
-    #[derive(Copy, Clone)]
-    struct CGPoint {
-        x: f64,
-        y: f64,
-    }
-
-    #[repr(C)]
-    #[derive(Copy, Clone)]
-    struct CGSize {
-        width: f64,
-        height: f64,
-    }
-
-    #[repr(C)]
-    #[derive(Copy, Clone)]
-    struct CGRect {
-        origin: CGPoint,
-        size: CGSize,
-    }
-
-    #[link(name = "CoreGraphics", kind = "framework")]
-    unsafe extern "C" {
-        fn CGMainDisplayID() -> u32;
-        fn CGDisplayCopyDisplayMode(display_id: u32) -> *const c_void;
-        fn CGDisplayModeGetWidth(mode: *const c_void) -> usize;
-        fn CGDisplayModeGetHeight(mode: *const c_void) -> usize;
-        fn CGDisplayModeGetPixelWidth(mode: *const c_void) -> usize;
-        fn CGDisplayModeGetPixelHeight(mode: *const c_void) -> usize;
-        fn CGDisplayScreenSize(display_id: u32) -> CGSize;
-
-        fn CGWindowListCopyWindowInfo(option: u32, relative_to_window: CGWindowID) -> CFArrayRef;
-        fn CGWindowListCreateImage(
-            rect: CGRect,
-            option: u32,
-            window_id: CGWindowID,
-            image_option: u32,
-        ) -> CGImageRef;
-        fn CGRectMakeWithDictionaryRepresentation(
-            dict: CFDictionaryRef,
-            rect: *mut CGRect,
-        ) -> Boolean;
-
-        fn CGImageGetWidth(image: CGImageRef) -> usize;
-        fn CGImageGetHeight(image: CGImageRef) -> usize;
-        fn CGImageGetBytesPerRow(image: CGImageRef) -> usize;
-        fn CGImageGetBitsPerPixel(image: CGImageRef) -> usize;
-        fn CGImageGetBitsPerComponent(image: CGImageRef) -> usize;
-        fn CGImageGetDataProvider(image: CGImageRef) -> CGDataProviderRef;
-        fn CGDataProviderCopyData(provider: CGDataProviderRef) -> CFDataRef;
-
-        fn CGEventCreateMouseEvent(
-            source: *const c_void,
-            event_type: CGEventType,
-            mouse_cursor_position: CGPoint,
-            mouse_button: CGMouseButton,
-        ) -> CGEventRef;
-
-        fn CGEventPost(tap: CGEventTapLocation, event: CGEventRef);
-    }
-
-    #[link(name = "CoreFoundation", kind = "framework")]
-    unsafe extern "C" {
-        fn CFArrayGetCount(the_array: CFArrayRef) -> CFIndex;
-        fn CFArrayGetValueAtIndex(the_array: CFArrayRef, idx: CFIndex) -> *const c_void;
-        fn CFDictionaryGetValue(the_dict: CFDictionaryRef, key: *const c_void) -> *const c_void;
-        fn CFStringGetCStringPtr(the_string: CFStringRef, encoding: u32) -> *const u8;
-        fn CFStringGetLength(the_string: CFStringRef) -> CFIndex;
-        fn CFStringGetMaximumSizeForEncoding(length: CFIndex, encoding: u32) -> CFIndex;
-        fn CFStringGetCString(
-            the_string: CFStringRef,
-            buffer: *mut u8,
-            buffer_size: CFIndex,
-            encoding: u32,
-        ) -> Boolean;
-        fn CFNumberGetValue(number: CFNumberRef, the_type: i32, value_ptr: *mut c_void) -> Boolean;
-        fn CFDataGetLength(the_data: CFDataRef) -> CFIndex;
-        fn CFDataGetBytePtr(the_data: CFDataRef) -> *const u8;
-        fn CFRelease(cf: CFTypeRef);
-    }
-
-    // CFStringRef keys exported by CoreGraphics.
-    unsafe extern "C" {
-        static kCGWindowNumber: CFStringRef;
-        static kCGWindowOwnerPID: CFStringRef;
-        static kCGWindowOwnerName: CFStringRef;
-        static kCGWindowName: CFStringRef;
-        static kCGWindowBounds: CFStringRef;
-        static kCGWindowLayer: CFStringRef;
-        static kCGWindowAlpha: CFStringRef;
-    }
-
-    const K_CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
-
-    const K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY: u32 = 1;
-    const K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS: u32 = 16;
-    const K_CG_WINDOW_LIST_OPTION_INCLUDING_WINDOW: u32 = 8;
-    const K_CG_WINDOW_IMAGE_BOUNDS_IGNORE_FRAMING: u32 = 1;
-    const K_CG_WINDOW_IMAGE_BEST_RESOLUTION: u32 = 2;
-
-    const K_CG_EVENT_TAP_HID: CGEventTapLocation = 0;
-
-    const K_CG_EVENT_MOUSE_MOVED: CGEventType = 5;
-    const K_CG_EVENT_LEFT_MOUSE_DOWN: CGEventType = 1;
-    const K_CG_EVENT_LEFT_MOUSE_UP: CGEventType = 2;
-    const K_CG_EVENT_RIGHT_MOUSE_DOWN: CGEventType = 3;
-    const K_CG_EVENT_RIGHT_MOUSE_UP: CGEventType = 4;
-    const K_CG_EVENT_OTHER_MOUSE_DOWN: CGEventType = 25;
-    const K_CG_EVENT_OTHER_MOUSE_UP: CGEventType = 26;
-    const K_CG_EVENT_LEFT_MOUSE_DRAGGED: CGEventType = 6;
-    const K_CG_EVENT_RIGHT_MOUSE_DRAGGED: CGEventType = 7;
-    const K_CG_EVENT_OTHER_MOUSE_DRAGGED: CGEventType = 27;
-
-    const K_CG_MOUSE_BUTTON_LEFT: CGMouseButton = 0;
-    const K_CG_MOUSE_BUTTON_RIGHT: CGMouseButton = 1;
-    const K_CG_MOUSE_BUTTON_CENTER: CGMouseButton = 2;
+    use core_foundation::base::{CFType, TCFType};
+    use core_foundation::dictionary::CFDictionary;
+    use core_foundation::number::CFNumber;
+    use core_foundation::string::{CFString, CFStringRef};
+    use core_graphics::display::CGDisplay;
+    use core_graphics::event::{
+        CGEvent,
+        CGEventTapLocation,
+        CGEventType,
+        CGMouseButton,
+    };
+    use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
+    use core_graphics::geometry::{CGPoint, CGRect, CGSize};
+    use core_graphics::window;
 
     pub(super) fn list_windows() -> Result<Vec<WindowInfo>> {
-        unsafe {
-            let options =
-                K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY | K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS;
-            let array = CGWindowListCopyWindowInfo(options, 0);
-            ensure!(
-                !array.is_null(),
-                Error::Internal("CGWindowListCopyWindowInfo returned null".to_string()),
-            );
+        let options = window::kCGWindowListOptionOnScreenOnly
+            | window::kCGWindowListExcludeDesktopElements;
+        let array = window::copy_window_info(options, window::kCGNullWindowID)
+            .ok_or_else(|| Error::Internal("CGWindowListCopyWindowInfo returned null".to_string()))?;
 
-            let count = CFArrayGetCount(array);
-            let mut out = Vec::new();
-            for idx in 0..count {
-                let dict = CFArrayGetValueAtIndex(array, idx) as CFDictionaryRef;
-                if dict.is_null() {
-                    continue;
-                }
+        let mut out = Vec::new();
+        for idx in 0..array.len() {
+            let dict_ref = *unsafe { array.get_unchecked(idx) };
+            let dict: CFDictionary<CFString, CFType> = unsafe {
+                CFDictionary::wrap_under_get_rule(dict_ref as _)
+            };
 
-                let window_id = cf_dict_u32(dict, kCGWindowNumber)?;
-                let layer = cf_dict_i64(dict, kCGWindowLayer).unwrap_or(0);
-                if layer != 0 {
-                    continue;
-                }
-
-                let alpha = cf_dict_f64(dict, kCGWindowAlpha).unwrap_or(1.0);
-                if alpha <= 0.0 {
-                    continue;
-                }
-
-                let owner =
-                    cf_dict_string(dict, kCGWindowOwnerName).unwrap_or_else(|| "macos".to_string());
-                let owner_pid = cf_dict_i64(dict, kCGWindowOwnerPID).unwrap_or(0).max(0) as u32;
-                let name = cf_dict_string(dict, kCGWindowName).unwrap_or_else(|| "".to_string());
-                let title = if name.is_empty() { owner.clone() } else { name };
-
-                let bounds_dict = CFDictionaryGetValue(dict, kCGWindowBounds);
-                if bounds_dict.is_null() {
-                    continue;
-                }
-
-                let mut rect = CGRect {
-                    origin: CGPoint { x: 0.0, y: 0.0 },
-                    size: CGSize {
-                        width: 0.0,
-                        height: 0.0,
-                    },
-                };
-                let ok = CGRectMakeWithDictionaryRepresentation(
-                    bounds_dict as CFDictionaryRef,
-                    &mut rect as *mut CGRect,
-                );
-                if ok == 0 {
-                    continue;
-                }
-
-                if rect.size.width < 2.0 || rect.size.height < 2.0 {
-                    continue;
-                }
-
-                out.push(WindowInfo {
-                    window_id,
-                    title,
-                    app_id: owner,
-                    owner_pid,
-                    bounds: WindowBounds {
-                        x: rect.origin.x,
-                        y: rect.origin.y,
-                        width: rect.size.width,
-                        height: rect.size.height,
-                    },
-                });
+            let window_id = match cf_dict_u32(&dict, unsafe { window::kCGWindowNumber }) {
+                Some(id) => id,
+                None => continue,
+            };
+            let layer = cf_dict_i64(&dict, unsafe { window::kCGWindowLayer }).unwrap_or(0);
+            if layer != 0 {
+                continue;
             }
 
-            CFRelease(array as CFTypeRef);
-            Ok(out)
+            let alpha = cf_dict_f64(&dict, unsafe { window::kCGWindowAlpha }).unwrap_or(1.0);
+            if alpha <= 0.0 {
+                continue;
+            }
+
+            let owner = cf_dict_string(&dict, unsafe { window::kCGWindowOwnerName })
+                .unwrap_or_else(|| "macos".to_string());
+            let owner_pid = cf_dict_i64(&dict, unsafe { window::kCGWindowOwnerPID })
+                .unwrap_or(0)
+                .max(0) as u32;
+            let name = cf_dict_string(&dict, unsafe { window::kCGWindowName }).unwrap_or_default();
+            let title = if name.is_empty() { owner.clone() } else { name };
+
+            let bounds = bounds_from_dict(&dict)
+                .ok_or_else(|| Error::Internal("missing window bounds".to_string()))?;
+            if bounds.width < 2.0 || bounds.height < 2.0 {
+                continue;
+            }
+
+            out.push(WindowInfo {
+                window_id,
+                title,
+                app_id: owner,
+                owner_pid,
+                bounds,
+            });
         }
+
+        Ok(out)
     }
 
     pub(super) fn capture_window_bgra(window_id: u32) -> Result<(BufferMetadata, Vec<u8>)> {
-        unsafe {
-            // Best-effort: capture at the bounds reported by CGWindowListCopyWindowInfo.
-            let bounds = list_windows()
-                .location(loc!())?
-                .into_iter()
-                .find(|w| w.window_id == window_id)
-                .ok_or_else(|| Error::Missing(format!("unknown window id {window_id}")))?
-                .bounds;
+        let bounds = list_windows()
+            .location(loc!())?
+            .into_iter()
+            .find(|w| w.window_id == window_id)
+            .ok_or_else(|| Error::Missing(format!("unknown window id {window_id}")))?
+            .bounds;
 
-            let rect = CGRect {
-                origin: CGPoint {
-                    x: bounds.x,
-                    y: bounds.y,
-                },
-                size: CGSize {
-                    width: bounds.width,
-                    height: bounds.height,
-                },
-            };
+        let rect = CGRect {
+            origin: CGPoint {
+                x: bounds.x,
+                y: bounds.y,
+            },
+            size: CGSize {
+                width: bounds.width,
+                height: bounds.height,
+            },
+        };
 
-            let img = CGWindowListCreateImage(
-                rect,
-                K_CG_WINDOW_LIST_OPTION_INCLUDING_WINDOW,
-                window_id,
-                K_CG_WINDOW_IMAGE_BOUNDS_IGNORE_FRAMING | K_CG_WINDOW_IMAGE_BEST_RESOLUTION,
-            );
-            ensure!(
-                !img.is_null(),
-                Error::Internal(
-                    "CGWindowListCreateImage returned null (Screen Recording permission?)"
-                        .to_string(),
-                ),
-            );
+        let image = window::create_image(
+            rect,
+            window::kCGWindowListOptionIncludingWindow,
+            window_id,
+            window::kCGWindowImageBoundsIgnoreFraming | window::kCGWindowImageBestResolution,
+        )
+        .ok_or_else(|| {
+            Error::Internal(
+                "CGWindowListCreateImage returned null (Screen Recording permission?)"
+                    .to_string(),
+            )
+        })?;
 
-            let width = CGImageGetWidth(img) as i32;
-            let height = CGImageGetHeight(img) as i32;
-            let stride = CGImageGetBytesPerRow(img) as i32;
-            let bpp = CGImageGetBitsPerPixel(img);
-            let bpc = CGImageGetBitsPerComponent(img);
+        let width = image.width() as i32;
+        let height = image.height() as i32;
+        let stride = image.bytes_per_row() as i32;
+        let bpp = image.bits_per_pixel();
+        let bpc = image.bits_per_component();
 
-            ensure!(
-                bpp == 32 && bpc == 8,
-                Error::Unsupported(format!(
-                    "unsupported capture format: bpp={bpp}, bpc={bpc}"
-                )),
-            );
-            ensure!(
-                stride > 0 && width > 0 && height > 0,
-                Error::Internal("invalid captured dimensions".to_string()),
-            );
+        ensure!(
+            bpp == 32 && bpc == 8,
+            Error::Unsupported(format!(
+                "unsupported capture format: bpp={bpp}, bpc={bpc}"
+            )),
+        );
+        ensure!(
+            stride > 0 && width > 0 && height > 0,
+            Error::Internal("invalid captured dimensions".to_string()),
+        );
 
-            let provider = CGImageGetDataProvider(img);
-            ensure!(
-                !provider.is_null(),
-                Error::Internal("CGImageGetDataProvider returned null".to_string()),
-            );
-            let cf_data = CGDataProviderCopyData(provider);
-            ensure!(
-                !cf_data.is_null(),
-                Error::Internal("CGDataProviderCopyData returned null".to_string()),
-            );
-            let len = CFDataGetLength(cf_data) as usize;
-            let ptr = CFDataGetBytePtr(cf_data);
-            ensure!(
-                !ptr.is_null(),
-                Error::Internal("CFDataGetBytePtr returned null".to_string()),
-            );
-            ensure!(
-                len >= (height as usize) * (stride as usize),
-                Error::Internal("captured buffer is smaller than expected".to_string()),
-            );
+        let data = image.data();
+        let bytes = data.bytes();
+        ensure!(
+            bytes.len() >= (stride as usize) * (height as usize),
+            Error::Internal("CGImage data smaller than expected".to_string()),
+        );
 
-            let bytes = std::slice::from_raw_parts(ptr, (height as usize) * (stride as usize));
-            let out = bytes.to_vec();
+        let metadata = BufferMetadata {
+            width,
+            height,
+            stride,
+            format: crate::protocols::wprs::wayland::BufferFormat::Argb8888,
+        };
 
-            CFRelease(cf_data as CFTypeRef);
-            CFRelease(img as CFTypeRef);
-
-            Ok((
-                BufferMetadata {
-                    width,
-                    height,
-                    stride,
-                    format: wayland::BufferFormat::Argb8888,
-                },
-                out,
-            ))
-        }
+        Ok((metadata, bytes.to_vec()))
     }
 
     pub(super) fn post_mouse_motion(button_mask: u32, x: f64, y: f64) -> Result<()> {
-        unsafe {
-            let p = CGPoint { x, y };
+        let source = event_source()?;
+        let (event_type, button) = match button_mask {
+            mask if (mask & (1 << 0)) != 0 => (CGEventType::LeftMouseDragged, CGMouseButton::Left),
+            mask if (mask & (1 << 1)) != 0 => (CGEventType::RightMouseDragged, CGMouseButton::Right),
+            mask if (mask & (1 << 2)) != 0 => (CGEventType::OtherMouseDragged, CGMouseButton::Center),
+            _ => (CGEventType::MouseMoved, CGMouseButton::Left),
+        };
 
-            let (event_type, mouse_button) = if button_mask & (1 << 0) != 0 {
-                (K_CG_EVENT_LEFT_MOUSE_DRAGGED, K_CG_MOUSE_BUTTON_LEFT)
-            } else if button_mask & (1 << 1) != 0 {
-                (K_CG_EVENT_RIGHT_MOUSE_DRAGGED, K_CG_MOUSE_BUTTON_RIGHT)
-            } else if button_mask & (1 << 2) != 0 {
-                (K_CG_EVENT_OTHER_MOUSE_DRAGGED, K_CG_MOUSE_BUTTON_CENTER)
-            } else {
-                (K_CG_EVENT_MOUSE_MOVED, K_CG_MOUSE_BUTTON_LEFT)
-            };
-
-            let ev = CGEventCreateMouseEvent(ptr::null(), event_type, p, mouse_button);
-            ensure!(
-                !ev.is_null(),
-                Error::Internal("CGEventCreateMouseEvent returned null".to_string()),
-            );
-            CGEventPost(K_CG_EVENT_TAP_HID, ev);
-            CFRelease(ev as CFTypeRef);
-            Ok(())
-        }
+        let ev = CGEvent::new_mouse_event(source, event_type, CGPoint { x, y }, button)
+            .map_err(|_| Error::Internal("CGEventCreateMouseEvent failed".to_string()))?;
+        ev.post(CGEventTapLocation::HID);
+        Ok(())
     }
 
     pub(super) fn post_mouse_button(down: bool, button: u32, x: f64, y: f64) -> Result<()> {
-        unsafe {
-            let p = CGPoint { x, y };
+        let source = event_source()?;
+        let (event_type, mouse_button) = match button {
+            272 => (
+                if down { CGEventType::LeftMouseDown } else { CGEventType::LeftMouseUp },
+                CGMouseButton::Left,
+            ),
+            273 => (
+                if down { CGEventType::RightMouseDown } else { CGEventType::RightMouseUp },
+                CGMouseButton::Right,
+            ),
+            _ => (
+                if down { CGEventType::OtherMouseDown } else { CGEventType::OtherMouseUp },
+                CGMouseButton::Center,
+            ),
+        };
 
-            let (event_type, mouse_button) = match button {
-                272 => (
-                    if down {
-                        K_CG_EVENT_LEFT_MOUSE_DOWN
-                    } else {
-                        K_CG_EVENT_LEFT_MOUSE_UP
-                    },
-                    K_CG_MOUSE_BUTTON_LEFT,
-                ),
-                273 => (
-                    if down {
-                        K_CG_EVENT_RIGHT_MOUSE_DOWN
-                    } else {
-                        K_CG_EVENT_RIGHT_MOUSE_UP
-                    },
-                    K_CG_MOUSE_BUTTON_RIGHT,
-                ),
-                274 => (
-                    if down {
-                        K_CG_EVENT_OTHER_MOUSE_DOWN
-                    } else {
-                        K_CG_EVENT_OTHER_MOUSE_UP
-                    },
-                    K_CG_MOUSE_BUTTON_CENTER,
-                ),
-                _ => return Ok(()),
-            };
-
-            let ev = CGEventCreateMouseEvent(ptr::null(), event_type, p, mouse_button);
-            ensure!(
-                !ev.is_null(),
-                Error::Internal("CGEventCreateMouseEvent returned null".to_string()),
-            );
-            CGEventPost(K_CG_EVENT_TAP_HID, ev);
-            CFRelease(ev as CFTypeRef);
-            Ok(())
-        }
+        let ev = CGEvent::new_mouse_event(source, event_type, CGPoint { x, y }, mouse_button)
+            .map_err(|_| Error::Internal("CGEventCreateMouseEvent failed".to_string()))?;
+        ev.post(CGEventTapLocation::HID);
+        Ok(())
     }
+
 
     pub(super) fn main_display_scale_factor_and_dpi() -> Result<(i32, Option<u32>)> {
-        unsafe {
-            let display = CGMainDisplayID();
-            let mode = CGDisplayCopyDisplayMode(display);
-            ensure!(
-                !mode.is_null(),
-                Error::Internal("CGDisplayCopyDisplayMode returned null".to_string()),
-            );
+        let display = CGDisplay::main();
+        let mode = display
+            .display_mode()
+            .ok_or_else(|| Error::Internal("CGDisplayCopyDisplayMode returned null".to_string()))?;
+        let width_points = mode.width() as f64;
+        let height_points = mode.height() as f64;
+        let width_pixels = mode.pixel_width() as f64;
+        let _height_pixels = mode.pixel_height() as f64;
+        let scale_factor = if width_points > 0.0 && height_points > 0.0 {
+            let s = (width_pixels / width_points).round();
+            s.max(1.0) as i32
+        } else {
+            1
+        };
 
-            let width_points = CGDisplayModeGetWidth(mode) as f64;
-            let height_points = CGDisplayModeGetHeight(mode) as f64;
-            let width_pixels = CGDisplayModeGetPixelWidth(mode) as f64;
-            let height_pixels = CGDisplayModeGetPixelHeight(mode) as f64;
+        let screen_mm = display.screen_size();
+        let dpi = if screen_mm.width > 0.0 {
+            let inches = screen_mm.width / 25.4;
+            Some((width_pixels / inches).round() as u32)
+        } else {
+            None
+        };
 
-            CFRelease(mode as CFTypeRef);
-
-            ensure!(
-                width_points > 0.0 && height_points > 0.0,
-                Error::Internal("invalid display mode size".to_string()),
-            );
-            ensure!(
-                width_pixels > 0.0 && height_pixels > 0.0,
-                Error::Internal("invalid display mode pixel size".to_string()),
-            );
-
-            let scale_w = width_pixels / width_points;
-            let scale_h = height_pixels / height_points;
-            let mut scale = scale_w;
-            if (scale_w - scale_h).abs() > 0.1 {
-                scale = (scale_w + scale_h) / 2.0;
-            }
-            let scale_factor = (scale.round() as i32).max(1);
-
-            let screen_mm = CGDisplayScreenSize(display);
-            let dpi = if screen_mm.width > 0.0 {
-                let inches = screen_mm.width / 25.4;
-                if inches > 0.0 {
-                    Some((width_pixels / inches).round() as u32)
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-
-            Ok((scale_factor, dpi))
-        }
+        Ok((scale_factor, dpi))
     }
 
-    fn cf_dict_u32(dict: CFDictionaryRef, key: CFStringRef) -> Result<u32> {
-        let v = unsafe { CFDictionaryGetValue(dict, key) };
-        ensure!(
-            !v.is_null(),
-            Error::Internal("missing required key".to_string()),
-        );
-        let mut out: i64 = 0;
-        let ok =
-            unsafe { CFNumberGetValue(v as CFNumberRef, 4, &mut out as *mut i64 as *mut c_void) };
-        ensure!(
-            ok != 0,
-            Error::Internal("CFNumberGetValue failed".to_string()),
-        );
-        Ok(out as u32)
+    fn event_source() -> Result<CGEventSource> {
+        CGEventSource::new(CGEventSourceStateID::CombinedSessionState)
+            .map_err(|_| Error::Internal("CGEventSourceCreate failed".to_string()))
     }
 
-    fn cf_dict_i64(dict: CFDictionaryRef, key: CFStringRef) -> Option<i64> {
-        unsafe {
-            let v = CFDictionaryGetValue(dict, key);
-            if v.is_null() {
-                return None;
-            }
-            let mut out: i64 = 0;
-            let ok = CFNumberGetValue(v as CFNumberRef, 4, &mut out as *mut i64 as *mut c_void);
-            if ok == 0 {
-                return None;
-            }
-            Some(out)
-        }
+    fn cf_dict_string(dict: &CFDictionary<CFString, CFType>, key: CFStringRef) -> Option<String> {
+        let key = unsafe { CFString::wrap_under_get_rule(key) };
+        dict.find(key)
+            .and_then(|value| value.downcast::<CFString>())
+            .map(|value| value.to_string())
     }
 
-    fn cf_dict_f64(dict: CFDictionaryRef, key: CFStringRef) -> Option<f64> {
-        unsafe {
-            let v = CFDictionaryGetValue(dict, key);
-            if v.is_null() {
-                return None;
-            }
-            let mut out: f64 = 0.0;
-            let ok = CFNumberGetValue(v as CFNumberRef, 13, &mut out as *mut f64 as *mut c_void);
-            if ok == 0 {
-                return None;
-            }
-            Some(out)
-        }
+    fn cf_dict_i64(dict: &CFDictionary<CFString, CFType>, key: CFStringRef) -> Option<i64> {
+        let key = unsafe { CFString::wrap_under_get_rule(key) };
+        dict.find(key)
+            .and_then(|value| value.downcast::<CFNumber>())
+            .and_then(|value| value.to_i64())
     }
 
-    fn cf_dict_string(dict: CFDictionaryRef, key: CFStringRef) -> Option<String> {
-        unsafe {
-            let v = CFDictionaryGetValue(dict, key);
-            if v.is_null() {
-                return None;
-            }
-            cf_string_to_string(v as CFStringRef)
-        }
+    fn cf_dict_u32(dict: &CFDictionary<CFString, CFType>, key: CFStringRef) -> Option<u32> {
+        cf_dict_i64(dict, key).and_then(|val| u32::try_from(val).ok())
     }
 
-    fn cf_string_to_string(s: CFStringRef) -> Option<String> {
-        unsafe {
-            if s.is_null() {
-                return None;
-            }
-            let cptr = CFStringGetCStringPtr(s, K_CF_STRING_ENCODING_UTF8);
-            if !cptr.is_null() {
-                let cstr = std::ffi::CStr::from_ptr(cptr as *const i8);
-                return Some(cstr.to_string_lossy().into_owned());
-            }
+    fn cf_dict_f64(dict: &CFDictionary<CFString, CFType>, key: CFStringRef) -> Option<f64> {
+        let key = unsafe { CFString::wrap_under_get_rule(key) };
+        dict.find(key)
+            .and_then(|value| value.downcast::<CFNumber>())
+            .and_then(|value| value.to_f64())
+    }
 
-            let length = CFStringGetLength(s);
-            if length <= 0 {
-                return Some(String::new());
-            }
-            let max = CFStringGetMaximumSizeForEncoding(length, K_CF_STRING_ENCODING_UTF8);
-            if max <= 0 {
-                return None;
-            }
-            let mut buf = vec![0u8; (max as usize) + 1];
-            let ok = CFStringGetCString(
-                s,
-                buf.as_mut_ptr(),
-                buf.len() as CFIndex,
-                K_CF_STRING_ENCODING_UTF8,
-            );
-            if ok == 0 {
-                return None;
-            }
-            let cstr = std::ffi::CStr::from_ptr(buf.as_ptr() as *const i8);
-            Some(cstr.to_string_lossy().into_owned())
-        }
+    fn bounds_from_dict(dict: &CFDictionary<CFString, CFType>) -> Option<WindowBounds> {
+        let key = unsafe { CFString::wrap_under_get_rule(window::kCGWindowBounds) };
+        let bounds_value = dict.find(key)?;
+        let bounds_dict_untyped = bounds_value.downcast::<CFDictionary>()?;
+        let bounds_dict: CFDictionary<CFString, CFType> = unsafe {
+            CFDictionary::wrap_under_get_rule(bounds_dict_untyped.as_concrete_TypeRef())
+        };
+
+        let x = dict_value_f64(&bounds_dict, "X")?;
+        let y = dict_value_f64(&bounds_dict, "Y")?;
+        let width = dict_value_f64(&bounds_dict, "Width")?;
+        let height = dict_value_f64(&bounds_dict, "Height")?;
+
+        Some(WindowBounds {
+            x,
+            y,
+            width,
+            height,
+        })
+    }
+
+    fn dict_value_f64(dict: &CFDictionary<CFString, CFType>, key: &str) -> Option<f64> {
+        let key = CFString::new(key);
+        dict.find(&key)
+            .and_then(|value| value.downcast::<CFNumber>())
+            .and_then(|value| value.to_f64())
     }
 }
