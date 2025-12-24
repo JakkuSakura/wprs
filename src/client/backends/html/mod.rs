@@ -24,10 +24,11 @@ use crate::client::backend::ClientBackendConfig;
 use crate::client::backend::ClientContext;
 use crate::client::state::ClientUpdateBatch;
 use crate::client::state::drain_client_updates;
+use crate::client::window_manager::WindowInfo;
+use crate::client::window_manager::WindowManager;
 use crate::prelude::*;
 use crate::protocols::wprs as proto;
 use crate::protocols::wprs::transport;
-use crate::protocols::wprs::wayland::ClientSurface;
 use crate::protocols::wprs::wayland::WlSurfaceId;
 
 pub struct HtmlClientBackend {
@@ -112,6 +113,7 @@ fn run_event_loop(ctx: ClientContext, config: ClientBackendConfig) -> Result<()>
 struct HtmlPresenter {
     broadcaster: broadcast::Sender<WireMessage>,
     surfaces: Arc<Mutex<HashMap<WlSurfaceId, SurfaceInfo>>>,
+    window_manager: WindowManager,
 }
 
 impl HtmlPresenter {
@@ -122,15 +124,22 @@ impl HtmlPresenter {
         Self {
             broadcaster,
             surfaces,
+            window_manager: WindowManager::new(),
         }
     }
 
     fn apply_updates(&mut self, batch: ClientUpdateBatch) -> Result<()> {
-        for removed in batch.surfaces.removed {
+        let window_delta = self
+            .window_manager
+            .apply_surface_updates(&batch.surfaces.updated, &batch.surfaces.removed);
+        for removed in window_delta.removed {
             self.remove_surface(removed)?;
         }
+        for upsert in window_delta.upserts {
+            self.announce_window(upsert)?;
+        }
+
         for updated in batch.surfaces.updated {
-            self.maybe_announce_surface(updated.id, &updated)?;
             if let Some(frame) = encode_surface_png(&updated)? {
                 let msg = encode_frame_message(updated.id, frame);
                 let _ = self.broadcaster.send(WireMessage::Binary(msg));
@@ -139,30 +148,22 @@ impl HtmlPresenter {
         Ok(())
     }
 
-    fn maybe_announce_surface(
-        &mut self,
-        surface_id: WlSurfaceId,
-        state: &proto::wayland::SurfaceState,
-    ) -> Result<()> {
-        let title = match state.role.as_ref() {
-            Some(proto::wayland::Role::XdgToplevel(toplevel)) => toplevel.title.clone(),
-            _ => return Ok(()),
-        };
-
+    fn announce_window(&mut self, window: WindowInfo) -> Result<()> {
+        let title = window.display_title().map(|s| s.to_string());
         let mut surfaces = self
             .surfaces
             .lock()
             .map_err(|err| Error::Internal(format!("surface lock poisoned: {err:?}")))?;
-        match surfaces.entry(surface_id) {
+        match surfaces.entry(window.id) {
             Entry::Vacant(entry) => {
                 entry.insert(SurfaceInfo { title: title.clone() });
-                let msg = surface_event_json(surface_id, title.as_deref());
+                let msg = surface_event_json(window.id, title.as_deref());
                 let _ = self.broadcaster.send(WireMessage::Text(msg));
             }
             Entry::Occupied(mut entry) => {
                 if entry.get().title != title {
                     entry.get_mut().title = title.clone();
-                    let msg = surface_event_json(surface_id, title.as_deref());
+                    let msg = surface_event_json(window.id, title.as_deref());
                     let _ = self.broadcaster.send(WireMessage::Text(msg));
                 }
             }
@@ -170,13 +171,13 @@ impl HtmlPresenter {
         Ok(())
     }
 
-    fn remove_surface(&mut self, surface: ClientSurface) -> Result<()> {
+    fn remove_surface(&mut self, surface_id: WlSurfaceId) -> Result<()> {
         let mut surfaces = self
             .surfaces
             .lock()
             .map_err(|err| Error::Internal(format!("surface lock poisoned: {err:?}")))?;
-        if surfaces.remove(&surface.surface).is_some() {
-            let msg = surface_destroyed_json(surface.surface);
+        if surfaces.remove(&surface_id).is_some() {
+            let msg = surface_destroyed_json(surface_id);
             let _ = self.broadcaster.send(WireMessage::Text(msg));
         }
         Ok(())

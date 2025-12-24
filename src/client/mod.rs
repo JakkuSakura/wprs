@@ -7,6 +7,7 @@ pub mod runner;
 pub mod state;
 pub mod wayland_server;
 pub mod surface_registry;
+pub mod window_manager;
 
 #[cfg(feature = "wayland-client")]
 pub use backends::wayland::*;
