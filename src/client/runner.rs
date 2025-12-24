@@ -11,7 +11,6 @@ use crate::client::resolve_client_backend;
 use crate::client::state::ClientState;
 use crate::client::config::ClientBackend;
 use crate::client::config::WprscConfig;
-use crate::client::config::WprscRole;
 use crate::prelude::*;
 use crate::protocols::wprs as proto;
 use crate::protocols::wprs::endpoint::Endpoint;
@@ -20,10 +19,67 @@ use crate::protocols::wprs::serializer::Serializer;
 use crate::protocols::wprs::transport;
 
 pub fn run_wprsc(config: WprscConfig) -> Result<()> {
-    match config.role {
-        WprscRole::Viewer => run_viewer(config).location(loc!()),
-        WprscRole::WaylandServer => crate::client::wayland_server::run(config).location(loc!()),
+    if config.forward_only {
+        let endpoint = config
+            .endpoint
+            .clone()
+            .ok_or_else(|| {
+                Error::InvalidArgument("--forward-only requires --endpoint=ssh://...".to_string())
+            })
+            .location(loc!())?;
+
+        let (local_endpoint, guard) = setup_client_transport(endpoint).location(loc!())?;
+        let _guard = guard
+            .ok_or_else(|| {
+                Error::InvalidArgument("--forward-only requires an ssh:// endpoint".to_string())
+            })
+            .location(loc!())?;
+
+        println!("{local_endpoint}");
+        loop {
+            std::thread::sleep(Duration::from_secs(3600));
+        }
     }
+
+    let serializer_options = proto::serializer::SerializerClientOptions {
+        auto_reconnect: config.auto_reconnect,
+        on_connect: vec![proto::serializer::SendType::Object(proto::types::Event::WprsClientConnect)],
+    };
+
+    let serializer: Serializer<proto::types::Event, proto::types::Request> =
+        match &config.endpoint {
+            Some(endpoint) => {
+                Serializer::new_client_endpoint_with_options(endpoint.clone(), serializer_options)
+                    .with_context(loc!(), || {
+                    format!("Serializer failed to initialize for endpoint {endpoint:?}.")
+                })?
+            },
+            None => {
+                fs::create_dir_all(config.socket.parent().location(loc!())?).location(loc!())?;
+                Serializer::new_client_with_options(&config.socket, serializer_options)
+                    .with_context(loc!(), || {
+                        format!(
+                            "Serializer failed to initialize for socket {:?}.",
+                            &config.socket
+                        )
+                    })?
+            },
+        };
+
+    run_client_for_serializer(
+        serializer,
+        resolve_client_backend(config.present_backend).location(loc!())?,
+        ClientBackendConfig {
+            title_prefix: config.title_prefix,
+            control_socket: config.control_socket,
+            keyboard_mode: config.keyboard_mode,
+            xkb_keymap_file: config.xkb_keymap_file,
+            ui_scale_factor: config.ui_scale_factor,
+            min_output_scale_factor: config.min_output_scale_factor,
+            html_bind_addr: config.html_bind_addr,
+        },
+    )
+    .location(loc!())
 }
 
 pub fn run_client_for_endpoint(
@@ -106,7 +162,6 @@ pub fn run_client_for_serializer(
                 transport::TransportCodec::ShardedRaw,
                 transport::TransportCodec::Png,
             ];
-            #[cfg(feature = "image-jpeg")]
             codecs.push(transport::TransportCodec::Jpeg);
             #[cfg(feature = "video-h264")]
             codecs.push(transport::TransportCodec::H264);
@@ -133,68 +188,4 @@ pub fn run_client_for_serializer(
             notify_rx,
         })
         .location(loc!())
-}
-
-fn run_viewer(config: WprscConfig) -> Result<()> {
-    if config.forward_only {
-        let endpoint = config
-            .endpoint
-            .clone()
-            .ok_or_else(|| {
-                Error::InvalidArgument("--forward-only requires --endpoint=ssh://...".to_string())
-            })
-            .location(loc!())?;
-
-        let (local_endpoint, guard) = setup_client_transport(endpoint).location(loc!())?;
-        let _guard = guard
-            .ok_or_else(|| {
-                Error::InvalidArgument("--forward-only requires an ssh:// endpoint".to_string())
-            })
-            .location(loc!())?;
-
-        println!("{local_endpoint}");
-        loop {
-            std::thread::sleep(Duration::from_secs(3600));
-        }
-    }
-
-    let serializer_options = proto::serializer::SerializerClientOptions {
-        auto_reconnect: config.auto_reconnect,
-        on_connect: vec![proto::serializer::SendType::Object(proto::types::Event::WprsClientConnect)],
-    };
-
-    let serializer: Serializer<proto::types::Event, proto::types::Request> =
-        match &config.endpoint {
-            Some(endpoint) => {
-                Serializer::new_client_endpoint_with_options(endpoint.clone(), serializer_options)
-                    .with_context(loc!(), || {
-                    format!("Serializer failed to initialize for endpoint {endpoint:?}.")
-                })?
-            },
-            None => {
-                fs::create_dir_all(config.socket.parent().location(loc!())?).location(loc!())?;
-                Serializer::new_client_with_options(&config.socket, serializer_options)
-                    .with_context(loc!(), || {
-                        format!(
-                            "Serializer failed to initialize for socket {:?}.",
-                            &config.socket
-                        )
-                    })?
-            },
-        };
-
-    run_client_for_serializer(
-        serializer,
-        resolve_client_backend(config.present_backend).location(loc!())?,
-        ClientBackendConfig {
-            title_prefix: config.title_prefix,
-            control_socket: config.control_socket,
-            keyboard_mode: config.keyboard_mode,
-            xkb_keymap_file: config.xkb_keymap_file,
-            ui_scale_factor: config.ui_scale_factor,
-            min_output_scale_factor: config.min_output_scale_factor,
-            html_bind_addr: config.html_bind_addr,
-        },
-    )
-    .location(loc!())
 }

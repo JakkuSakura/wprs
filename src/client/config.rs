@@ -24,13 +24,12 @@ pub enum ClientBackend {
 
     // --- Smithay feature bundle aliases ---
     //
-    // These variants exist so users can reference the same `smithay_*` feature
-    // bundle names from config/CLI. At the moment, wprsc does not have a
-    // Smithay-based presentation backend; these variants are treated as aliases
-    // to the existing `winit-wgpu` backend.
+    // These variants are accepted to keep config/CLI values compatible with
+    // server-side Smithay feature bundle names. wprsc does not implement
+    // Smithay-backed presentation; these values are treated as no-op aliases
+    // in the client.
     //
-    // Keeping them feature-gated ensures `--help` only shows values that were
-    // actually compiled into the binary.
+    // They are feature-gated so `--help` only lists values compiled in.
     #[cfg(feature = "smithay_winit_gl_wayland")]
     SmithayWinitGlWayland,
     #[cfg(feature = "smithay_winit_glow_wayland")]
@@ -77,27 +76,8 @@ impl Default for KeyboardMode {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, ValueEnum)]
-#[serde(rename_all = "kebab-case")]
-#[value(rename_all = "kebab-case")]
-pub enum WprscRole {
-    /// Connects to an existing wprs server and presents remote surfaces.
-    Viewer,
-    /// Hosts local Wayland clients (nested compositor) and presents them locally.
-    WaylandServer,
-}
-
-impl Default for WprscRole {
-    fn default() -> Self {
-        Self::Viewer
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct WprscConfig {
-    #[serde(default)]
-    pub role: WprscRole,
-
     pub socket: PathBuf,
     pub endpoint: Option<Endpoint>,
     pub control_socket: PathBuf,
@@ -138,7 +118,6 @@ pub struct WprscConfig {
 impl Default for WprscConfig {
     fn default() -> Self {
         Self {
-            role: WprscRole::default(),
             socket: config::default_socket_path(),
             endpoint: None,
             control_socket: config::default_control_socket_path("wprsc"),
@@ -211,9 +190,6 @@ pub struct WprscArgs {
     #[arg(long, value_name = "STRING")]
     pub title_prefix: Option<String>,
 
-    #[arg(long, value_name = "ROLE")]
-    pub role: Option<WprscRole>,
-
     #[arg(long, value_name = "BACKEND")]
     pub backend: Option<ClientBackend>,
 
@@ -279,9 +255,6 @@ impl WprscArgs {
         }
         if let Some(prefix) = self.title_prefix {
             cfg.title_prefix = prefix;
-        }
-        if let Some(role) = self.role {
-            cfg.role = role;
         }
         if let Some(backend) = self.backend {
             cfg.present_backend = backend;

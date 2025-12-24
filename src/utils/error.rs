@@ -129,7 +129,7 @@ where
     fn trace(self, loc: Location) -> Result<T> {
         let res = self.location(loc);
         if let Err(e) = &res {
-            trace!("{e:?}");
+            trace!("{}", format_error_chain(e));
         }
         res
     }
@@ -137,7 +137,7 @@ where
     fn debug(self, loc: Location) -> Result<T> {
         let res = self.location(loc);
         if let Err(e) = &res {
-            debug!("{e:?}");
+            debug!("{}", format_error_chain(e));
         }
         res
     }
@@ -145,7 +145,7 @@ where
     fn info(self, loc: Location) -> Result<T> {
         let res = self.location(loc);
         if let Err(e) = &res {
-            info!("{e:?}");
+            info!("{}", format_error_chain(e));
         }
         res
     }
@@ -153,7 +153,7 @@ where
     fn warn(self, loc: Location) -> Result<T> {
         let res = self.location(loc);
         if let Err(e) = &res {
-            warn!("{e:?}");
+            warn!("{}", format_error_chain(e));
         }
         res
     }
@@ -161,13 +161,44 @@ where
     fn error(self, loc: Location) -> Result<T> {
         let res = self.location(loc);
         if let Err(e) = &res {
-            error!("{e:?}");
+            error!("{}", format_error_chain(e));
         }
         res
     }
 
     fn log(self, loc: Location) -> Result<T> {
         self.error(loc)
+    }
+}
+
+fn format_error_chain(err: &(dyn std::error::Error + 'static)) -> String {
+    let mut out = format_error_summary(err);
+    let mut source = err.source();
+    let mut depth = 0;
+    while let Some(cause) = source {
+        depth += 1;
+        out.push_str(&format!("\n  caused by ({depth}): {}", format_error_summary(cause)));
+        source = cause.source();
+    }
+    out
+}
+
+fn format_error_summary(err: &(dyn std::error::Error + 'static)) -> String {
+    if let Some(wprs_err) = err.downcast_ref::<crate::error::Error>() {
+        return format_wprs_error(wprs_err);
+    }
+    err.to_string()
+}
+
+fn format_wprs_error(err: &crate::error::Error) -> String {
+    match err {
+        crate::error::Error::Location { location, source } => {
+            format!("{location}: {}", format_error_summary(source.as_ref()))
+        }
+        crate::error::Error::Context { context, source } => {
+            format!("{context}: {}", format_error_summary(source.as_ref()))
+        }
+        _ => err.to_string(),
     }
 }
 

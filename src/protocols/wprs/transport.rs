@@ -260,88 +260,66 @@ pub fn encode_jpeg_from_bgra(
     stride_bytes: usize,
     bgra: &[u8],
 ) -> Result<Vec<u8>> {
-    #[cfg(feature = "image-jpeg")]
-    {
-        let height_usize = height as usize;
-        let width_usize = width as usize;
-        ensure!(
-            width_usize != 0 && height_usize != 0,
-            Error::InvalidArgument("invalid image size".to_string()),
-        );
-        ensure!(
-            stride_bytes >= width_usize * 4,
-            Error::InvalidArgument(format!(
-                "stride too small: stride={stride_bytes} width={width}"
-            )),
-        );
-        ensure!(
-            bgra.len() >= stride_bytes.saturating_mul(height_usize),
-            Error::InvalidArgument(format!(
-                "bgra buffer too small: len={} expected_at_least={}",
-                bgra.len(),
-                stride_bytes.saturating_mul(height_usize)
-            )),
-        );
+    let height_usize = height as usize;
+    let width_usize = width as usize;
+    ensure!(
+        width_usize != 0 && height_usize != 0,
+        Error::InvalidArgument("invalid image size".to_string()),
+    );
+    ensure!(
+        stride_bytes >= width_usize * 4,
+        Error::InvalidArgument(format!(
+            "stride too small: stride={stride_bytes} width={width}"
+        )),
+    );
+    ensure!(
+        bgra.len() >= stride_bytes.saturating_mul(height_usize),
+        Error::InvalidArgument(format!(
+            "bgra buffer too small: len={} expected_at_least={}",
+            bgra.len(),
+            stride_bytes.saturating_mul(height_usize)
+        )),
+    );
 
-        let mut rgb = vec![0u8; width_usize * height_usize * 3];
-        for y in 0..height_usize {
-            let in_row = &bgra[y * stride_bytes..y * stride_bytes + width_usize * 4];
-            let out_row = &mut rgb[y * width_usize * 3..(y + 1) * width_usize * 3];
-            for x in 0..width_usize {
-                let i = x * 4;
-                let o = x * 3;
-                out_row[o] = in_row[i + 2];
-                out_row[o + 1] = in_row[i + 1];
-                out_row[o + 2] = in_row[i];
-            }
+    let mut rgb = vec![0u8; width_usize * height_usize * 3];
+    for y in 0..height_usize {
+        let in_row = &bgra[y * stride_bytes..y * stride_bytes + width_usize * 4];
+        let out_row = &mut rgb[y * width_usize * 3..(y + 1) * width_usize * 3];
+        for x in 0..width_usize {
+            let i = x * 4;
+            let o = x * 3;
+            out_row[o] = in_row[i + 2];
+            out_row[o + 1] = in_row[i + 1];
+            out_row[o + 2] = in_row[i];
         }
-
-        let mut out = Vec::new();
-        let mut enc = jpeg_encoder::Encoder::new(&mut out, 85);
-        enc.encode(&rgb, width as u16, height as u16, jpeg_encoder::ColorType::Rgb)
-            .location(loc!())?;
-        Ok(out)
     }
 
-    #[cfg(not(feature = "image-jpeg"))]
-    {
-        let _ = (width, height, stride_bytes, bgra);
-        bail!(Error::Unsupported(
-            "JPEG transport codec requires the image-jpeg feature".to_string(),
-        ))
-    }
+    let mut out = Vec::new();
+    let enc = jpeg_encoder::Encoder::new(&mut out, 85);
+    enc.encode(&rgb, width as u16, height as u16, jpeg_encoder::ColorType::Rgb)
+        .location(loc!())?;
+    Ok(out)
 }
 
 pub fn decode_jpeg_to_bgra(jpeg_bytes: &[u8]) -> Result<(u32, u32, Vec<u8>)> {
-    #[cfg(feature = "image-jpeg")]
-    {
-        let mut decoder = jpeg_decoder::Decoder::new(jpeg_bytes);
-        let pixels = decoder.decode().location(loc!())?;
-        let info = decoder
-            .info()
-            .ok_or_else(|| Error::Missing("JPEG info".to_string()))?;
-        let width = info.width as u32;
-        let height = info.height as u32;
+    let mut decoder = jpeg_decoder::Decoder::new(jpeg_bytes);
+    let pixels = decoder.decode().location(loc!())?;
+    let info = decoder
+        .info()
+        .ok_or_else(|| Error::Missing("JPEG info".to_string()))?;
+    let width = info.width as u32;
+    let height = info.height as u32;
 
-        // jpeg-decoder returns RGB8.
-        let mut bgra = vec![0u8; width as usize * height as usize * 4];
-        for (i, pixel) in pixels.chunks_exact(3).enumerate() {
-            let o = i * 4;
-            bgra[o] = pixel[2];
-            bgra[o + 1] = pixel[1];
-            bgra[o + 2] = pixel[0];
-            bgra[o + 3] = 255;
-        }
-        Ok((width, height, bgra))
+    // jpeg-decoder returns RGB8.
+    let mut bgra = vec![0u8; width as usize * height as usize * 4];
+    for (i, pixel) in pixels.chunks_exact(3).enumerate() {
+        let o = i * 4;
+        bgra[o] = pixel[2];
+        bgra[o + 1] = pixel[1];
+        bgra[o + 2] = pixel[0];
+        bgra[o + 3] = 255;
     }
-
-    #[cfg(not(feature = "image-jpeg"))]
-    {
-        let _ = jpeg_bytes;
-        bail!(Error::Unsupported(
-            "JPEG transport codec requires the image-jpeg feature".to_string(),
-        ))
-    }
+    Ok((width, height, bgra))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Archive, Deserialize, Serialize)]
@@ -404,7 +382,6 @@ impl Default for ClientHello {
             TransportCodec::ShardedRaw,
             TransportCodec::Png,
         ];
-        #[cfg(feature = "image-jpeg")]
         supported_codecs.push(TransportCodec::Jpeg);
         #[cfg(feature = "video-h264")]
         supported_codecs.push(TransportCodec::H264);

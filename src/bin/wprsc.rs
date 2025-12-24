@@ -33,8 +33,7 @@ fn main() -> Result<()> {
     utils::exit_on_thread_panic();
 
     info!(
-        "wprsc config: role={:?} present_backend={:?} keyboard_mode={:?} ui_scale_factor={} min_output_scale_factor={:?} auto_reconnect={} endpoint_present={}",
-        config.role,
+        "wprsc config: present_backend={:?} keyboard_mode={:?} ui_scale_factor={} min_output_scale_factor={:?} auto_reconnect={} endpoint_present={}",
         config.present_backend,
         config.keyboard_mode,
         config.ui_scale_factor,
