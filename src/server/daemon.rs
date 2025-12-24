@@ -373,6 +373,7 @@ impl wctl::server::Handler for ControlHandler {
             wctl::Request::Ping => wctl::Response::Pong,
             wctl::Request::ServerInfo => wctl::Response::ServerInfo(self.server_info.clone()),
             wctl::Request::StartSession { child_pid } => {
+                info!("wctl: start session pid={child_pid}");
                 if let Some(handle) = &self.macos_target_pid {
                     handle.set(Some(child_pid));
                 }
@@ -382,6 +383,7 @@ impl wctl::server::Handler for ControlHandler {
                 wctl::Response::Ok
             },
             wctl::Request::StopSession => {
+                info!("wctl: stop session");
                 if let Some(handle) = &self.macos_target_pid {
                     handle.set(None);
                 }

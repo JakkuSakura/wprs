@@ -41,6 +41,13 @@ impl MacosTargetPid {
     }
 
     pub fn set(&self, pid: Option<u32>) {
+        let prev = self.get();
+        if prev != pid {
+            match pid {
+                Some(pid) => info!("macos backend: target pid set to {pid}"),
+                None => info!("macos backend: target pid cleared"),
+            }
+        }
         self.0.store(pid.unwrap_or(0), Ordering::Relaxed);
     }
 }
@@ -64,6 +71,8 @@ pub struct MacosWindowBackend {
     windows: HashMap<u32, TrackedWindow>,
     pressed_buttons: u32,
     target_pid: MacosTargetPid,
+    last_target_pid: Option<u32>,
+    last_window_count: Option<usize>,
 }
 
 impl MacosWindowBackend {
@@ -79,6 +88,8 @@ impl MacosWindowBackend {
             windows: HashMap::new(),
             pressed_buttons: 0,
             target_pid: MacosTargetPid::new(config.target_pid),
+            last_target_pid: config.target_pid,
+            last_window_count: None,
         }
     }
 
@@ -174,6 +185,8 @@ impl PollingBackend for MacosWindowBackend {
             });
         }
 
+        self.log_capture_status();
+
         Ok(out)
     }
 
@@ -218,6 +231,8 @@ impl PollingBackend for MacosWindowBackend {
             });
         }
 
+        self.log_capture_status();
+
         Ok(out)
     }
 
@@ -231,6 +246,24 @@ impl PollingBackend for MacosWindowBackend {
             _ => {},
         }
         Ok(())
+    }
+}
+
+impl MacosWindowBackend {
+    fn log_capture_status(&mut self) {
+        let target_pid = self.target_pid.get();
+        let window_count = self.windows.len();
+
+        if self.last_target_pid != target_pid || self.last_window_count != Some(window_count) {
+            match target_pid {
+                Some(pid) => info!(
+                    "macos backend: capturing pid={pid} windows={window_count}"
+                ),
+                None => info!("macos backend: capturing all windows={window_count}"),
+            }
+            self.last_target_pid = target_pid;
+            self.last_window_count = Some(window_count);
+        }
     }
 }
 

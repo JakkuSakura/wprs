@@ -50,6 +50,8 @@ struct H264EncodeState {
 struct State<B> {
     backend: B,
     serializer: Serializer<Request, Event>,
+    inproc_mode: bool,
+    inproc_buffers: HashMap<WlSurfaceId, SurfaceBufferPool>,
     compressor: ShardingCompressor,
     transport_config: transport::TransportConfig,
     surface_transport_config: HashMap<WlSurfaceId, transport::TransportConfig>,
@@ -68,6 +70,45 @@ struct State<B> {
     tick_fps: u32,
     #[cfg(feature = "video-h264")]
     h264: HashMap<WlSurfaceId, H264EncodeState>,
+}
+
+struct SurfaceBufferPool {
+    slots: [std::sync::Arc<Vec<u8>>; 3],
+    next_slot: usize,
+    size_bytes: usize,
+}
+
+impl SurfaceBufferPool {
+    fn new(size_bytes: usize) -> Self {
+        let make = || std::sync::Arc::new(vec![0; size_bytes]);
+        Self {
+            slots: [make(), make(), make()],
+            next_slot: 0,
+            size_bytes,
+        }
+    }
+
+    fn write_slot<F>(&mut self, size_bytes: usize, fill: F) -> std::sync::Arc<Vec<u8>>
+    where
+        F: FnOnce(&mut [u8]),
+    {
+        if size_bytes != self.size_bytes {
+            *self = Self::new(size_bytes);
+        }
+
+        let idx = self.next_slot;
+        self.next_slot = (self.next_slot + 1) % self.slots.len();
+
+        let slot = &mut self.slots[idx];
+        if std::sync::Arc::strong_count(slot) > 1 {
+            *slot = std::sync::Arc::new(vec![0; size_bytes]);
+        }
+
+        let slot_mut = std::sync::Arc::get_mut(slot).expect("buffer slot should be uniquely owned");
+        fill(slot_mut.as_mut_slice());
+
+        slot.clone()
+    }
 }
 
 fn record_sent_bytes<B: PollingBackend>(state: &mut State<B>, surface: WlSurfaceId, bytes: usize) {
@@ -323,6 +364,30 @@ fn apply_observation<B: PollingBackend>(
 ) -> Result<()> {
     match obs {
         BackendObservation::SurfaceCommit { surface, frame } => {
+            if state.inproc_mode {
+                let bitmap = frame.as_ref().map(|frame| {
+                    let size_bytes = frame.metadata.len();
+                    let pool = state
+                        .inproc_buffers
+                        .entry(surface.id)
+                        .or_insert_with(|| SurfaceBufferPool::new(size_bytes));
+                    let slot = pool.write_slot(size_bytes, |slot_mut| {
+                        slot_mut.copy_from_slice(&frame.bgra);
+                    });
+
+                    BitmapAssignment::New(Bitmap {
+                        metadata: frame.metadata,
+                        data: BufferPoolHandle::from(slot),
+                    })
+                });
+
+                let state_to_send = surface_state_for_descriptor(&surface, bitmap);
+                for msg in handshake::surface_messages(state_to_send).location(loc!())? {
+                    state.serializer.writer().send(msg);
+                }
+                return Ok(());
+            }
+
             let mut frame_to_send = frame;
             let mut desired = None;
 
@@ -423,6 +488,7 @@ fn apply_observation<B: PollingBackend>(
             {
                 state.h264.remove(&surface);
             }
+            state.inproc_buffers.remove(&surface);
             state.surface_transport_config.remove(&surface);
             state.last_surface_commit.remove(&surface);
             state.surface_fps_estimate.remove(&surface);
@@ -459,6 +525,8 @@ pub fn run<B: PollingBackend>(
     let tick_fps = (1.0 / tick_interval.as_secs_f64()).round().max(1.0) as u32;
     let mut state = State {
         backend,
+        inproc_mode: serializer.is_inproc(),
+        inproc_buffers: HashMap::new(),
         serializer,
         compressor: ShardingCompressor::new(NonZeroUsize::new(16).unwrap(), 1).location(loc!())?,
         transport_config: transport::TransportConfig::default(),
@@ -498,6 +566,10 @@ pub fn run<B: PollingBackend>(
                     RecvType::Object(Event::Transport(transport::TransportEvent::ClientHello(
                         hello,
                     ))) => {
+                        if state.inproc_mode {
+                            debug!("inproc server ignoring transport client hello");
+                            return;
+                        }
                         state.client_hello = Some(hello.clone());
                         let config = transport_policy::select_global_transport_config(
                             &hello,
@@ -516,6 +588,10 @@ pub fn run<B: PollingBackend>(
                             )));
                     },
                     RecvType::Object(Event::Transport(transport::TransportEvent::Stats(stats))) => {
+                        if state.inproc_mode {
+                            debug!("inproc server ignoring transport stats");
+                            return;
+                        }
                         // Client-reported stats are best-effort. The server still uses its own
                         // observed tx-kbps for transport policy.
                         state.client_stats = Some(stats);
@@ -569,7 +645,11 @@ pub fn run<B: PollingBackend>(
                             .log_and_ignore(loc!());
                     },
                     RecvType::RawBuffer(_) => {
-                        warn!("server received RawBuffer from client; ignoring")
+                        if state.inproc_mode {
+                            error!("inproc server received RawBuffer from client")
+                        } else {
+                            warn!("server received RawBuffer from client; ignoring")
+                        }
                     },
                 }
             }
