@@ -1,3 +1,4 @@
+use std::error::Error as StdError;
 use std::net::SocketAddr;
 use std::net::TcpListener;
 use std::net::TcpStream;
@@ -39,11 +40,35 @@ fn handle_connection(mut stream: TcpStream, handler: Arc<dyn Handler>) -> Result
         let req = match codec::recv::<Request>(&mut stream) {
             Ok(req) => req,
             Err(err) => {
-                debug!("wctl(tcp): recv failed: {err}");
+                if is_disconnect_error(&err) {
+                    debug!("wctl(tcp): client disconnected");
+                } else {
+                    error!("wctl(tcp): recv failed: {err:?}");
+                }
                 return Ok(());
             },
         };
         let resp = handler.handle(req);
         codec::send(&mut stream, &resp).location(loc!())?;
     }
+}
+
+fn is_disconnect_error(err: &(dyn StdError + 'static)) -> bool {
+    let mut current: Option<&(dyn StdError + 'static)> = Some(err);
+    while let Some(cause) = current {
+        if let Some(io) = cause.downcast_ref::<std::io::Error>() {
+            if matches!(
+                io.kind(),
+                std::io::ErrorKind::UnexpectedEof
+                    | std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::ConnectionAborted
+                    | std::io::ErrorKind::BrokenPipe
+                    | std::io::ErrorKind::NotConnected
+            ) {
+                return true;
+            }
+        }
+        current = cause.source();
+    }
+    false
 }

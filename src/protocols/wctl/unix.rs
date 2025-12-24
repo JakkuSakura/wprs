@@ -1,3 +1,4 @@
+use std::error::Error as StdError;
 use std::os::unix::net::UnixListener;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
@@ -33,11 +34,35 @@ fn handle_connection(mut stream: UnixStream, handler: Arc<dyn Handler>) -> Resul
         let req = match codec::recv::<Request>(&mut stream) {
             Ok(req) => req,
             Err(err) => {
-                debug!("wctl: recv failed: {err}");
+                if is_disconnect_error(&err) {
+                    debug!("wctl: client disconnected");
+                } else {
+                    error!("wctl: recv failed: {err:?}");
+                }
                 return Ok(());
             },
         };
         let resp = handler.handle(req);
         codec::send(&mut stream, &resp).location(loc!())?;
     }
+}
+
+fn is_disconnect_error(err: &(dyn StdError + 'static)) -> bool {
+    let mut current: Option<&(dyn StdError + 'static)> = Some(err);
+    while let Some(cause) = current {
+        if let Some(io) = cause.downcast_ref::<std::io::Error>() {
+            if matches!(
+                io.kind(),
+                std::io::ErrorKind::UnexpectedEof
+                    | std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::ConnectionAborted
+                    | std::io::ErrorKind::BrokenPipe
+                    | std::io::ErrorKind::NotConnected
+            ) {
+                return true;
+            }
+        }
+        current = cause.source();
+    }
+    false
 }
