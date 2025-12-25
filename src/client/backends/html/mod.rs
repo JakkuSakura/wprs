@@ -412,6 +412,52 @@ async fn view_js_handler() -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::sync::broadcast::error::TryRecvError;
+
+    fn make_surface_state(
+        surface: WlSurfaceId,
+        width: i32,
+        height: i32,
+        stride: i32,
+        bytes: Vec<u8>,
+    ) -> proto::wayland::SurfaceState {
+        proto::wayland::SurfaceState {
+            client: proto::types::ClientId(1),
+            id: surface,
+            bitmap: Some(proto::wayland::BitmapAssignment::New(proto::wayland::Bitmap {
+                metadata: proto::wayland::BufferMetadata {
+                    width,
+                    height,
+                    stride,
+                    format: proto::wayland::BufferFormat::Argb8888,
+                },
+                data: proto::wayland::BufferPoolHandle::from(bytes),
+            })),
+            bitmap_update: None,
+            role: None,
+            buffer_scale: 1,
+            buffer_transform: None,
+            opaque_region: None,
+            input_region: None,
+            z_ordered_children: Vec::new(),
+            damage: None,
+            output_ids: Vec::new(),
+            viewport_state: None,
+            xdg_surface_state: None,
+        }
+    }
+
+    fn recv_binary(rx: &mut broadcast::Receiver<WireMessage>) -> Vec<u8> {
+        loop {
+            match rx.try_recv() {
+                Ok(WireMessage::Binary(bytes)) => return bytes,
+                Ok(_) => continue,
+                Err(TryRecvError::Empty) => panic!("expected binary frame"),
+                Err(TryRecvError::Closed) => panic!("channel closed"),
+                Err(TryRecvError::Lagged(_)) => continue,
+            }
+        }
+    }
 
     #[test]
     fn frame_message_format() {
@@ -430,6 +476,30 @@ mod tests {
         assert_eq!(&msg[13..17], &20u32.to_le_bytes());
         assert_eq!(&msg[17..21], &12u32.to_le_bytes());
         assert_eq!(&msg[21..], &[1, 2, 3]);
+    }
+
+    #[test]
+    fn apply_updates_emits_non_black_frame() {
+        let (broadcaster, mut rx) = broadcast::channel(8);
+        let surfaces = Arc::new(Mutex::new(HashMap::new()));
+        let mut presenter = HtmlPresenter::new(broadcaster, surfaces);
+
+        let mut batch = ClientUpdateBatch::default();
+        let surface_id = WlSurfaceId(7);
+        let bytes = vec![0u8, 0, 0, 255, 0, 0, 0, 0];
+        batch.surfaces.updated.push(make_surface_state(
+            surface_id,
+            2,
+            1,
+            8,
+            bytes.clone(),
+        ));
+
+        presenter.apply_updates(batch).unwrap();
+        let frame = recv_binary(&mut rx);
+        assert_eq!(frame[0], 1);
+        let payload = &frame[21..];
+        assert!(payload.iter().any(|&b| b != 0));
     }
 
     #[test]
