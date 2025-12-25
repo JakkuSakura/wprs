@@ -259,6 +259,7 @@ mod tests {
     use crate::protocols::wprs::serializer::new_inproc_serializer_pair;
     use crate::protocols::wprs::serializer::SendType;
     use crate::protocols::wprs::serializer::RecvType;
+    use crate::protocols::wprs::types::Event;
     use crate::protocols::wprs::wayland::Bitmap;
     use crate::protocols::wprs::wayland::BitmapAssignment;
     use crate::protocols::wprs::wayland::BufferMetadata;
@@ -269,9 +270,9 @@ mod tests {
 
     #[test]
     fn server_to_client_surface_commit_updates_state() {
-        let (mut server, mut client) =
+        let (server, mut client) =
             new_inproc_serializer_pair::<Request, Event>().expect("serializer pair");
-        let mut reader = client.reader().expect("reader");
+        let reader = client.reader().expect("reader");
 
         let surface_id = WlSurfaceId(99);
         let bitmap = Bitmap {

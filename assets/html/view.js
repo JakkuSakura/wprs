@@ -229,6 +229,7 @@ function connect() {
   ws.onopen = () => {
     statusEl.textContent = `connected: ${wsUrl} (surface ${surfaceId})`;
     clearStatus();
+    ws.send(JSON.stringify({ type: "subscribe", id: surfaceId }));
   };
   ws.onclose = () => {
     statusEl.textContent = "disconnected; retrying...";

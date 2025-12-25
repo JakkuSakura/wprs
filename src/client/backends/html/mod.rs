@@ -54,6 +54,7 @@ impl ClientBackend for HtmlClientBackend {
 struct ServerState {
     broadcaster: broadcast::Sender<WireMessage>,
     surfaces: Arc<Mutex<HashMap<WlSurfaceId, SurfaceInfo>>>,
+    frames: Arc<Mutex<HashMap<WlSurfaceId, SurfaceFrame>>>,
 }
 
 #[derive(Clone, Debug)]
@@ -70,10 +71,12 @@ enum WireMessage {
 fn run_event_loop(ctx: ClientContext, config: ClientBackendConfig) -> Result<()> {
     let (broadcaster, _rx) = broadcast::channel(256);
     let surfaces = Arc::new(Mutex::new(HashMap::new()));
+    let frames = Arc::new(Mutex::new(HashMap::new()));
 
     let server_state = ServerState {
         broadcaster: broadcaster.clone(),
         surfaces: Arc::clone(&surfaces),
+        frames: Arc::clone(&frames),
     };
 
     spawn_http_server(config.html_bind_addr, server_state).location(loc!())?;
@@ -87,7 +90,7 @@ fn run_event_loop(ctx: ClientContext, config: ClientBackendConfig) -> Result<()>
 
     let mut loop_: CalloopEventLoop<State> = CalloopEventLoop::try_new().location(loc!())?;
     let mut state = State {
-        presenter: HtmlPresenter::new(broadcaster, surfaces),
+        presenter: HtmlPresenter::new(broadcaster, surfaces, frames),
         client_state: ctx.state,
         notify_rx: ctx.notify_rx,
     };
@@ -113,10 +116,11 @@ struct HtmlPresenter {
     broadcaster: broadcast::Sender<WireMessage>,
     surfaces: Arc<Mutex<HashMap<WlSurfaceId, SurfaceInfo>>>,
     window_manager: WindowManager,
-    frame_cache: HashMap<WlSurfaceId, SurfaceFrame>,
+    frames: Arc<Mutex<HashMap<WlSurfaceId, SurfaceFrame>>>,
     display_scale: u32,
 }
 
+#[derive(Clone)]
 struct SurfaceFrame {
     width: u32,
     height: u32,
@@ -129,12 +133,13 @@ impl HtmlPresenter {
     fn new(
         broadcaster: broadcast::Sender<WireMessage>,
         surfaces: Arc<Mutex<HashMap<WlSurfaceId, SurfaceInfo>>>,
+        frames: Arc<Mutex<HashMap<WlSurfaceId, SurfaceFrame>>>,
     ) -> Self {
         Self {
             broadcaster,
             surfaces,
             window_manager: WindowManager::new(),
-            frame_cache: HashMap::new(),
+            frames,
             display_scale: 1,
         }
     }
@@ -158,7 +163,10 @@ impl HtmlPresenter {
 
         for updated in batch.surfaces.updated {
             let surface_id = updated.id;
-            let mut sent = false;
+            let mut frames = self
+                .frames
+                .lock()
+                .map_err(|err| Error::Internal(format!("frames lock poisoned: {err:?}")))?;
 
             if let Some(bitmap) = updated
                 .bitmap
@@ -166,40 +174,24 @@ impl HtmlPresenter {
                 .and_then(|assignment| assignment.as_new())
             {
                 if let Some(frame) = encode_surface_bgra(&updated, self.display_scale)? {
-                    self.frame_cache.insert(
+                    frames.insert(
                         surface_id,
                         SurfaceFrame {
                             width: frame.width,
                             height: frame.height,
                             stride: frame.stride,
                             scale: frame.scale,
-                            data: frame.bgra.clone(),
+                            data: frame.bgra,
                         },
                     );
-                    let msg = encode_frame_message(surface_id, frame);
-                    let _ = self.broadcaster.send(WireMessage::Binary(msg));
-                    sent = true;
                 } else if bitmap.metadata.len() == 0 {
-                    self.frame_cache.remove(&surface_id);
+                    frames.remove(&surface_id);
                 }
             }
 
-            if !sent {
-                if let Some(update) = updated.bitmap_update.as_ref() {
-                    if let Some(frame) = self.frame_cache.get_mut(&surface_id) {
-                        apply_bitmap_patch(frame, update)?;
-                        let msg = encode_frame_message(
-                            surface_id,
-                            EncodedFrame {
-                                width: frame.width,
-                                height: frame.height,
-                                stride: frame.stride,
-                                scale: frame.scale,
-                                bgra: frame.data.clone(),
-                            },
-                        );
-                        let _ = self.broadcaster.send(WireMessage::Binary(msg));
-                    }
+            if let Some(update) = updated.bitmap_update.as_ref() {
+                if let Some(frame) = frames.get_mut(&surface_id) {
+                    apply_bitmap_patch(frame, update)?;
                 }
             }
         }
@@ -462,6 +454,8 @@ async fn ws_handler(State(state): State<ServerState>, ws: WebSocketUpgrade) -> i
 async fn handle_socket(socket: WebSocket, state: ServerState) {
     let (mut sender, mut receiver) = socket.split();
     let mut rx = state.broadcaster.subscribe();
+    let mut subscribed_surface: Option<WlSurfaceId> = None;
+    let mut tick = tokio::time::interval(std::time::Duration::from_millis(1000 / 60));
 
     let snapshot = match state.surfaces.lock() {
         Ok(surfaces) => surfaces
@@ -485,6 +479,17 @@ async fn handle_socket(socket: WebSocket, state: ServerState) {
             maybe_msg = receiver.next() => {
                 match maybe_msg {
                     Some(Ok(Message::Close(_))) | None => break,
+                    Some(Ok(Message::Text(text))) => {
+                        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
+                            if value.get("type") == Some(&serde_json::Value::String("subscribe".to_string())) {
+                                if let Some(id) = value.get("id").and_then(|v| v.as_str()) {
+                                    if let Ok(parsed) = id.parse::<u64>() {
+                                        subscribed_surface = Some(WlSurfaceId(parsed));
+                                    }
+                                }
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -495,13 +500,35 @@ async fn handle_socket(socket: WebSocket, state: ServerState) {
                             break;
                         }
                     }
-                    Ok(WireMessage::Binary(bytes)) => {
-                        if sender.send(Message::Binary(bytes.into())).await.is_err() {
+                    Ok(WireMessage::Binary(_)) => {}
+                    Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+            _ = tick.tick() => {
+                if let Some(surface_id) = subscribed_surface {
+                    let frame = {
+                        let frames = match state.frames.lock() {
+                            Ok(frames) => frames,
+                            Err(_) => continue,
+                        };
+                        frames.get(&surface_id).cloned()
+                    };
+                    if let Some(frame) = frame {
+                        let msg = encode_frame_message(
+                            surface_id,
+                            EncodedFrame {
+                                width: frame.width,
+                                height: frame.height,
+                                stride: frame.stride,
+                                scale: frame.scale,
+                                bgra: frame.data,
+                            },
+                        );
+                        if sender.send(Message::Binary(msg.into())).await.is_err() {
                             break;
                         }
                     }
-                    Err(broadcast::error::RecvError::Lagged(_)) => {}
-                    Err(broadcast::error::RecvError::Closed) => break,
                 }
             }
         }
@@ -578,12 +605,12 @@ mod tests {
         }
     }
 
-    fn recv_binary(rx: &mut broadcast::Receiver<WireMessage>) -> Vec<u8> {
+    fn recv_text(rx: &mut broadcast::Receiver<WireMessage>) -> String {
         loop {
             match rx.try_recv() {
-                Ok(WireMessage::Binary(bytes)) => return bytes,
+                Ok(WireMessage::Text(text)) => return text,
                 Ok(_) => continue,
-                Err(TryRecvError::Empty) => panic!("expected binary frame"),
+                Err(TryRecvError::Empty) => panic!("expected text frame"),
                 Err(TryRecvError::Closed) => panic!("channel closed"),
                 Err(TryRecvError::Lagged(_)) => continue,
             }
@@ -612,10 +639,11 @@ mod tests {
     }
 
     #[test]
-    fn apply_updates_emits_non_black_frame() {
+    fn apply_updates_populates_frame_cache() {
         let (broadcaster, mut rx) = broadcast::channel(8);
         let surfaces = Arc::new(Mutex::new(HashMap::new()));
-        let mut presenter = HtmlPresenter::new(broadcaster, surfaces);
+        let frames = Arc::new(Mutex::new(HashMap::new()));
+        let mut presenter = HtmlPresenter::new(broadcaster, surfaces, Arc::clone(&frames));
 
         let mut batch = ClientUpdateBatch::default();
         let surface_id = WlSurfaceId(7);
@@ -629,10 +657,10 @@ mod tests {
         ));
 
         presenter.apply_updates(batch).unwrap();
-        let frame = recv_binary(&mut rx);
-        assert_eq!(frame[0], 1);
-        let payload = &frame[25..];
-        assert!(payload.iter().any(|&b| b != 0));
+        let _ = recv_text(&mut rx);
+        let frames = frames.lock().unwrap();
+        let cached = frames.get(&surface_id).expect("frame cached");
+        assert!(cached.data.iter().any(|&b| b != 0));
     }
 
     #[test]
@@ -643,5 +671,26 @@ mod tests {
         assert!(msg.contains("\"id\":\"7\""));
         assert!(msg.contains("\"title\":\"demo\""));
         assert!(msg.contains("\"app_id\":\"app\""));
+    }
+
+    #[test]
+    fn surface_update_emits_text_event() {
+        let (broadcaster, mut rx) = broadcast::channel(8);
+        let surfaces = Arc::new(Mutex::new(HashMap::new()));
+        let frames = Arc::new(Mutex::new(HashMap::new()));
+        let mut presenter = HtmlPresenter::new(broadcaster, surfaces, frames);
+
+        let mut batch = ClientUpdateBatch::default();
+        batch.surfaces.updated.push(make_surface_state(
+            WlSurfaceId(2),
+            1,
+            1,
+            4,
+            vec![0, 0, 0, 0],
+        ));
+        presenter.apply_updates(batch).unwrap();
+
+        let text = recv_text(&mut rx);
+        assert!(text.contains("\"type\":\"surface\""));
     }
 }
