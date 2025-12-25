@@ -396,11 +396,17 @@ pub struct TransportStats {
     pub decode_ms: u32,
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Archive, Deserialize, Serialize)]
+pub struct ClientDisplayConfig {
+    pub client_scale: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Archive, Deserialize, Serialize)]
 pub enum TransportRequest {
     Config(TransportConfig),
     ConfigScoped { scope: TransportScope, config: TransportConfig },
     Pong(Pong),
+    ClientDisplayConfig(ClientDisplayConfig),
 }
 
 #[derive(Debug, Clone, PartialEq, Archive, Deserialize, Serialize)]
@@ -408,4 +414,5 @@ pub enum TransportEvent {
     ClientHello(ClientHello),
     Ping(Ping),
     Stats(TransportStats),
+    ClientDisplayConfig(ClientDisplayConfig),
 }

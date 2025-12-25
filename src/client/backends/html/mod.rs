@@ -55,6 +55,7 @@ struct ServerState {
     broadcaster: broadcast::Sender<WireMessage>,
     surfaces: Arc<Mutex<HashMap<WlSurfaceId, SurfaceInfo>>>,
     frames: Arc<Mutex<HashMap<WlSurfaceId, SurfaceFrame>>>,
+    control_tx: std::sync::mpsc::Sender<HtmlControl>,
 }
 
 #[derive(Clone, Debug)]
@@ -72,11 +73,13 @@ fn run_event_loop(ctx: ClientContext, config: ClientBackendConfig) -> Result<()>
     let (broadcaster, _rx) = broadcast::channel(256);
     let surfaces = Arc::new(Mutex::new(HashMap::new()));
     let frames = Arc::new(Mutex::new(HashMap::new()));
+    let (control_tx, control_rx) = std::sync::mpsc::channel::<HtmlControl>();
 
     let server_state = ServerState {
         broadcaster: broadcaster.clone(),
         surfaces: Arc::clone(&surfaces),
         frames: Arc::clone(&frames),
+        control_tx,
     };
 
     spawn_http_server(config.html_bind_addr, server_state).location(loc!())?;
@@ -86,6 +89,8 @@ fn run_event_loop(ctx: ClientContext, config: ClientBackendConfig) -> Result<()>
         presenter: HtmlPresenter,
         client_state: std::sync::Arc<crate::client::state::ClientState>,
         notify_rx: std::sync::mpsc::Receiver<()>,
+        control_rx: std::sync::mpsc::Receiver<HtmlControl>,
+        serializer: proto::serializer::Serializer<proto::types::Event, proto::types::Request>,
     }
 
     let mut loop_: CalloopEventLoop<State> = CalloopEventLoop::try_new().location(loc!())?;
@@ -93,12 +98,27 @@ fn run_event_loop(ctx: ClientContext, config: ClientBackendConfig) -> Result<()>
         presenter: HtmlPresenter::new(broadcaster, surfaces, frames),
         client_state: ctx.state,
         notify_rx: ctx.notify_rx,
+        control_rx,
+        serializer: ctx.serializer,
     };
 
     let timer = calloop::timer::Timer::from_duration(std::time::Duration::from_millis(100));
     loop_
         .handle()
         .insert_source(timer, move |_, _, state| {
+            while let Ok(control) = state.control_rx.try_recv() {
+                match control {
+                    HtmlControl::ClientScale(scale) => {
+                        state.serializer.writer().send(
+                            proto::serializer::SendType::Object(proto::types::Event::Transport(
+                                proto::transport::TransportEvent::ClientDisplayConfig(
+                                    proto::transport::ClientDisplayConfig { client_scale: scale },
+                                ),
+                            )),
+                        );
+                    }
+                }
+            }
             match drain_client_updates(&state.notify_rx, &state.client_state) {
                 Ok(Some(batch)) => state.presenter.apply_updates(batch).log_and_ignore(loc!()),
                 Ok(None) => {},
@@ -108,8 +128,11 @@ fn run_event_loop(ctx: ClientContext, config: ClientBackendConfig) -> Result<()>
         })
         .map_err(|e| Error::Internal(format!("insert_source(refresh timer) failed: {e:?}")))?;
 
-    let _serializer = ctx.serializer;
     loop_.run(None, &mut state, |_| {}).location(loc!())
+}
+
+enum HtmlControl {
+    ClientScale(u32),
 }
 
 struct HtmlPresenter {
@@ -117,7 +140,6 @@ struct HtmlPresenter {
     surfaces: Arc<Mutex<HashMap<WlSurfaceId, SurfaceInfo>>>,
     window_manager: WindowManager,
     frames: Arc<Mutex<HashMap<WlSurfaceId, SurfaceFrame>>>,
-    display_scale: u32,
 }
 
 #[derive(Clone)]
@@ -140,17 +162,10 @@ impl HtmlPresenter {
             surfaces,
             window_manager: WindowManager::new(),
             frames,
-            display_scale: 1,
         }
     }
 
     fn apply_updates(&mut self, batch: ClientUpdateBatch) -> Result<()> {
-        for event in &batch.events {
-            if let crate::client::state::ClientEvent::DisplayConfig(cfg) = event {
-                self.display_scale = updated_scale(cfg.scale_factor);
-            }
-        }
-
         let window_delta = self
             .window_manager
             .apply_surface_updates(&batch.surfaces.updated, &batch.surfaces.removed);
@@ -173,7 +188,7 @@ impl HtmlPresenter {
                 .as_ref()
                 .and_then(|assignment| assignment.as_new())
             {
-                if let Some(frame) = encode_surface_bgra(&updated, self.display_scale)? {
+                if let Some(frame) = encode_surface_bgra(&updated)? {
                     frames.insert(
                         surface_id,
                         SurfaceFrame {
@@ -245,7 +260,6 @@ struct EncodedFrame {
 
 fn encode_surface_bgra(
     state: &proto::wayland::SurfaceState,
-    display_scale: u32,
 ) -> Result<Option<EncodedFrame>> {
     let Some(proto::wayland::BitmapAssignment::New(buf)) = state.bitmap.as_ref() else {
         return Ok(None);
@@ -291,7 +305,7 @@ fn encode_surface_bgra(
         width,
         height,
         stride,
-        scale: resolve_surface_scale(state, display_scale),
+        scale: updated_scale(state.buffer_scale),
         bgra,
     }))
 }
@@ -323,16 +337,6 @@ fn updated_scale(scale: i32) -> u32 {
     }
 }
 
-fn resolve_surface_scale(state: &proto::wayland::SurfaceState, display_scale: u32) -> u32 {
-    let buffer_scale = updated_scale(state.buffer_scale);
-    if buffer_scale > 1 {
-        buffer_scale
-    } else if display_scale > 1 {
-        display_scale
-    } else {
-        1
-    }
-}
 
 fn apply_bitmap_patch(frame: &mut SurfaceFrame, update: &proto::wayland::BitmapUpdate) -> Result<()> {
     match update {
@@ -456,6 +460,7 @@ async fn handle_socket(socket: WebSocket, state: ServerState) {
     let mut rx = state.broadcaster.subscribe();
     let mut subscribed_surface: Option<WlSurfaceId> = None;
     let mut tick = tokio::time::interval(std::time::Duration::from_millis(1000 / 60));
+    let mut client_scale: u32 = 1;
 
     let snapshot = match state.surfaces.lock() {
         Ok(surfaces) => surfaces
@@ -488,6 +493,15 @@ async fn handle_socket(socket: WebSocket, state: ServerState) {
                                     }
                                 }
                             }
+                            if value.get("type") == Some(&serde_json::Value::String("client_scale".to_string())) {
+                                if let Some(scale) = value.get("value").and_then(|v| v.as_f64()) {
+                                    if scale.is_finite() && scale > 0.0 {
+                                        let updated = scale.round().clamp(1.0, 4.0) as u32;
+                                        client_scale = updated;
+                                        let _ = state.control_tx.send(HtmlControl::ClientScale(updated));
+                                    }
+                                }
+                            }
                         }
                     }
                     _ => {}
@@ -515,13 +529,14 @@ async fn handle_socket(socket: WebSocket, state: ServerState) {
                         frames.get(&surface_id).cloned()
                     };
                     if let Some(frame) = frame {
+                        let scale = if frame.scale > 1 { frame.scale } else { client_scale };
                         let msg = encode_frame_message(
                             surface_id,
                             EncodedFrame {
                                 width: frame.width,
                                 height: frame.height,
                                 stride: frame.stride,
-                                scale: frame.scale,
+                                scale,
                                 bgra: frame.data,
                             },
                         );

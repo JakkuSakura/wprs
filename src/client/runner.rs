@@ -178,6 +178,14 @@ pub fn run_client_for_serializer(
             .send(proto::serializer::SendType::Object(proto::types::Event::Transport(
                 transport::TransportEvent::ClientHello(hello),
             )));
+
+        serializer
+            .writer()
+            .send(proto::serializer::SendType::Object(proto::types::Event::Transport(
+                transport::TransportEvent::ClientDisplayConfig(
+                    transport::ClientDisplayConfig { client_scale: 1 },
+                ),
+            )));
     }
 
     backend

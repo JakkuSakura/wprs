@@ -154,6 +154,7 @@ impl ClientState {
                         }
                     },
                     transport::TransportRequest::Pong(_) => {}
+                    transport::TransportRequest::ClientDisplayConfig(_) => {}
                 }
                 true
             }

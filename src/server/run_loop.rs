@@ -13,6 +13,7 @@ use crate::utils::buffer_pointer::BufferPointer;
 use crate::utils::filtering;
 use crate::prelude::*;
 use crate::protocols::wprs::types::Event;
+use crate::protocols::wprs::types::DisplayConfig;
 use crate::protocols::wprs::serializer::RecvType;
 use crate::protocols::wprs::types::Request;
 use crate::protocols::wprs::serializer::SendType;
@@ -30,6 +31,7 @@ use crate::protocols::wprs::wayland::SurfaceRequestPayload;
 use crate::protocols::wprs::wayland::SurfaceState;
 use crate::protocols::wprs::wayland::WlSurfaceId;
 use crate::server::backend::BackendObservation;
+use crate::server::backend::BackendBgraFrame;
 use crate::server::backend::BackendSurfaceRole;
 use crate::server::backend::PollingBackend;
 use crate::protocols::wprs::codecs;
@@ -59,6 +61,7 @@ struct State<B> {
     surface_transport_config: HashMap<WlSurfaceId, transport::TransportConfig>,
     client_hello: Option<transport::ClientHello>,
     client_stats: Option<transport::TransportStats>,
+    client_display: Option<transport::ClientDisplayConfig>,
     observed_tx_kbps: u32,
     observed_tx_kbps_by_surface: HashMap<WlSurfaceId, u32>,
     sent_bytes_since_update: u64,
@@ -220,18 +223,30 @@ fn send_initial_snapshot<B: PollingBackend>(state: &mut State<B>) -> Result<()> 
         .writer()
         .send(SendType::Object(Request::Capabilities(caps)));
 
+    let display_config = display_config_for_client(state);
     state
         .serializer
         .writer()
-        .send(SendType::Object(Request::DisplayConfig(
-            state.backend.display_config(),
-        )));
+        .send(SendType::Object(Request::DisplayConfig(display_config)));
 
     let snapshot = state.backend.initial_snapshot().location(loc!())?;
     for obs in snapshot {
         apply_observation(state, obs).location(loc!())?;
     }
     Ok(())
+}
+
+fn display_config_for_client<B: PollingBackend>(state: &State<B>) -> DisplayConfig {
+    let mut config = state.backend.display_config();
+    if !state.backend.supports_hidpi() {
+        if let Some(scale) = state.client_display.as_ref().map(|c| c.client_scale) {
+            config.scale_factor = scale as i32;
+            if let Some(dpi) = config.dpi {
+                config.dpi = Some(dpi.saturating_mul(scale));
+            }
+        }
+    }
+    config
 }
 
 fn surface_state_for_descriptor(
@@ -268,6 +283,69 @@ fn surface_state_for_descriptor(
         viewport_state: None,
         xdg_surface_state: Some(xdg_shell::XdgSurfaceState::default()),
     }
+}
+
+fn scale_bgra_frame(
+    mut frame: BackendBgraFrame,
+    client_scale: u32,
+    source_scale: u32,
+) -> Result<BackendBgraFrame> {
+    if client_scale == 0 || source_scale == 0 || client_scale == source_scale {
+        return Ok(frame);
+    }
+
+    let src_width = frame.metadata.width.max(0) as usize;
+    let src_height = frame.metadata.height.max(0) as usize;
+    let src_stride = frame.metadata.stride.max(0) as usize;
+    if src_width == 0 || src_height == 0 || src_stride < src_width * 4 {
+        return Ok(frame);
+    }
+
+    let dst_width = ((src_width as u64) * client_scale as u64 / source_scale as u64).max(1) as usize;
+    let dst_height =
+        ((src_height as u64) * client_scale as u64 / source_scale as u64).max(1) as usize;
+    let dst_stride = dst_width.saturating_mul(4);
+    let mut out = vec![0u8; dst_stride.saturating_mul(dst_height)];
+
+    for y in 0..dst_height {
+        let src_y = y * src_height / dst_height;
+        let src_row = src_y * src_stride;
+        let dst_row = y * dst_stride;
+        for x in 0..dst_width {
+            let src_x = x * src_width / dst_width;
+            let src_idx = src_row + src_x * 4;
+            let dst_idx = dst_row + x * 4;
+            if src_idx + 4 <= frame.bgra.len() && dst_idx + 4 <= out.len() {
+                out[dst_idx..dst_idx + 4]
+                    .copy_from_slice(&frame.bgra[src_idx..src_idx + 4]);
+            }
+        }
+    }
+
+    frame.metadata.width = dst_width as i32;
+    frame.metadata.height = dst_height as i32;
+    frame.metadata.stride = dst_stride as i32;
+    frame.bgra = out;
+    Ok(frame)
+}
+
+fn client_scale_for_backend<B: PollingBackend>(state: &State<B>) -> u32 {
+    if state.backend.supports_hidpi() {
+        return 1;
+    }
+    state
+        .client_display
+        .as_ref()
+        .map(|c| c.client_scale)
+        .unwrap_or(1)
+        .max(1)
+}
+
+fn source_scale_for_backend<B: PollingBackend>(state: &State<B>) -> u32 {
+    if state.backend.supports_hidpi() {
+        return 1;
+    }
+    state.backend.display_config().scale_factor.max(1) as u32
 }
 
 fn encode_bgra_frame(
@@ -400,7 +478,17 @@ fn apply_observation<B: PollingBackend>(
 ) -> Result<()> {
     match obs {
         BackendObservation::SurfaceCommit { surface, frame } => {
+            let client_scale = client_scale_for_backend(state);
+            let source_scale = source_scale_for_backend(state);
+            let mut surface = surface;
+            if client_scale > 0 && !state.backend.supports_hidpi() {
+                surface.buffer_scale = client_scale as i32;
+            }
+
             if state.inproc_mode {
+                let frame = frame.and_then(|frame| {
+                    scale_bgra_frame(frame, client_scale, source_scale).ok()
+                });
                 let bitmap = frame.as_ref().map(|frame| {
                     let size_bytes = frame.metadata.len();
                     let pool = state
@@ -424,7 +512,8 @@ fn apply_observation<B: PollingBackend>(
                 return Ok(());
             }
 
-            let mut frame_to_send = frame;
+            let mut frame_to_send =
+                frame.and_then(|frame| scale_bgra_frame(frame, client_scale, source_scale).ok());
             let mut desired = None;
 
             if let Some(frame) = frame_to_send.as_ref() {
@@ -570,6 +659,7 @@ pub fn run<B: PollingBackend>(
         surface_transport_config: HashMap::new(),
         client_hello: None,
         client_stats: None,
+        client_display: None,
         observed_tx_kbps: 0,
         observed_tx_kbps_by_surface: HashMap::new(),
         sent_bytes_since_update: 0,
@@ -676,6 +766,23 @@ pub fn run<B: PollingBackend>(
                             .backend
                             .handle_client_event(Event::Output(event))
                             .log_and_ignore(loc!());
+                    }
+                    RecvType::Object(Event::Transport(
+                        transport::TransportEvent::ClientDisplayConfig(config),
+                    )) => {
+                        if state.inproc_mode {
+                            debug!("inproc server ignoring client display config");
+                            return;
+                        }
+                        state.client_display = Some(config);
+                        if !state.backend.supports_hidpi() {
+                            state
+                                .serializer
+                                .writer()
+                                .send(SendType::Object(Request::DisplayConfig(
+                                    display_config_for_client(state),
+                                )));
+                        }
                     }
                     RecvType::Object(Event::Transport(transport::TransportEvent::Ping(_))) => {},
                     RecvType::Object(other) => {

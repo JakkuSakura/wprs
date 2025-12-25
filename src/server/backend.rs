@@ -62,6 +62,10 @@ pub enum TickMode {
 pub trait PollingBackend {
     fn capabilities(&self) -> Capabilities;
 
+    fn supports_hidpi(&self) -> bool {
+        false
+    }
+
     fn display_config(&self) -> DisplayConfig {
         DisplayConfig::default()
     }

@@ -72,6 +72,10 @@ impl PollingBackend for MacosFullscreenBackend {
         Capabilities { xwayland: false }
     }
 
+    fn supports_hidpi(&self) -> bool {
+        false
+    }
+
     fn display_config(&self) -> DisplayConfig {
         self.display_config.clone()
     }

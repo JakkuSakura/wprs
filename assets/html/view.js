@@ -230,6 +230,7 @@ function connect() {
     statusEl.textContent = `connected: ${wsUrl} (surface ${surfaceId})`;
     clearStatus();
     ws.send(JSON.stringify({ type: "subscribe", id: surfaceId }));
+    ws.send(JSON.stringify({ type: "client_scale", value: window.devicePixelRatio || 1 }));
   };
   ws.onclose = () => {
     statusEl.textContent = "disconnected; retrying...";
