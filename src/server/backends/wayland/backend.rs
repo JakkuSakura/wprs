@@ -1,3 +1,6 @@
+use std::env;
+use std::fs;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -10,12 +13,12 @@ use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::wayland_server::Display;
 use smithay::wayland::socket::ListeningSocketSource;
 
+use super::WprsServerState;
 use crate::prelude::*;
+use crate::protocols::wprs::serializer::Serializer;
 use crate::protocols::wprs::types::Event;
 use crate::protocols::wprs::types::Request;
-use crate::protocols::wprs::serializer::Serializer;
 use crate::server::backends::wayland::smithay_handlers::ClientState;
-use super::WprsServerState;
 
 #[derive(Debug, Clone)]
 pub struct WaylandSmithayBackendConfig {
@@ -72,6 +75,31 @@ fn init_wayland_listener(
     Ok(())
 }
 
+fn ensure_runtime_dir() -> Result<PathBuf> {
+    if let Some(path) = env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from) {
+        if path.as_os_str().is_empty() {
+            bail!(Error::Config(
+                "XDG_RUNTIME_DIR is set but empty".to_string()
+            ))
+        }
+        return Ok(path);
+    }
+
+    let runtime_dir = env::temp_dir().join(format!("wprs-runtime-{}", std::process::id()));
+    fs::create_dir_all(&runtime_dir).location(loc!())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&runtime_dir, fs::Permissions::from_mode(0o700)).location(loc!())?;
+    }
+    // safety: it's during startup phase, single thread
+    unsafe {
+        env::set_var("XDG_RUNTIME_DIR", &runtime_dir);
+    }
+    info!("XDG_RUNTIME_DIR not set; using temporary directory {runtime_dir:?}");
+    Ok(runtime_dir)
+}
+
 impl crate::server::backend::ServerBackend for WaylandSmithayBackend {
     fn tick_mode(&self) -> crate::server::backend::TickMode {
         crate::server::backend::TickMode::EventDriven
@@ -83,6 +111,8 @@ impl crate::server::backend::ServerBackend for WaylandSmithayBackend {
         _tick_interval: Option<Duration>,
     ) -> Result<()> {
         let config = self.config;
+
+        ensure_runtime_dir().location(loc!())?;
 
         let reader = serializer
             .reader()
