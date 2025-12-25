@@ -5,22 +5,23 @@
     <title>wprs html client</title>
     <style>
       body { font-family: sans-serif; margin: 16px; }
-      #tabs { display: flex; gap: 8px; border-bottom: 1px solid #ddd; padding-bottom: 8px; }
-      .tab { padding: 6px 10px; border: 1px solid #ccc; border-bottom: none; border-radius: 6px 6px 0 0; cursor: pointer; background: #f7f7f7; }
-      .tab.active { background: white; font-weight: 600; }
-      #viewer { border: 1px solid #ccc; padding: 8px; min-height: 200px; }
-      #message { color: #666; padding: 16px; }
-      canvas { display: block; max-width: 100%; }
+      #status { margin-bottom: 12px; }
+      #hint { color: #666; margin-bottom: 12px; }
+      #surface-list { display: flex; flex-direction: column; gap: 8px; }
+      .surface-row { display: flex; align-items: center; gap: 10px; padding: 8px; border: 1px solid #ddd; border-radius: 6px; }
+      .surface-title { flex: 1; font-weight: 600; }
+      .surface-meta { color: #666; font-size: 12px; }
+      .surface-btn { padding: 6px 10px; border: 1px solid #666; border-radius: 4px; background: #f7f7f7; cursor: pointer; }
+      .surface-btn[disabled] { opacity: 0.6; cursor: not-allowed; }
+      #empty { color: #666; }
     </style>
   </head>
   <body>
     <h1>wprs html client</h1>
     <div id="status">connecting...</div>
-    <div id="tabs"></div>
-    <div id="viewer">
-      <div id="message">Waiting for windows...</div>
-      <canvas id="canvas" hidden></canvas>
-    </div>
+    <div id="hint">Surfaces open in separate tabs. If the browser blocks popups, click “Open”.</div>
+    <div id="surface-list"></div>
+    <div id="empty">Waiting for windows...</div>
     <script src="/viewer.js"></script>
   </body>
 </html>

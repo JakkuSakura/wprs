@@ -139,7 +139,7 @@ impl HtmlPresenter {
         }
 
         for updated in batch.surfaces.updated {
-            if let Some(frame) = encode_surface_rgba(&updated)? {
+            if let Some(frame) = encode_surface_bgra(&updated)? {
                 let msg = encode_frame_message(updated.id, frame);
                 let _ = self.broadcaster.send(WireMessage::Binary(msg));
             }
@@ -187,17 +187,18 @@ impl HtmlPresenter {
 struct EncodedFrame {
     width: u32,
     height: u32,
-    rgba: Vec<u8>,
+    stride: u32,
+    bgra: Vec<u8>,
 }
 
-fn encode_surface_rgba(state: &proto::wayland::SurfaceState) -> Result<Option<EncodedFrame>> {
+fn encode_surface_bgra(state: &proto::wayland::SurfaceState) -> Result<Option<EncodedFrame>> {
     let Some(proto::wayland::BitmapAssignment::New(buf)) = state.bitmap.as_ref() else {
         return Ok(None);
     };
 
     let width = u32::try_from(buf.metadata.width).ok();
     let height = u32::try_from(buf.metadata.height).ok();
-    let stride = usize::try_from(buf.metadata.stride).ok();
+    let stride = u32::try_from(buf.metadata.stride).ok();
     let (Some(width), Some(height), Some(stride)) = (width, height, stride) else {
         return Ok(None);
     };
@@ -205,47 +206,56 @@ fn encode_surface_rgba(state: &proto::wayland::SurfaceState) -> Result<Option<En
         return Ok(None);
     }
 
-    let expected_len = stride.checked_mul(height as usize).unwrap_or(0);
+    let height_usize = height as usize;
+    let stride_usize = stride as usize;
+    let row_bytes = (width as usize).saturating_mul(4);
+    if row_bytes > stride_usize {
+        return Ok(None);
+    }
+
+    let expected_len = stride_usize.checked_mul(height_usize).unwrap_or(0);
     let bytes = buf.data.as_slice();
     if bytes.len() < expected_len {
         return Ok(None);
     }
 
-    let rgba = bgra_to_tight_rgba(width, height, stride, bytes)?;
-    Ok(Some(EncodedFrame { width, height, rgba }))
+    let aligned_stride = align_up(stride_usize, 256);
+    let (stride, bgra) = if aligned_stride == stride_usize {
+        (stride, bytes[..expected_len].to_vec())
+    } else {
+        let mut bgra = vec![0u8; aligned_stride * height_usize];
+        for y in 0..height_usize {
+            let in_row = &bytes[y * stride_usize..y * stride_usize + row_bytes];
+            let out_row = &mut bgra[y * aligned_stride..y * aligned_stride + row_bytes];
+            out_row.copy_from_slice(in_row);
+        }
+        (aligned_stride as u32, bgra)
+    };
+
+    Ok(Some(EncodedFrame {
+        width,
+        height,
+        stride,
+        bgra,
+    }))
 }
 
 fn encode_frame_message(surface_id: WlSurfaceId, frame: EncodedFrame) -> Vec<u8> {
-    let mut out = Vec::with_capacity(17 + frame.rgba.len());
+    let mut out = Vec::with_capacity(21 + frame.bgra.len());
     out.push(1);
     out.extend_from_slice(&surface_id.0.to_le_bytes());
     out.extend_from_slice(&frame.width.to_le_bytes());
     out.extend_from_slice(&frame.height.to_le_bytes());
-    out.extend_from_slice(&frame.rgba);
+    out.extend_from_slice(&frame.stride.to_le_bytes());
+    out.extend_from_slice(&frame.bgra);
     out
 }
 
-fn bgra_to_tight_rgba(
-    width: u32,
-    height: u32,
-    stride_bytes: usize,
-    bgra: &[u8],
-) -> Result<Vec<u8>> {
-    let width_usize = width as usize;
-    let height_usize = height as usize;
-    let mut rgba = vec![0u8; width_usize * height_usize * 4];
-    for y in 0..height_usize {
-        let in_row = &bgra[y * stride_bytes..y * stride_bytes + width_usize * 4];
-        let out_row = &mut rgba[y * width_usize * 4..(y + 1) * width_usize * 4];
-        for x in 0..width_usize {
-            let i = x * 4;
-            out_row[i] = in_row[i + 2];
-            out_row[i + 1] = in_row[i + 1];
-            out_row[i + 2] = in_row[i];
-            out_row[i + 3] = in_row[i + 3];
-        }
+fn align_up(value: usize, alignment: usize) -> usize {
+    if alignment == 0 {
+        return value;
     }
-    Ok(rgba)
+    value.saturating_add(alignment - 1) / alignment * alignment
 }
 
 fn surface_event_json(surface_id: WlSurfaceId, title: Option<&str>, app_id: Option<&str>) -> String {
@@ -409,15 +419,17 @@ mod tests {
         let frame = EncodedFrame {
             width: 10,
             height: 20,
-            rgba: vec![1, 2, 3],
+            stride: 12,
+            bgra: vec![1, 2, 3],
         };
         let msg = encode_frame_message(id, frame);
-        assert_eq!(msg.len(), 17 + 3);
+        assert_eq!(msg.len(), 21 + 3);
         assert_eq!(msg[0], 1);
         assert_eq!(&msg[1..9], &42u64.to_le_bytes());
         assert_eq!(&msg[9..13], &10u32.to_le_bytes());
         assert_eq!(&msg[13..17], &20u32.to_le_bytes());
-        assert_eq!(&msg[17..], &[1, 2, 3]);
+        assert_eq!(&msg[17..21], &12u32.to_le_bytes());
+        assert_eq!(&msg[21..], &[1, 2, 3]);
     }
 
     #[test]
