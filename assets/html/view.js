@@ -12,19 +12,19 @@ statusEl.style.fontSize = "12px";
 statusEl.style.zIndex = "10";
 document.body.appendChild(statusEl);
 
-const errorEl = document.createElement("div");
-errorEl.style.position = "fixed";
-errorEl.style.top = "36px";
-errorEl.style.left = "8px";
-errorEl.style.right = "8px";
-errorEl.style.padding = "6px 10px";
-errorEl.style.background = "rgba(120,0,0,0.85)";
-errorEl.style.color = "#fff";
-errorEl.style.fontFamily = "sans-serif";
-errorEl.style.fontSize = "12px";
-errorEl.style.zIndex = "10";
-errorEl.style.display = "none";
-document.body.appendChild(errorEl);
+const statusBar = document.createElement("div");
+statusBar.style.position = "fixed";
+statusBar.style.top = "36px";
+statusBar.style.left = "8px";
+statusBar.style.right = "8px";
+statusBar.style.padding = "6px 10px";
+statusBar.style.background = "rgba(0,0,0,0.65)";
+statusBar.style.color = "#fff";
+statusBar.style.fontFamily = "sans-serif";
+statusBar.style.fontSize = "12px";
+statusBar.style.zIndex = "10";
+statusBar.style.display = "none";
+document.body.appendChild(statusBar);
 
 const canvas = document.getElementById("canvas");
 
@@ -42,13 +42,20 @@ let canvasFormat;
 let lastFrameAt = 0;
 let frameCount = 0;
 
-function showError(message) {
-  errorEl.textContent = message;
-  errorEl.style.display = "block";
+function showStatus(message, kind) {
+  statusBar.textContent = message;
+  if (kind === "error") {
+    statusBar.style.background = "rgba(120,0,0,0.85)";
+  } else if (kind === "warn") {
+    statusBar.style.background = "rgba(120,80,0,0.85)";
+  } else {
+    statusBar.style.background = "rgba(0,0,0,0.65)";
+  }
+  statusBar.style.display = "block";
 }
 
-function clearError() {
-  errorEl.style.display = "none";
+function clearStatus() {
+  statusBar.style.display = "none";
 }
 
 async function initWebGpu() {
@@ -211,7 +218,7 @@ function updateTexture(width, height, bgra, stride, scale) {
 function connect() {
   if (!surfaceId) {
     statusEl.textContent = "missing ?surface=...";
-    showError("Missing surface id. Open this page via the main viewer list.");
+    showStatus("Missing surface id. Open this page via the main viewer list.", "error");
     return;
   }
 
@@ -221,16 +228,16 @@ function connect() {
 
   ws.onopen = () => {
     statusEl.textContent = `connected: ${wsUrl} (surface ${surfaceId})`;
-    clearError();
+    clearStatus();
   };
   ws.onclose = () => {
     statusEl.textContent = "disconnected; retrying...";
-    showError("WebSocket disconnected. Retrying...");
+    showStatus("WebSocket disconnected. Retrying...", "warn");
     setTimeout(connect, 1000);
   };
   ws.onerror = () => {
     statusEl.textContent = "websocket error";
-    showError("WebSocket error. Check the server and network.");
+    showStatus("WebSocket error. Check the server and network.", "error");
   };
 
   ws.onmessage = (event) => {
@@ -246,11 +253,11 @@ function connect() {
 
     const buf = new Uint8Array(event.data);
     if (buf.length < 25) {
-      showError("Invalid frame: header too short");
+      showStatus("Invalid frame: header too short", "error");
       return;
     }
     if (buf[0] !== 1) {
-      showError("Invalid frame: bad type byte");
+      showStatus("Invalid frame: bad type byte", "error");
       return;
     }
 
@@ -265,7 +272,7 @@ function connect() {
     const payload = buf.slice(25);
     const expected = stride * height;
     if (payload.length < expected) {
-      showError(`Invalid frame: payload too short (${payload.length} < ${expected})`);
+      showStatus(`Invalid frame: payload too short (${payload.length} < ${expected})`, "error");
       return;
     }
 
@@ -273,19 +280,21 @@ function connect() {
     lastFrameAt = Date.now();
     frameCount += 1;
     if (frameCount === 1) {
-      clearError();
+      clearStatus();
     }
   };
 }
 
 setInterval(() => {
   if (lastFrameAt === 0) {
-    showError("No frames received yet.");
+    showStatus("No frames received yet.", "warn");
     return;
   }
   const ageMs = Date.now() - lastFrameAt;
   if (ageMs > 5000) {
-    showError(`No frames for ${(ageMs / 1000).toFixed(1)}s`);
+    showStatus(`No frames for ${(ageMs / 1000).toFixed(1)}s`, "warn");
+  } else {
+    clearStatus();
   }
 }, 2000);
 
