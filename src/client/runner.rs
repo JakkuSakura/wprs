@@ -165,7 +165,9 @@ pub fn run_client_for_serializer(
             ];
             codecs.push(transport::TransportCodec::Jpeg);
             #[cfg(feature = "video-h264")]
-            codecs.push(transport::TransportCodec::H264);
+            if should_advertise_h264() {
+                codecs.push(transport::TransportCodec::H264);
+            }
             codecs
         };
         let hello = transport::ClientHello {
@@ -189,4 +191,34 @@ pub fn run_client_for_serializer(
             notify_rx,
         })
         .location(loc!())
+}
+
+#[cfg(feature = "video-h264")]
+fn should_advertise_h264() -> bool {
+    #[cfg(target_os = "macos")]
+    let default_allow = false;
+    #[cfg(not(target_os = "macos"))]
+    let default_allow = true;
+
+    let allow = std::env::var("WPRS_ENABLE_H264")
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(default_allow);
+
+    if !allow {
+        return false;
+    }
+
+    match crate::protocols::video::h264::H264Decoder::new() {
+        Ok(_) => true,
+        Err(err) => {
+            warn!("H264 disabled: decoder init failed: {err:?}");
+            false
+        }
+    }
 }

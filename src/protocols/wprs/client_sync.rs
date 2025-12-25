@@ -21,6 +21,8 @@ pub struct ClientSync {
         crate::protocols::wprs::wayland::WlSurfaceId,
         crate::protocols::video::h264::H264Decoder,
     >,
+    #[cfg(feature = "video-h264")]
+    h264_disabled: std::collections::HashSet<crate::protocols::wprs::wayland::WlSurfaceId>,
 }
 
 impl ClientSync {
@@ -56,15 +58,33 @@ impl ClientSync {
                             return Ok(None);
                         };
 
-                        let decoder = self
-                            .h264_decoder
-                            .entry(surface)
-                            .or_insert_with(|| {
-                                crate::protocols::video::h264::H264Decoder::new()
-                                    .expect("H264Decoder init")
-                            });
+                        if self.h264_disabled.contains(&surface) {
+                            return Ok(None);
+                        }
 
-                        let decoded = decoder.decode(&msg.bytes).location(loc!())?;
+                        let decoder = match self.h264_decoder.entry(surface) {
+                            std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                            std::collections::hash_map::Entry::Vacant(entry) => {
+                                match crate::protocols::video::h264::H264Decoder::new() {
+                                    Ok(decoder) => entry.insert(decoder),
+                                    Err(err) => {
+                                        warn!("H264 decoder init failed: {err:?}");
+                                        self.h264_disabled.insert(surface);
+                                        return Ok(None);
+                                    }
+                                }
+                            }
+                        };
+
+                        let decoded = match decoder.decode(&msg.bytes) {
+                            Ok(decoded) => decoded,
+                            Err(err) => {
+                                warn!("H264 decode failed; disabling for surface {surface:?}: {err:?}");
+                                self.h264_decoder.remove(&surface);
+                                self.h264_disabled.insert(surface);
+                                return Ok(None);
+                            }
+                        };
                         let Some(decoded) = decoded else {
                             return Ok(None);
                         };
@@ -106,7 +126,10 @@ impl ClientSync {
                     SurfaceRequestPayload::Destroyed => {
                         self.buffer_cache.remove(&surface.surface);
                         #[cfg(feature = "video-h264")]
-                        self.h264_decoder.remove(&surface.surface);
+                        {
+                            self.h264_decoder.remove(&surface.surface);
+                            self.h264_disabled.remove(&surface.surface);
+                        }
                         return Ok(Some(RecvType::Object(Request::Surface(surface))));
                     }
                     SurfaceRequestPayload::Commit(_) => {}
