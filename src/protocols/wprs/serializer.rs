@@ -22,6 +22,9 @@ use std::net::SocketAddr;
 use std::net::TcpListener;
 use std::net::TcpStream;
 use std::num::NonZeroUsize;
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::collections::HashSet;
 #[cfg(unix)]
 use std::os::fd::AsFd;
 #[cfg(unix)]
@@ -79,8 +82,15 @@ use super::endpoint::TransportGuard;
 use super::endpoint::setup_client_transport;
 use super::framing::Framed;
 use super::raw_buffer::RawBufferHeader;
+use super::raw_buffer::RawBufferKind;
 use super::raw_buffer::RawBufferMessage;
 use super::raw_buffer::RawBufferPayload;
+use super::transport;
+use super::wayland::BitmapAssignment;
+use super::wayland::BufferPoolHandle;
+use super::wayland::SurfaceRequestPayload;
+use super::types::Request;
+use crate::utils::filtering;
 
 const CHANNEL_SIZE: usize = 1024;
 
@@ -240,6 +250,18 @@ where
     RawBuffer(RawBufferMessage),
 }
 
+trait RecvTransform<RT>: Send
+where
+    RT: Serializable,
+    RT::Archived: Deserialize<RT, HighDeserializer<RancorError>>
+        + for<'a> bytecheck::CheckBytes<HighValidator<'a, RancorError>>,
+{
+    fn handle(&mut self, msg: RecvType<RT>) -> Result<Option<RecvType<RT>>>;
+}
+
+type RecvTransformFactory<RT> =
+    Arc<dyn Fn() -> Box<dyn RecvTransform<RT> + Send> + Send + Sync>;
+
 impl<RT> fmt::Debug for RecvType<RT>
 where
     RT: Serializable,
@@ -278,7 +300,11 @@ impl Framed for MessageType {
     }
 }
 
-fn read_loop<R, RT>(mut stream: R, output_channel: channel::SyncSender<RecvType<RT>>) -> Result<()>
+fn read_loop<R, RT>(
+    mut stream: R,
+    output_channel: channel::SyncSender<RecvType<RT>>,
+    mut recv_transform: Option<Box<dyn RecvTransform<RT> + Send>>,
+) -> Result<()>
 where
     R: Read,
     RT: Serializable,
@@ -310,10 +336,19 @@ where
                                 .location(loc!())?,
                         );
                         debug!("read obj: {obj:?}");
-                        output_channel
-                            .send(obj)
-                            .map_err(|e| Error::Internal(format!("{e}")))
-                            .location(loc!())?;
+                        if let Some(transform) = recv_transform.as_mut() {
+                            if let Some(obj) = transform.handle(obj).location(loc!())? {
+                                output_channel
+                                    .send(obj)
+                                    .map_err(|e| Error::Internal(format!("{e}")))
+                                    .location(loc!())?;
+                            }
+                        } else {
+                            output_channel
+                                .send(obj)
+                                .map_err(|e| Error::Internal(format!("{e}")))
+                                .location(loc!())?;
+                        }
                         Ok(())
                     },
                 )
@@ -328,10 +363,19 @@ where
                 .location(loc!())?;
                 let obj = RecvType::RawBuffer(RawBufferMessage { header, bytes });
                 debug!("read obj: {obj:?}");
-                output_channel
-                    .send(obj)
-                    .map_err(|e| Error::Internal(format!("{e}")))
-                    .location(loc!())?;
+                if let Some(transform) = recv_transform.as_mut() {
+                    if let Some(obj) = transform.handle(obj).location(loc!())? {
+                        output_channel
+                            .send(obj)
+                            .map_err(|e| Error::Internal(format!("{e}")))
+                            .location(loc!())?;
+                    }
+                } else {
+                    output_channel
+                        .send(obj)
+                        .map_err(|e| Error::Internal(format!("{e}")))
+                        .location(loc!())?;
+                }
             },
         }
     }
@@ -444,6 +488,7 @@ fn accept_loop_inner<ST, RT, S>(
     write_channel_rx: Receiver<SendType<ST>>,
     other_end_connected: Arc<AtomicBool>,
     on_connect_frames: Arc<Mutex<Vec<OnConnectFrame>>>,
+    recv_transform_factory: Option<RecvTransformFactory<RT>>,
 ) where
     ST: Serializable,
     ST::Archived: Deserialize<ST, HighDeserializer<RancorError>>
@@ -456,9 +501,10 @@ fn accept_loop_inner<ST, RT, S>(
     thread::scope(|scope| {
         let read_stream = stream.clone_stream().unwrap();
         let write_stream = stream;
+        let recv_transform = recv_transform_factory.map(|factory| factory());
 
         let read_handle = scope.spawn(move || {
-            if let Err(err) = read_loop(read_stream, read_channel_tx).location(loc!()) {
+            if let Err(err) = read_loop(read_stream, read_channel_tx, recv_transform).location(loc!()) {
                 warn!("read_loop failed: {err:?}");
                 return;
             }
@@ -485,6 +531,7 @@ fn accept_loop_unix<ST, RT>(
     write_channel_rx: Receiver<SendType<ST>>,
     other_end_connected: Arc<AtomicBool>,
     on_connect_frames: Arc<Mutex<Vec<OnConnectFrame>>>,
+    recv_transform_factory: Option<RecvTransformFactory<RT>>,
 ) where
     ST: Serializable,
     ST::Archived: Deserialize<ST, HighDeserializer<RancorError>>
@@ -504,6 +551,7 @@ fn accept_loop_unix<ST, RT>(
                 write_channel_rx.clone(),
                 other_end_connected.clone(),
                 on_connect_frames.clone(),
+                recv_transform_factory.clone(),
             );
             stream.shutdown_both().unwrap();
         }
@@ -516,6 +564,7 @@ fn accept_loop_tcp<ST, RT>(
     write_channel_rx: Receiver<SendType<ST>>,
     other_end_connected: Arc<AtomicBool>,
     on_connect_frames: Arc<Mutex<Vec<OnConnectFrame>>>,
+    recv_transform_factory: Option<RecvTransformFactory<RT>>,
 ) where
     ST: Serializable,
     ST::Archived: Deserialize<ST, HighDeserializer<RancorError>>
@@ -535,6 +584,7 @@ fn accept_loop_tcp<ST, RT>(
                 write_channel_rx.clone(),
                 other_end_connected.clone(),
                 on_connect_frames.clone(),
+                recv_transform_factory.clone(),
             );
             stream.shutdown_both().unwrap();
         }
@@ -548,6 +598,7 @@ fn client_connect_loop_unix<ST, RT>(
     write_channel_rx: Receiver<SendType<ST>>,
     other_end_connected: Arc<AtomicBool>,
     on_connect_frames: Arc<Mutex<Vec<OnConnectFrame>>>,
+    recv_transform_factory: Option<RecvTransformFactory<RT>>,
 ) where
     ST: Serializable,
     ST::Archived: Deserialize<ST, HighDeserializer<RancorError>>
@@ -572,6 +623,7 @@ fn client_connect_loop_unix<ST, RT>(
                     write_channel_rx.clone(),
                     other_end_connected.clone(),
                     on_connect_frames.clone(),
+                    recv_transform_factory.clone(),
                 );
 
                 // If we disconnected, try again with backoff reset.
@@ -597,6 +649,7 @@ fn client_connect_loop_tcp<ST, RT>(
     write_channel_rx: Receiver<SendType<ST>>,
     other_end_connected: Arc<AtomicBool>,
     on_connect_frames: Arc<Mutex<Vec<OnConnectFrame>>>,
+    recv_transform_factory: Option<RecvTransformFactory<RT>>,
 ) where
     ST: Serializable,
     ST::Archived: Deserialize<ST, HighDeserializer<RancorError>>
@@ -624,6 +677,7 @@ fn client_connect_loop_tcp<ST, RT>(
                     write_channel_rx.clone(),
                     other_end_connected.clone(),
                     on_connect_frames.clone(),
+                    recv_transform_factory.clone(),
                 );
 
                 backoff = Duration::from_millis(100);
@@ -681,6 +735,8 @@ where
     other_end_connected: Arc<AtomicBool>,
     #[allow(dead_code)]
     on_connect_frames: Arc<Mutex<Vec<OnConnectFrame>>>,
+    #[allow(dead_code)]
+    recv_transform_factory: Option<RecvTransformFactory<RT>>,
     #[allow(dead_code)]
     transport_guard: Option<TransportGuard>,
     inproc: bool,
@@ -792,6 +848,7 @@ where
                         writer_rx,
                         other_end_connected,
                         on_connect_frames,
+                        None,
                     )
                 });
             }
@@ -806,6 +863,7 @@ where
                 write_handle: writer_tx,
                 other_end_connected,
                 on_connect_frames,
+                recv_transform_factory: None,
                 transport_guard: None,
                 inproc: false,
             })
@@ -820,9 +878,17 @@ where
         sock_path: P,
         options: SerializerClientOptions<ST>,
     ) -> Result<Self> {
+        Self::new_client_with_options_inner(sock_path, options, None)
+    }
+
+    fn new_client_with_options_inner<P: AsRef<Path>>(
+        sock_path: P,
+        options: SerializerClientOptions<ST>,
+        recv_transform_factory: Option<RecvTransformFactory<RT>>,
+    ) -> Result<Self> {
         #[cfg(not(unix))]
         {
-            let _ = sock_path;
+            let _ = (sock_path, recv_transform_factory);
             bail!(Error::Unsupported(
                 "unix socket client is not supported on this platform".to_string(),
             ))
@@ -848,6 +914,7 @@ where
             {
                 let other_end_connected = other_end_connected.clone();
                 let on_connect_frames = on_connect_frames.clone();
+                let recv_transform_factory = recv_transform_factory.clone();
 
                 if options.auto_reconnect {
                     thread::spawn(move || {
@@ -857,6 +924,7 @@ where
                             writer_rx,
                             other_end_connected,
                             on_connect_frames,
+                            recv_transform_factory,
                         )
                     });
                 } else {
@@ -871,6 +939,7 @@ where
                             writer_rx,
                             other_end_connected,
                             on_connect_frames,
+                            recv_transform_factory,
                         );
                         eprintln!("server disconnected");
                         std::process::exit(1);
@@ -888,6 +957,7 @@ where
                 write_handle: writer_tx,
                 other_end_connected,
                 on_connect_frames,
+                recv_transform_factory,
                 transport_guard: None,
                 inproc: false,
             })
@@ -916,6 +986,7 @@ where
                     writer_rx,
                     other_end_connected,
                     on_connect_frames,
+                    None,
                 )
             });
         }
@@ -930,6 +1001,7 @@ where
             write_handle: writer_tx,
             other_end_connected,
             on_connect_frames,
+            recv_transform_factory: None,
             transport_guard: None,
             inproc: false,
         })
@@ -942,6 +1014,14 @@ where
     pub fn new_client_tcp_with_options(
         addr: SocketAddr,
         options: SerializerClientOptions<ST>,
+    ) -> Result<Self> {
+        Self::new_client_tcp_with_options_inner(addr, options, None)
+    }
+
+    fn new_client_tcp_with_options_inner(
+        addr: SocketAddr,
+        options: SerializerClientOptions<ST>,
+        recv_transform_factory: Option<RecvTransformFactory<RT>>,
     ) -> Result<Self> {
         let (reader_tx, reader_rx): (channel::SyncSender<RecvType<RT>>, Channel<RecvType<RT>>) =
             channel::sync_channel(CHANNEL_SIZE);
@@ -960,6 +1040,7 @@ where
         {
             let other_end_connected = other_end_connected.clone();
             let on_connect_frames = on_connect_frames.clone();
+            let recv_transform_factory = recv_transform_factory.clone();
             if options.auto_reconnect {
                 thread::spawn(move || {
                     client_connect_loop_tcp(
@@ -968,6 +1049,7 @@ where
                         writer_rx,
                         other_end_connected,
                         on_connect_frames,
+                        recv_transform_factory,
                     )
                 });
             } else {
@@ -984,6 +1066,7 @@ where
                         writer_rx,
                         other_end_connected,
                         on_connect_frames,
+                        recv_transform_factory,
                     );
                     eprintln!("server disconnected");
                     std::process::exit(1);
@@ -1001,6 +1084,7 @@ where
             write_handle: writer_tx,
             other_end_connected,
             on_connect_frames,
+            recv_transform_factory,
             transport_guard: None,
             inproc: false,
         })
@@ -1039,6 +1123,208 @@ where
 
     pub fn is_inproc(&self) -> bool {
         self.inproc
+    }
+}
+
+impl<ST> Serializer<ST, Request>
+where
+    ST: Serializable,
+    ST::Archived: Deserialize<ST, HighDeserializer<RancorError>>
+        + for<'a> bytecheck::CheckBytes<HighValidator<'a, RancorError>>,
+{
+    pub fn new_client_with_options_resolve_raw_buffers<P: AsRef<Path>>(
+        sock_path: P,
+        options: SerializerClientOptions<ST>,
+    ) -> Result<Self> {
+        let factory: RecvTransformFactory<Request> =
+            Arc::new(|| Box::new(RawBufferResolver::new()));
+        Self::new_client_with_options_inner(sock_path, options, Some(factory))
+    }
+
+    pub fn new_client_endpoint_with_options_resolve_raw_buffers(
+        endpoint: Endpoint,
+        options: SerializerClientOptions<ST>,
+    ) -> Result<Self> {
+        let (resolved, guard) = setup_client_transport(endpoint).location(loc!())?;
+        resolved.warn_if_non_loopback("wprs client endpoint");
+
+        let factory: RecvTransformFactory<Request> =
+            Arc::new(|| Box::new(RawBufferResolver::new()));
+
+        let mut s = match &resolved {
+            Endpoint::Unix { path } => {
+                Self::new_client_with_options_inner(path, options, Some(factory))
+            }
+            Endpoint::Tcp { addr } => {
+                Self::new_client_tcp_with_options_inner(*addr, options, Some(factory))
+            }
+            Endpoint::Ssh { .. } => {
+                unreachable!("ssh forwarding resolves to a concrete local endpoint")
+            }
+        }
+        .location(loc!())?;
+        s.transport_guard = guard.map(|g| g.into_inner());
+        Ok(s)
+    }
+}
+
+#[cfg(feature = "video-h264")]
+thread_local! {
+    static H264_DECODER_CACHE: RefCell<HashMap<super::wayland::WlSurfaceId, crate::protocols::video::h264::H264Decoder>> =
+        RefCell::new(HashMap::new());
+    static H264_DISABLED: RefCell<HashSet<super::wayland::WlSurfaceId>> =
+        RefCell::new(HashSet::new());
+}
+
+struct RawBufferResolver {
+    buffer_cache: HashMap<super::wayland::WlSurfaceId, BufferPoolHandle>,
+    legacy_last_buffer: Option<BufferPoolHandle>,
+}
+
+impl RawBufferResolver {
+    fn new() -> Self {
+        Self {
+            buffer_cache: HashMap::new(),
+            legacy_last_buffer: None,
+        }
+    }
+}
+
+impl RecvTransform<Request> for RawBufferResolver {
+    fn handle(&mut self, msg: RecvType<Request>) -> Result<Option<RecvType<Request>>> {
+        match msg {
+            RecvType::RawBuffer(msg) => {
+                let surface = msg.header.surface;
+                match msg.header.kind {
+                    RawBufferKind::FilteredBgra => {
+                        let filtered = crate::utils::vec4u8::Vec4u8s::from(msg.bytes);
+                        let mut bgra = vec![0u8; filtered.len() * 4];
+                        filtering::unfilter(&filtered, &mut bgra);
+                        let data = BufferPoolHandle::from(bgra);
+                        if let Some(surface) = surface {
+                            self.buffer_cache.insert(surface, data);
+                        } else {
+                            self.legacy_last_buffer = Some(data);
+                        }
+                    }
+                    #[cfg(feature = "video-h264")]
+                    RawBufferKind::H264 => {
+                        let Some(surface) = surface else {
+                            warn!("received H264 buffer without surface id; ignoring");
+                            return Ok(None);
+                        };
+
+                        let is_disabled = H264_DISABLED.with(|disabled| {
+                            disabled.borrow().contains(&surface)
+                        });
+                        if is_disabled {
+                            return Ok(None);
+                        }
+
+                        let decoded = H264_DECODER_CACHE.with(|cache| {
+                            let mut cache = cache.borrow_mut();
+                            if !cache.contains_key(&surface) {
+                                match crate::protocols::video::h264::H264Decoder::new() {
+                                    Ok(decoder) => {
+                                        cache.insert(surface, decoder);
+                                    }
+                                    Err(err) => {
+                                        return Err(err);
+                                    }
+                                }
+                            }
+
+                            let decoder = cache.get_mut(&surface).expect("decoder exists");
+                            decoder.decode(&msg.bytes)
+                        });
+
+                        let decoded = match decoded {
+                            Ok(decoded) => decoded,
+                            Err(err) => {
+                                warn!(
+                                    "H264 decode failed; disabling for surface {surface:?}: {err:?}"
+                                );
+                                H264_DECODER_CACHE.with(|cache| {
+                                    cache.borrow_mut().remove(&surface);
+                                });
+                                H264_DISABLED.with(|disabled| {
+                                    disabled.borrow_mut().insert(surface);
+                                });
+                                return Ok(None);
+                            }
+                        };
+                        let Some(decoded) = decoded else {
+                            return Ok(None);
+                        };
+                        self.buffer_cache
+                            .insert(surface, BufferPoolHandle::from(decoded.bgra));
+                    }
+                    #[cfg(not(feature = "video-h264"))]
+                    RawBufferKind::H264 => {
+                        warn!("received H264 buffer without video-h264 support");
+                    }
+                    RawBufferKind::Png => {
+                        let (_w, _h, bgra) =
+                            transport::decode_png_to_bgra(&msg.bytes).location(loc!())?;
+                        let data = BufferPoolHandle::from(bgra);
+                        if let Some(surface) = surface {
+                            self.buffer_cache.insert(surface, data);
+                        } else {
+                            self.legacy_last_buffer = Some(data);
+                        }
+                    }
+                    RawBufferKind::Jpeg => {
+                        let (_w, _h, bgra) =
+                            transport::decode_jpeg_to_bgra(&msg.bytes).location(loc!())?;
+                        let data = BufferPoolHandle::from(bgra);
+                        if let Some(surface) = surface {
+                            self.buffer_cache.insert(surface, data);
+                        } else {
+                            self.legacy_last_buffer = Some(data);
+                        }
+                    }
+                }
+
+                Ok(None)
+            }
+            RecvType::Object(Request::Surface(mut surface)) => {
+                match &surface.payload {
+                    SurfaceRequestPayload::Destroyed => {
+                        self.buffer_cache.remove(&surface.surface);
+                        #[cfg(feature = "video-h264")]
+                        {
+                            H264_DECODER_CACHE.with(|cache| {
+                                cache.borrow_mut().remove(&surface.surface);
+                            });
+                            H264_DISABLED.with(|disabled| {
+                                disabled.borrow_mut().remove(&surface.surface);
+                            });
+                        }
+                        return Ok(Some(RecvType::Object(Request::Surface(surface))));
+                    }
+                    SurfaceRequestPayload::Commit(_) => {}
+                }
+
+                let SurfaceRequestPayload::Commit(mut state) = surface.payload else {
+                    unreachable!()
+                };
+
+                if let Some(BitmapAssignment::New(mut buf)) = state.bitmap.take() {
+                    if buf.data.len() != buf.metadata.len() {
+                        if let Some(cache) = self.buffer_cache.remove(&surface.surface) {
+                            buf.data = cache;
+                        } else if let Some(cache) = self.legacy_last_buffer.take() {
+                            buf.data = cache;
+                        }
+                    }
+                    state.bitmap = Some(BitmapAssignment::New(buf));
+                }
+
+                surface.payload = SurfaceRequestPayload::Commit(state);
+                Ok(Some(RecvType::Object(Request::Surface(surface))))
+            }
+            other => Ok(Some(other)),
+        }
     }
 }
 
@@ -1099,6 +1385,7 @@ where
         },
         other_end_connected: a_connected,
         on_connect_frames: Arc::new(Mutex::new(Vec::new())),
+        recv_transform_factory: None,
         transport_guard: None,
         inproc: true,
     };
@@ -1111,9 +1398,210 @@ where
         },
         other_end_connected: b_connected,
         on_connect_frames: Arc::new(Mutex::new(Vec::new())),
+        recv_transform_factory: None,
         transport_guard: None,
         inproc: true,
     };
 
     Ok((a, b))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::surface::BufferFormat;
+    use crate::models::surface::BufferMetadata;
+    use crate::models::surface::Bitmap;
+    use crate::models::surface::BitmapAssignment;
+    use crate::models::surface::BufferPoolHandle;
+    use crate::models::surface::SurfaceState;
+    use crate::models::surface::WlSurfaceId;
+    use crate::protocols::wprs::types::ClientId;
+    use crate::protocols::wprs::wayland::SurfaceRequest;
+    use crate::protocols::wprs::wayland::SurfaceRequestPayload;
+
+    #[test]
+    fn raw_buffer_resolver_patches_commit_from_cache() {
+        let mut resolver = RawBufferResolver::new();
+        let surface = WlSurfaceId(1);
+        let bgra: Vec<u8> = vec![
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+        ];
+        let png = transport::encode_png_from_bgra(2, 2, 8, &bgra).unwrap();
+        let raw = RawBufferMessage {
+            header: RawBufferHeader {
+                version: RawBufferHeader::V2,
+                kind: RawBufferKind::Png,
+                surface: Some(surface),
+            },
+            bytes: png,
+        };
+        assert!(resolver.handle(RecvType::RawBuffer(raw)).unwrap().is_none());
+
+        let bitmap = Bitmap {
+            metadata: BufferMetadata {
+                width: 2,
+                height: 2,
+                stride: 8,
+                format: BufferFormat::Argb8888,
+            },
+            data: BufferPoolHandle::from(vec![0u8; 4]),
+        };
+        let state = SurfaceState {
+            client: ClientId(1),
+            id: surface,
+            bitmap: Some(BitmapAssignment::New(bitmap)),
+            bitmap_update: None,
+            role: None,
+            buffer_scale: 1,
+            buffer_transform: None,
+            opaque_region: None,
+            input_region: None,
+            z_ordered_children: Vec::new(),
+            damage: None,
+            output_ids: Vec::new(),
+            viewport_state: None,
+            xdg_surface_state: None,
+        };
+        let request = Request::Surface(SurfaceRequest {
+            client: ClientId(1),
+            surface,
+            payload: SurfaceRequestPayload::Commit(state),
+        });
+
+        let out = resolver
+            .handle(RecvType::Object(request))
+            .unwrap()
+            .expect("expected surface request");
+
+        let RecvType::Object(Request::Surface(surface_request)) = out else {
+            panic!("unexpected recv type");
+        };
+        let SurfaceRequestPayload::Commit(state) = surface_request.payload else {
+            panic!("expected surface commit");
+        };
+        let BitmapAssignment::New(bitmap) = state.bitmap.expect("bitmap present") else {
+            panic!("expected new bitmap");
+        };
+        assert_eq!(bitmap.data.as_slice(), bgra.as_slice());
+    }
+
+    #[test]
+    fn raw_buffer_resolver_commit_before_raw_buffer_keeps_placeholder() {
+        let mut resolver = RawBufferResolver::new();
+        let surface = WlSurfaceId(2);
+        let placeholder = vec![1u8, 2, 3, 4];
+        let bitmap = Bitmap {
+            metadata: BufferMetadata {
+                width: 2,
+                height: 2,
+                stride: 8,
+                format: BufferFormat::Argb8888,
+            },
+            data: BufferPoolHandle::from(placeholder.clone()),
+        };
+        let state = SurfaceState {
+            client: ClientId(2),
+            id: surface,
+            bitmap: Some(BitmapAssignment::New(bitmap)),
+            bitmap_update: None,
+            role: None,
+            buffer_scale: 1,
+            buffer_transform: None,
+            opaque_region: None,
+            input_region: None,
+            z_ordered_children: Vec::new(),
+            damage: None,
+            output_ids: Vec::new(),
+            viewport_state: None,
+            xdg_surface_state: None,
+        };
+        let request = Request::Surface(SurfaceRequest {
+            client: ClientId(2),
+            surface,
+            payload: SurfaceRequestPayload::Commit(state),
+        });
+
+        let out = resolver
+            .handle(RecvType::Object(request))
+            .unwrap()
+            .expect("expected surface request");
+
+        let RecvType::Object(Request::Surface(surface_request)) = out else {
+            panic!("unexpected recv type");
+        };
+        let SurfaceRequestPayload::Commit(state) = surface_request.payload else {
+            panic!("expected surface commit");
+        };
+        let BitmapAssignment::New(bitmap) = state.bitmap.expect("bitmap present") else {
+            panic!("expected new bitmap");
+        };
+        assert_eq!(bitmap.data.as_slice(), placeholder.as_slice());
+    }
+
+    #[test]
+    fn raw_buffer_resolver_uses_legacy_buffer_when_surface_missing() {
+        let mut resolver = RawBufferResolver::new();
+        let bgra: Vec<u8> = vec![
+            10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+        ];
+        let png = transport::encode_png_from_bgra(2, 2, 8, &bgra).unwrap();
+        let raw = RawBufferMessage {
+            header: RawBufferHeader {
+                version: RawBufferHeader::V1,
+                kind: RawBufferKind::Png,
+                surface: None,
+            },
+            bytes: png,
+        };
+        assert!(resolver.handle(RecvType::RawBuffer(raw)).unwrap().is_none());
+
+        let bitmap = Bitmap {
+            metadata: BufferMetadata {
+                width: 2,
+                height: 2,
+                stride: 8,
+                format: BufferFormat::Argb8888,
+            },
+            data: BufferPoolHandle::from(vec![0u8; 4]),
+        };
+        let surface = WlSurfaceId(3);
+        let state = SurfaceState {
+            client: ClientId(3),
+            id: surface,
+            bitmap: Some(BitmapAssignment::New(bitmap)),
+            bitmap_update: None,
+            role: None,
+            buffer_scale: 1,
+            buffer_transform: None,
+            opaque_region: None,
+            input_region: None,
+            z_ordered_children: Vec::new(),
+            damage: None,
+            output_ids: Vec::new(),
+            viewport_state: None,
+            xdg_surface_state: None,
+        };
+        let request = Request::Surface(SurfaceRequest {
+            client: ClientId(3),
+            surface,
+            payload: SurfaceRequestPayload::Commit(state),
+        });
+
+        let out = resolver
+            .handle(RecvType::Object(request))
+            .unwrap()
+            .expect("expected surface request");
+
+        let RecvType::Object(Request::Surface(surface_request)) = out else {
+            panic!("unexpected recv type");
+        };
+        let SurfaceRequestPayload::Commit(state) = surface_request.payload else {
+            panic!("expected surface commit");
+        };
+        let BitmapAssignment::New(bitmap) = state.bitmap.expect("bitmap present") else {
+            panic!("expected new bitmap");
+        };
+        assert_eq!(bitmap.data.as_slice(), bgra.as_slice());
+    }
 }

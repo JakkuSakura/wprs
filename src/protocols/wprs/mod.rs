@@ -21,7 +21,6 @@ pub mod tuple;
 pub mod wayland;
 pub mod xdg_shell;
 
-pub mod client_sync;
 pub mod handshake;
 
 pub mod endpoint;

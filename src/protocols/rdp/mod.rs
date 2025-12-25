@@ -320,7 +320,7 @@ pub fn run_bridge(
     security: Security,
 ) -> Result<()> {
     let mut serializer: Serializer<ProtoEvent, ProtoRequest> =
-        Serializer::new_client_endpoint_with_options(
+        Serializer::new_client_endpoint_with_options_resolve_raw_buffers(
             wprs_endpoint,
             SerializerClientOptions {
                 auto_reconnect: true,
@@ -348,7 +348,6 @@ pub fn run_bridge(
         std::thread::spawn(move || {
             let mut event_loop = calloop::EventLoop::try_new().expect("calloop init failed");
 
-            let mut buffer_cache: Option<BufferPoolHandle> = None;
             let mut desktop_size = DesktopSize {
                 width: 1024,
                 height: 768,
@@ -359,12 +358,6 @@ pub fn run_bridge(
                 .insert_source(reader, move |event, _, _state: &mut ()| {
                     if let calloop::channel::Event::Msg(msg) = event {
                         match msg {
-                            RecvType::RawBuffer(buf) => {
-                                let filtered = crate::utils::vec4u8::Vec4u8s::from(buf.bytes);
-                                let mut bgra = vec![0u8; filtered.len() * 4];
-                                filtering::unfilter(&filtered, &mut bgra);
-                                buffer_cache = Some(BufferPoolHandle::from(bgra));
-                            }
                             RecvType::Object(ProtoRequest::Surface(surface)) => {
                                 if let crate::protocols::wprs::wayland::SurfaceRequestPayload::Commit(
                                     mut state,
@@ -388,13 +381,7 @@ pub fn run_bridge(
                                         return;
                                     }
 
-                                    if let Some(BitmapAssignment::New(mut buf)) = state.bitmap.take()
-                                    {
-                                        if buf.data.len() != buf.metadata.len() {
-                                            if let Some(cache) = buffer_cache.take() {
-                                                buf.data = cache;
-                                            }
-                                        }
+                                    if let Some(BitmapAssignment::New(buf)) = state.bitmap.take() {
 
                                         let raw = buf.data.as_slice();
 
@@ -442,6 +429,7 @@ pub fn run_bridge(
                                     }
                                 }
                             }
+                            RecvType::RawBuffer(_) => {}
                             _ => {}
                         }
                     }

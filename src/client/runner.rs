@@ -49,22 +49,26 @@ pub fn run_wprsc(config: WprscConfig) -> Result<()> {
 
     let serializer: Serializer<proto::types::Event, proto::types::Request> =
         match &config.endpoint {
-            Some(endpoint) => {
-                Serializer::new_client_endpoint_with_options(endpoint.clone(), serializer_options)
-                    .with_context(loc!(), || {
-                    format!("Serializer failed to initialize for endpoint {endpoint:?}.")
-                })?
-            },
+            Some(endpoint) => Serializer::new_client_endpoint_with_options_resolve_raw_buffers(
+                endpoint.clone(),
+                serializer_options,
+            )
+            .with_context(loc!(), || {
+                format!("Serializer failed to initialize for endpoint {endpoint:?}.")
+            })?,
             None => {
                 fs::create_dir_all(config.socket.parent().location(loc!())?).location(loc!())?;
-                Serializer::new_client_with_options(&config.socket, serializer_options)
-                    .with_context(loc!(), || {
-                        format!(
-                            "Serializer failed to initialize for socket {:?}.",
-                            &config.socket
-                        )
-                    })?
-            },
+                Serializer::new_client_with_options_resolve_raw_buffers(
+                    &config.socket,
+                    serializer_options,
+                )
+                .with_context(loc!(), || {
+                    format!(
+                        "Serializer failed to initialize for socket {:?}.",
+                        &config.socket
+                    )
+                })?
+            }
         };
 
     run_client_for_serializer(
@@ -96,7 +100,7 @@ pub fn run_client_for_endpoint(
     };
 
     let serializer: Serializer<proto::types::Event, proto::types::Request> =
-        Serializer::new_client_endpoint_with_options(endpoint, serializer_options)
+        Serializer::new_client_endpoint_with_options_resolve_raw_buffers(endpoint, serializer_options)
             .location(loc!())?;
 
     run_client_for_serializer(serializer, client_backend, backend_config).location(loc!())
@@ -117,21 +121,13 @@ pub fn run_client_for_serializer(
     let reader = serializer.reader().location(loc!())?;
     let state_for_reader = std::sync::Arc::clone(&state);
     std::thread::spawn(move || {
-        let mut client_sync = crate::protocols::wprs::client_sync::ClientSync::new();
         let mut loop_ = CalloopEventLoop::try_new().expect("calloop init");
         loop_
             .handle()
             .insert_source(reader, move |event, _metadata, _state| {
                 if let CalloopChannelEvent::Msg(msg) = event {
-                    let msg = match client_sync.handle_message(msg) {
-                        Ok(Some(msg)) => msg,
-                        Ok(None) => return,
-                        Err(err) => {
-                            warn!("client sync failed: {err:?}");
-                            return;
-                        }
-                    };
                     let crate::protocols::wprs::serializer::RecvType::Object(req) = msg else {
+                        warn!("unexpected RawBuffer message delivered to client; ignoring");
                         return;
                     };
                     if state_for_reader.apply_request(req) {

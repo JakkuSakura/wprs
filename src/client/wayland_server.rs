@@ -86,10 +86,13 @@ mod wayland_server_impl {
             on_connect: vec![proto::serializer::SendType::Object(proto::types::Event::WprsClientConnect)],
         };
         let serializer: Serializer<proto::types::Event, proto::types::Request> =
-            Serializer::new_client_with_options(&internal_socket, serializer_options)
-                .with_context(loc!(), || {
-                    format!("failed to connect to internal wprs socket {internal_socket:?}")
-                })?;
+            Serializer::new_client_with_options_resolve_raw_buffers(
+                &internal_socket,
+                serializer_options,
+            )
+            .with_context(loc!(), || {
+                format!("failed to connect to internal wprs socket {internal_socket:?}")
+            })?;
 
         let present_backend = resolve_client_backend(config.present_backend).location(loc!())?;
         run_client_for_serializer(
