@@ -420,6 +420,7 @@ mod macos {
     use core_graphics::sys::CGImage as CGImageSys;
     use foreign_types::ForeignType;
     use core_graphics::window;
+    use objc::rc::autoreleasepool;
     use objc::runtime::{Class, Object, BOOL, NO, YES};
     use objc::{msg_send, sel, sel_impl};
     use std::ffi::CStr;
@@ -523,6 +524,17 @@ mod macos {
 
         let (tx, rx) = mpsc::channel();
         let block = ConcreteBlock::new(move |content: *mut Object, error: *mut Object| {
+            let (content, error) = autoreleasepool(|| {
+                unsafe {
+                    if !content.is_null() {
+                        let _: *mut Object = msg_send![content, retain];
+                    }
+                    if !error.is_null() {
+                        let _: *mut Object = msg_send![error, retain];
+                    }
+                }
+                (content, error)
+            });
             let _ = tx.send((content, error));
         })
         .copy();
@@ -540,11 +552,24 @@ mod macos {
             return Ok(None);
         };
         if !error.is_null() || content.is_null() {
+            if !error.is_null() {
+                unsafe {
+                    let _: () = msg_send![error, release];
+                }
+            }
+            if !content.is_null() {
+                unsafe {
+                    let _: () = msg_send![content, release];
+                }
+            }
             return Ok(None);
         }
 
         let windows_obj: *mut Object = unsafe { msg_send![content, windows] };
         if windows_obj.is_null() {
+            unsafe {
+                let _: () = msg_send![content, release];
+            }
             return Ok(None);
         }
 
@@ -591,6 +616,9 @@ mod macos {
             });
         }
 
+        unsafe {
+            let _: () = msg_send![content, release];
+        }
         Ok(Some(out))
     }
 
@@ -852,8 +880,9 @@ mod macos {
 
         let data = image.data();
         let bytes = data.bytes();
+        let expected_len = (stride as usize) * (height as usize);
         ensure!(
-            bytes.len() >= (stride as usize) * (height as usize),
+            bytes.len() >= expected_len,
             Error::Internal("CGImage data smaller than expected".to_string()),
         );
 
@@ -864,7 +893,7 @@ mod macos {
             format: crate::protocols::wprs::wayland::BufferFormat::Argb8888,
         };
 
-        Ok((metadata, bytes.to_vec()))
+        Ok((metadata, bytes[..expected_len].to_vec()))
     }
 
 

@@ -103,15 +103,13 @@ fn main() -> Result<()> {
 fn main() -> Result<()> {
     use wprs::client::backend::ClientBackendConfig;
     use wprs::client::config::ClientBackend;
-    use wprs::client::config::WprscConfig;
     use wprs::client::runner::run_client_for_serializer;
     use wprs::protocols::wprs::serializer::new_inproc_serializer_pair;
     use wprs::protocols::wprs::types::Event;
     use wprs::protocols::wprs::types::Request;
     use wprs::server::backend::ServerBackend;
-    use wprs::server::backends::wayland::WaylandSmithayBackend;
-    use wprs::server::backends::wayland::WaylandSmithayBackendConfig;
-    use wprs::server::config::WprsdConfig;
+    use wprs::server::backends::wayland::backend::WaylandSmithayBackend;
+    use wprs::server::backends::wayland::backend::WaylandSmithayBackendConfig;
     use wprs::utils;
 
     let args = Args::parse();
