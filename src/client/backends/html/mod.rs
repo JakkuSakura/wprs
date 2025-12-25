@@ -113,6 +113,15 @@ struct HtmlPresenter {
     broadcaster: broadcast::Sender<WireMessage>,
     surfaces: Arc<Mutex<HashMap<WlSurfaceId, SurfaceInfo>>>,
     window_manager: WindowManager,
+    frame_cache: HashMap<WlSurfaceId, SurfaceFrame>,
+}
+
+struct SurfaceFrame {
+    width: u32,
+    height: u32,
+    stride: u32,
+    scale: u32,
+    data: Vec<u8>,
 }
 
 impl HtmlPresenter {
@@ -124,6 +133,7 @@ impl HtmlPresenter {
             broadcaster,
             surfaces,
             window_manager: WindowManager::new(),
+            frame_cache: HashMap::new(),
         }
     }
 
@@ -139,9 +149,50 @@ impl HtmlPresenter {
         }
 
         for updated in batch.surfaces.updated {
-            if let Some(frame) = encode_surface_bgra(&updated)? {
-                let msg = encode_frame_message(updated.id, frame);
-                let _ = self.broadcaster.send(WireMessage::Binary(msg));
+            let surface_id = updated.id;
+            let mut sent = false;
+
+            if let Some(bitmap) = updated
+                .bitmap
+                .as_ref()
+                .and_then(|assignment| assignment.as_new())
+            {
+                if let Some(frame) = encode_surface_bgra(&updated)? {
+                    self.frame_cache.insert(
+                        surface_id,
+                        SurfaceFrame {
+                            width: frame.width,
+                            height: frame.height,
+                            stride: frame.stride,
+                            scale: frame.scale,
+                            data: frame.bgra.clone(),
+                        },
+                    );
+                    let msg = encode_frame_message(surface_id, frame);
+                    let _ = self.broadcaster.send(WireMessage::Binary(msg));
+                    sent = true;
+                } else if bitmap.metadata.len() == 0 {
+                    self.frame_cache.remove(&surface_id);
+                }
+            }
+
+            if !sent {
+                if let Some(update) = updated.bitmap_update.as_ref() {
+                    if let Some(frame) = self.frame_cache.get_mut(&surface_id) {
+                        apply_bitmap_patch(frame, update)?;
+                        let msg = encode_frame_message(
+                            surface_id,
+                            EncodedFrame {
+                                width: frame.width,
+                                height: frame.height,
+                                stride: frame.stride,
+                                scale: frame.scale,
+                                bgra: frame.data.clone(),
+                            },
+                        );
+                        let _ = self.broadcaster.send(WireMessage::Binary(msg));
+                    }
+                }
             }
         }
         Ok(())
@@ -188,6 +239,7 @@ struct EncodedFrame {
     width: u32,
     height: u32,
     stride: u32,
+    scale: u32,
     bgra: Vec<u8>,
 }
 
@@ -236,17 +288,19 @@ fn encode_surface_bgra(state: &proto::wayland::SurfaceState) -> Result<Option<En
         width,
         height,
         stride,
+        scale: updated_scale(state.buffer_scale),
         bgra,
     }))
 }
 
 fn encode_frame_message(surface_id: WlSurfaceId, frame: EncodedFrame) -> Vec<u8> {
-    let mut out = Vec::with_capacity(21 + frame.bgra.len());
+    let mut out = Vec::with_capacity(25 + frame.bgra.len());
     out.push(1);
     out.extend_from_slice(&surface_id.0.to_le_bytes());
     out.extend_from_slice(&frame.width.to_le_bytes());
     out.extend_from_slice(&frame.height.to_le_bytes());
     out.extend_from_slice(&frame.stride.to_le_bytes());
+    out.extend_from_slice(&frame.scale.to_le_bytes());
     out.extend_from_slice(&frame.bgra);
     out
 }
@@ -256,6 +310,61 @@ fn align_up(value: usize, alignment: usize) -> usize {
         return value;
     }
     value.saturating_add(alignment - 1) / alignment * alignment
+}
+
+fn updated_scale(scale: i32) -> u32 {
+    if scale <= 0 {
+        1
+    } else {
+        scale as u32
+    }
+}
+
+fn apply_bitmap_patch(frame: &mut SurfaceFrame, update: &proto::wayland::BitmapUpdate) -> Result<()> {
+    match update {
+        proto::wayland::BitmapUpdate::Patch {
+            x,
+            y,
+            width,
+            height,
+            stride,
+            data,
+        } => {
+            let x = *x as usize;
+            let y = *y as usize;
+            let width = *width as usize;
+            let height = *height as usize;
+            let stride = *stride as usize;
+            if width == 0 || height == 0 {
+                return Ok(());
+            }
+            let row_bytes = width.saturating_mul(4);
+            let dst_stride = frame.stride as usize;
+            let dst_height = frame.height as usize;
+            let dst_width = frame.width as usize;
+            if x + width > dst_width || y + height > dst_height {
+                return Ok(());
+            }
+            if row_bytes > stride {
+                return Ok(());
+            }
+            let data = data.as_slice();
+            let expected = stride.saturating_mul(height);
+            if data.len() < expected {
+                return Ok(());
+            }
+            for row in 0..height {
+                let src = &data[row * stride..row * stride + row_bytes];
+                let dst_start = (y + row) * dst_stride + x * 4;
+                let dst_end = dst_start + row_bytes;
+                if dst_end > frame.data.len() {
+                    break;
+                }
+                frame.data[dst_start..dst_end].copy_from_slice(src);
+            }
+        }
+    }
+    Ok(())
 }
 
 fn surface_event_json(surface_id: WlSurfaceId, title: Option<&str>, app_id: Option<&str>) -> String {
@@ -466,16 +575,18 @@ mod tests {
             width: 10,
             height: 20,
             stride: 12,
+            scale: 2,
             bgra: vec![1, 2, 3],
         };
         let msg = encode_frame_message(id, frame);
-        assert_eq!(msg.len(), 21 + 3);
+        assert_eq!(msg.len(), 25 + 3);
         assert_eq!(msg[0], 1);
         assert_eq!(&msg[1..9], &42u64.to_le_bytes());
         assert_eq!(&msg[9..13], &10u32.to_le_bytes());
         assert_eq!(&msg[13..17], &20u32.to_le_bytes());
         assert_eq!(&msg[17..21], &12u32.to_le_bytes());
-        assert_eq!(&msg[21..], &[1, 2, 3]);
+        assert_eq!(&msg[21..25], &2u32.to_le_bytes());
+        assert_eq!(&msg[25..], &[1, 2, 3]);
     }
 
     #[test]
@@ -498,7 +609,7 @@ mod tests {
         presenter.apply_updates(batch).unwrap();
         let frame = recv_binary(&mut rx);
         assert_eq!(frame[0], 1);
-        let payload = &frame[21..];
+        let payload = &frame[25..];
         assert!(payload.iter().any(|&b| b != 0));
     }
 

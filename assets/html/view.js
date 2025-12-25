@@ -12,6 +12,20 @@ statusEl.style.fontSize = "12px";
 statusEl.style.zIndex = "10";
 document.body.appendChild(statusEl);
 
+const errorEl = document.createElement("div");
+errorEl.style.position = "fixed";
+errorEl.style.top = "36px";
+errorEl.style.left = "8px";
+errorEl.style.right = "8px";
+errorEl.style.padding = "6px 10px";
+errorEl.style.background = "rgba(120,0,0,0.85)";
+errorEl.style.color = "#fff";
+errorEl.style.fontFamily = "sans-serif";
+errorEl.style.fontSize = "12px";
+errorEl.style.zIndex = "10";
+errorEl.style.display = "none";
+document.body.appendChild(errorEl);
+
 const canvas = document.getElementById("canvas");
 
 let gpuContext;
@@ -25,6 +39,17 @@ let bindGroup;
 let vertexBuffer;
 let indexBuffer;
 let canvasFormat;
+let lastFrameAt = 0;
+let frameCount = 0;
+
+function showError(message) {
+  errorEl.textContent = message;
+  errorEl.style.display = "block";
+}
+
+function clearError() {
+  errorEl.style.display = "none";
+}
 
 async function initWebGpu() {
   if (!navigator.gpu) {
@@ -125,10 +150,17 @@ async function initWebGpu() {
   });
 }
 
-function updateTexture(width, height, bgra, stride) {
+function updateTexture(width, height, bgra, stride, scale) {
   if (canvas.width !== width || canvas.height !== height) {
     canvas.width = width;
     canvas.height = height;
+  }
+  const cssScale = scale && scale > 0 ? scale : 1;
+  const cssWidth = Math.max(1, Math.round(width / cssScale));
+  const cssHeight = Math.max(1, Math.round(height / cssScale));
+  if (canvas.style.width !== `${cssWidth}px` || canvas.style.height !== `${cssHeight}px`) {
+    canvas.style.width = `${cssWidth}px`;
+    canvas.style.height = `${cssHeight}px`;
   }
 
   if (!texture || textureWidth !== width || textureHeight !== height) {
@@ -179,6 +211,7 @@ function updateTexture(width, height, bgra, stride) {
 function connect() {
   if (!surfaceId) {
     statusEl.textContent = "missing ?surface=...";
+    showError("Missing surface id. Open this page via the main viewer list.");
     return;
   }
 
@@ -188,13 +221,16 @@ function connect() {
 
   ws.onopen = () => {
     statusEl.textContent = `connected: ${wsUrl} (surface ${surfaceId})`;
+    clearError();
   };
   ws.onclose = () => {
     statusEl.textContent = "disconnected; retrying...";
+    showError("WebSocket disconnected. Retrying...");
     setTimeout(connect, 1000);
   };
   ws.onerror = () => {
     statusEl.textContent = "websocket error";
+    showError("WebSocket error. Check the server and network.");
   };
 
   ws.onmessage = (event) => {
@@ -209,8 +245,14 @@ function connect() {
     }
 
     const buf = new Uint8Array(event.data);
-    if (buf.length < 21) return;
-    if (buf[0] !== 1) return;
+    if (buf.length < 25) {
+      showError("Invalid frame: header too short");
+      return;
+    }
+    if (buf[0] !== 1) {
+      showError("Invalid frame: bad type byte");
+      return;
+    }
 
     const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
     const id = view.getBigUint64(1, true).toString();
@@ -219,13 +261,33 @@ function connect() {
     const width = view.getUint32(9, true);
     const height = view.getUint32(13, true);
     const stride = view.getUint32(17, true);
-    const payload = buf.slice(21);
+    const scale = view.getUint32(21, true);
+    const payload = buf.slice(25);
     const expected = stride * height;
-    if (payload.length < expected) return;
+    if (payload.length < expected) {
+      showError(`Invalid frame: payload too short (${payload.length} < ${expected})`);
+      return;
+    }
 
-    updateTexture(width, height, payload, stride);
+    updateTexture(width, height, payload, stride, scale);
+    lastFrameAt = Date.now();
+    frameCount += 1;
+    if (frameCount === 1) {
+      clearError();
+    }
   };
 }
+
+setInterval(() => {
+  if (lastFrameAt === 0) {
+    showError("No frames received yet.");
+    return;
+  }
+  const ageMs = Date.now() - lastFrameAt;
+  if (ageMs > 5000) {
+    showError(`No frames for ${(ageMs / 1000).toFixed(1)}s`);
+  }
+}, 2000);
 
 initWebGpu()
   .then(() => connect())
