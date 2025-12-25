@@ -169,6 +169,18 @@ function updateTexture(width, height, bgra, stride, scale) {
     canvas.style.width = `${cssWidth}px`;
     canvas.style.height = `${cssHeight}px`;
   }
+  const maxWidth = window.innerWidth;
+  const maxHeight = window.innerHeight;
+  const fitScale = Math.min(maxWidth / cssWidth, maxHeight / cssHeight, 1);
+  if (fitScale < 1) {
+    canvas.style.transform = `scale(${fitScale.toFixed(4)})`;
+  } else {
+    canvas.style.transform = "";
+  }
+  const fittedWidth = cssWidth * fitScale;
+  const fittedHeight = cssHeight * fitScale;
+  canvas.style.marginLeft = `${Math.max(0, (maxWidth - fittedWidth) / 2)}px`;
+  canvas.style.marginTop = `${Math.max(0, (maxHeight - fittedHeight) / 2)}px`;
 
   if (!texture || textureWidth !== width || textureHeight !== height) {
     texture = device.createTexture({
