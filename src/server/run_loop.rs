@@ -31,7 +31,6 @@ use crate::protocols::wprs::wayland::SurfaceRequestPayload;
 use crate::protocols::wprs::wayland::SurfaceState;
 use crate::protocols::wprs::wayland::WlSurfaceId;
 use crate::server::backend::BackendObservation;
-use crate::server::backend::BackendBgraFrame;
 use crate::server::backend::BackendSurfaceRole;
 use crate::server::backend::PollingBackend;
 use crate::protocols::wprs::codecs;
@@ -285,50 +284,6 @@ fn surface_state_for_descriptor(
     }
 }
 
-fn scale_bgra_frame(
-    mut frame: BackendBgraFrame,
-    client_scale: u32,
-    source_scale: u32,
-) -> Result<BackendBgraFrame> {
-    if client_scale == 0 || source_scale == 0 || client_scale == source_scale {
-        return Ok(frame);
-    }
-
-    let src_width = frame.metadata.width.max(0) as usize;
-    let src_height = frame.metadata.height.max(0) as usize;
-    let src_stride = frame.metadata.stride.max(0) as usize;
-    if src_width == 0 || src_height == 0 || src_stride < src_width * 4 {
-        return Ok(frame);
-    }
-
-    let dst_width = ((src_width as u64) * client_scale as u64 / source_scale as u64).max(1) as usize;
-    let dst_height =
-        ((src_height as u64) * client_scale as u64 / source_scale as u64).max(1) as usize;
-    let dst_stride = dst_width.saturating_mul(4);
-    let mut out = vec![0u8; dst_stride.saturating_mul(dst_height)];
-
-    for y in 0..dst_height {
-        let src_y = y * src_height / dst_height;
-        let src_row = src_y * src_stride;
-        let dst_row = y * dst_stride;
-        for x in 0..dst_width {
-            let src_x = x * src_width / dst_width;
-            let src_idx = src_row + src_x * 4;
-            let dst_idx = dst_row + x * 4;
-            if src_idx + 4 <= frame.bgra.len() && dst_idx + 4 <= out.len() {
-                out[dst_idx..dst_idx + 4]
-                    .copy_from_slice(&frame.bgra[src_idx..src_idx + 4]);
-            }
-        }
-    }
-
-    frame.metadata.width = dst_width as i32;
-    frame.metadata.height = dst_height as i32;
-    frame.metadata.stride = dst_stride as i32;
-    frame.bgra = out;
-    Ok(frame)
-}
-
 fn client_scale_for_backend<B: PollingBackend>(state: &State<B>) -> u32 {
     if state.backend.supports_hidpi() {
         return 1;
@@ -339,13 +294,6 @@ fn client_scale_for_backend<B: PollingBackend>(state: &State<B>) -> u32 {
         .map(|c| c.client_scale)
         .unwrap_or(1)
         .max(1)
-}
-
-fn source_scale_for_backend<B: PollingBackend>(state: &State<B>) -> u32 {
-    if state.backend.supports_hidpi() {
-        return 1;
-    }
-    state.backend.display_config().scale_factor.max(1) as u32
 }
 
 fn encode_bgra_frame(
@@ -479,16 +427,13 @@ fn apply_observation<B: PollingBackend>(
     match obs {
         BackendObservation::SurfaceCommit { surface, frame } => {
             let client_scale = client_scale_for_backend(state);
-            let source_scale = source_scale_for_backend(state);
             let mut surface = surface;
             if client_scale > 0 && !state.backend.supports_hidpi() {
                 surface.buffer_scale = client_scale as i32;
             }
 
             if state.inproc_mode {
-                let frame = frame.and_then(|frame| {
-                    scale_bgra_frame(frame, client_scale, source_scale).ok()
-                });
+                let frame = frame;
                 let bitmap = frame.as_ref().map(|frame| {
                     let size_bytes = frame.metadata.len();
                     let pool = state
@@ -512,8 +457,7 @@ fn apply_observation<B: PollingBackend>(
                 return Ok(());
             }
 
-            let mut frame_to_send =
-                frame.and_then(|frame| scale_bgra_frame(frame, client_scale, source_scale).ok());
+            let mut frame_to_send = frame;
             let mut desired = None;
 
             if let Some(frame) = frame_to_send.as_ref() {
