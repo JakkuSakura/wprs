@@ -231,6 +231,7 @@ function connect() {
     clearStatus();
     ws.send(JSON.stringify({ type: "subscribe", id: surfaceId }));
     ws.send(JSON.stringify({ type: "client_scale", value: window.devicePixelRatio || 1 }));
+    setupScaleWatcher(ws);
   };
   ws.onclose = () => {
     statusEl.textContent = "disconnected; retrying...";
@@ -305,3 +306,30 @@ initWebGpu()
   .catch((err) => {
     statusEl.textContent = err.message || String(err);
   });
+
+function setupScaleWatcher(ws) {
+  let lastScale = window.devicePixelRatio || 1;
+  let currentQuery = null;
+
+  const notify = () => {
+    const scale = window.devicePixelRatio || 1;
+    if (scale !== lastScale && ws.readyState === WebSocket.OPEN) {
+      lastScale = scale;
+      ws.send(JSON.stringify({ type: "client_scale", value: scale }));
+    }
+  };
+
+  const updateQuery = () => {
+    if (currentQuery) {
+      currentQuery.removeEventListener("change", notify);
+    }
+    currentQuery = window.matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+    currentQuery.addEventListener("change", () => {
+      notify();
+      updateQuery();
+    });
+  };
+
+  window.addEventListener("resize", notify);
+  updateQuery();
+}
