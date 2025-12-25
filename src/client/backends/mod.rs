@@ -4,7 +4,7 @@ pub mod wayland;
 #[cfg(feature = "winit-wgpu")]
 pub mod winit_wgpu;
 
-pub mod sgr_pixels;
+pub mod terminal;
 pub mod html;
 
 #[cfg(feature = "wayland-client")]

@@ -19,7 +19,7 @@ pub enum ClientBackend {
     Auto,
     Wayland,
     WinitWgpu,
-    SgrPixels,
+    Terminal,
     Html,
 
     // --- Smithay feature bundle aliases ---
