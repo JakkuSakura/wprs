@@ -222,7 +222,9 @@ impl PollingBackend for MacosWindowBackend {
         let windows = self.filter_windows_by_target_pid(windows);
         for w in windows {
             // Capture once to get the initial window size.
-            let (metadata, bgra) = capture_window_bgra(w.window_id).location(loc!())?;
+            let Some((metadata, bgra)) = capture_window_bgra(w.window_id).location(loc!())? else {
+                continue;
+            };
             self.windows
                 .insert(w.window_id, TrackedWindow { bounds: w.bounds });
             let surface = self.surface_descriptor_for_window(w.window_id, &w.title, &w.app_id);
@@ -268,7 +270,9 @@ impl PollingBackend for MacosWindowBackend {
 
         // Emit commits for currently-visible windows.
         for w in windows {
-            let (metadata, bgra) = capture_window_bgra(w.window_id).location(loc!())?;
+            let Some((metadata, bgra)) = capture_window_bgra(w.window_id).location(loc!())? else {
+                continue;
+            };
             self.windows
                 .insert(w.window_id, TrackedWindow { bounds: w.bounds });
             let surface = self.surface_descriptor_for_window(w.window_id, &w.title, &w.app_id);
@@ -384,7 +388,7 @@ fn list_windows() -> Result<Vec<WindowInfo>> {
     macos::list_windows().location(loc!())
 }
 
-fn capture_window_bgra(window_id: u32) -> Result<(BufferMetadata, Vec<u8>)> {
+fn capture_window_bgra(window_id: u32) -> Result<Option<(BufferMetadata, Vec<u8>)>> {
     macos::capture_window_bgra(window_id).location(loc!())
 }
 
@@ -673,21 +677,27 @@ mod macos {
         })
     }
 
-    pub(super) fn capture_window_bgra(window_id: u32) -> Result<(BufferMetadata, Vec<u8>)> {
+    pub(super) fn capture_window_bgra(
+        window_id: u32,
+    ) -> Result<Option<(BufferMetadata, Vec<u8>)>> {
         if let Ok((metadata, bgra)) = capture_window_bgra_skylight(window_id) {
-            return Ok((metadata, bgra));
+            return Ok(Some((metadata, bgra)));
         }
 
         capture_window_bgra_public(window_id).location(loc!())
     }
 
-    fn capture_window_bgra_public(window_id: u32) -> Result<(BufferMetadata, Vec<u8>)> {
+    fn capture_window_bgra_public(
+        window_id: u32,
+    ) -> Result<Option<(BufferMetadata, Vec<u8>)>> {
         let bounds = list_windows_public()
             .location(loc!())?
             .into_iter()
             .find(|w| w.window_id == window_id)
-            .ok_or_else(|| Error::Missing(format!("unknown window id {window_id}")))?
-            .bounds;
+            .map(|w| w.bounds);
+        let Some(bounds) = bounds else {
+            return Ok(None);
+        };
 
         let rect = CGRect {
             origin: CGPoint {
@@ -713,7 +723,7 @@ mod macos {
             )
         })?;
 
-        image_to_bgra(image).location(loc!())
+        image_to_bgra(image).location(loc!()).map(Some)
     }
 
     fn capture_window_bgra_skylight(window_id: u32) -> Result<(BufferMetadata, Vec<u8>)> {
