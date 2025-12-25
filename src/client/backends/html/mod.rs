@@ -114,6 +114,7 @@ struct HtmlPresenter {
     surfaces: Arc<Mutex<HashMap<WlSurfaceId, SurfaceInfo>>>,
     window_manager: WindowManager,
     frame_cache: HashMap<WlSurfaceId, SurfaceFrame>,
+    display_scale: u32,
 }
 
 struct SurfaceFrame {
@@ -134,10 +135,17 @@ impl HtmlPresenter {
             surfaces,
             window_manager: WindowManager::new(),
             frame_cache: HashMap::new(),
+            display_scale: 1,
         }
     }
 
     fn apply_updates(&mut self, batch: ClientUpdateBatch) -> Result<()> {
+        for event in &batch.events {
+            if let crate::client::state::ClientEvent::DisplayConfig(cfg) = event {
+                self.display_scale = updated_scale(cfg.scale_factor);
+            }
+        }
+
         let window_delta = self
             .window_manager
             .apply_surface_updates(&batch.surfaces.updated, &batch.surfaces.removed);
@@ -157,7 +165,7 @@ impl HtmlPresenter {
                 .as_ref()
                 .and_then(|assignment| assignment.as_new())
             {
-                if let Some(frame) = encode_surface_bgra(&updated)? {
+                if let Some(frame) = encode_surface_bgra(&updated, self.display_scale)? {
                     self.frame_cache.insert(
                         surface_id,
                         SurfaceFrame {
@@ -243,7 +251,10 @@ struct EncodedFrame {
     bgra: Vec<u8>,
 }
 
-fn encode_surface_bgra(state: &proto::wayland::SurfaceState) -> Result<Option<EncodedFrame>> {
+fn encode_surface_bgra(
+    state: &proto::wayland::SurfaceState,
+    display_scale: u32,
+) -> Result<Option<EncodedFrame>> {
     let Some(proto::wayland::BitmapAssignment::New(buf)) = state.bitmap.as_ref() else {
         return Ok(None);
     };
@@ -288,7 +299,7 @@ fn encode_surface_bgra(state: &proto::wayland::SurfaceState) -> Result<Option<En
         width,
         height,
         stride,
-        scale: updated_scale(state.buffer_scale),
+        scale: resolve_surface_scale(state, display_scale),
         bgra,
     }))
 }
@@ -317,6 +328,17 @@ fn updated_scale(scale: i32) -> u32 {
         1
     } else {
         scale as u32
+    }
+}
+
+fn resolve_surface_scale(state: &proto::wayland::SurfaceState, display_scale: u32) -> u32 {
+    let buffer_scale = updated_scale(state.buffer_scale);
+    if buffer_scale > 1 {
+        buffer_scale
+    } else if display_scale > 1 {
+        display_scale
+    } else {
+        1
     }
 }
 
