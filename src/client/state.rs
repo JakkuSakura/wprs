@@ -252,3 +252,72 @@ pub fn drain_client_updates(
     let surfaces = state.drain_surface_updates();
     Ok(Some(ClientUpdateBatch { events, surfaces }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocols::wprs::serializer::new_inproc_serializer_pair;
+    use crate::protocols::wprs::serializer::SendType;
+    use crate::protocols::wprs::serializer::RecvType;
+    use crate::protocols::wprs::wayland::Bitmap;
+    use crate::protocols::wprs::wayland::BitmapAssignment;
+    use crate::protocols::wprs::wayland::BufferMetadata;
+    use crate::protocols::wprs::wayland::BufferFormat;
+    use crate::protocols::wprs::wayland::SurfaceRequest;
+    use crate::protocols::wprs::wayland::SurfaceRequestPayload;
+    use crate::protocols::wprs::wayland::WlSurfaceId;
+
+    #[test]
+    fn server_to_client_surface_commit_updates_state() {
+        let (mut server, mut client) =
+            new_inproc_serializer_pair::<Request, Event>().expect("serializer pair");
+        let mut reader = client.reader().expect("reader");
+
+        let surface_id = WlSurfaceId(99);
+        let bitmap = Bitmap {
+            metadata: BufferMetadata {
+                width: 2,
+                height: 1,
+                stride: 8,
+                format: BufferFormat::Argb8888,
+            },
+            data: crate::protocols::wprs::wayland::BufferPoolHandle::from(vec![
+                1, 2, 3, 4, 0, 0, 0, 0,
+            ]),
+        };
+        let state = SurfaceState {
+            client: ClientId(1),
+            id: surface_id,
+            bitmap: Some(BitmapAssignment::New(bitmap)),
+            bitmap_update: None,
+            role: None,
+            buffer_scale: 1,
+            buffer_transform: None,
+            opaque_region: None,
+            input_region: None,
+            z_ordered_children: Vec::new(),
+            damage: None,
+            output_ids: Vec::new(),
+            viewport_state: None,
+            xdg_surface_state: None,
+        };
+        let request = Request::Surface(SurfaceRequest {
+            client: ClientId(1),
+            surface: surface_id,
+            payload: SurfaceRequestPayload::Commit(state),
+        });
+
+        server.writer().send(SendType::Object(request));
+
+        let msg = reader.recv().expect("recv message");
+        let RecvType::Object(request) = msg else {
+            panic!("unexpected recv type");
+        };
+
+        let client_state = ClientState::new();
+        assert!(client_state.apply_request(request));
+        let delta = client_state.drain_surface_updates();
+        assert_eq!(delta.updated.len(), 1);
+        assert_eq!(delta.updated[0].id, surface_id);
+    }
+}

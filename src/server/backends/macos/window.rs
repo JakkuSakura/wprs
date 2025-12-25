@@ -76,6 +76,44 @@ mod tests {
             std::thread::sleep(Duration::from_millis(200));
         }
     }
+
+    #[test]
+    #[ignore]
+    fn open_finder_and_capture_window() {
+        let child = Command::new("/usr/bin/open")
+            .arg("-W")
+            .arg("-a")
+            .arg("Finder")
+            .spawn()
+            .expect("failed to launch Finder via open");
+        let _guard = ChildGuard(Some(child));
+
+        let deadline = Instant::now() + Duration::from_secs(8);
+        loop {
+            let windows = list_windows().expect("failed to list windows");
+            if let Some(window) = windows.iter().find(|w| w.app_id == "Finder") {
+                let capture = capture_window_bgra(window.window_id)
+                    .expect("failed to capture window")
+                    .expect("window capture returned none");
+                let (metadata, bytes) = capture;
+                assert!(metadata.width > 0);
+                assert!(metadata.height > 0);
+                assert!(!bytes.is_empty());
+                return;
+            }
+            if Instant::now() >= deadline {
+                panic!(
+                    "Finder window not found for capture; windows={:?}",
+                    windows
+                        .iter()
+                        .take(5)
+                        .map(|w| format!("{}:{}", w.app_id, w.title))
+                        .collect::<Vec<_>>()
+                );
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
